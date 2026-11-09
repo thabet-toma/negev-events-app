@@ -14650,6 +14650,214 @@ async function run() {
       'the directory button keeps its label too');
   });
 
+  // -------------------------------------------------------------------------
+  // «أسعار الذهب والعملات» (تذكرة #189) — الحاسبتان في «خدماتنا»، من /api/prices.
+  // -------------------------------------------------------------------------
+  //
+  // الردّ مزيّف بأرقام صحيحة النسبة: الغرام ٢٤ = ٥٠٠ شيكل، و٢١ = ٤٣٧٫٥، و١٨ = ٣٧٥،
+  // والدولار ٤ شيكلات. النصوص المتوقّعة بالأرقام العربية الهندية كما يعرضها
+  // `app.js#calcDigits`، فلا تُترجم في الاختبار. والأسعار تُجلب عند أول فتح
+  // لأداة وحدها، فبديل fetch يُركَّب قبل النقر لا قبل الإقلاع.
+  // و`source_time` عند ٢٢:٣٠Z عمداً: تاريخه **المحلي** في القدس «١٠ نوفمبر»، فلو
+  // عُرض بتوقيت الجهاز لسقط تأكيد «٩ نوفمبر» — المعروض تقويم المصدر (UTC).
+  const PRICES_PAYLOAD = {
+    success: true,
+    gold: { k24: 500, k21: 437.5, k18: 375, currency: 'ILS', source_time: '2026-11-09T22:30:00Z' },
+    currencies: [
+      { code: 'USD', name_ar: 'دولار أمريكي', ils_per_unit: 4 },
+      { code: 'EUR', name_ar: 'يورو', ils_per_unit: 5 },
+      { code: 'GBP', name_ar: 'جنيه إسترليني', ils_per_unit: 8 },
+      { code: 'JOD', name_ar: 'دينار أردني', ils_per_unit: 2 },
+      { code: 'EGP', name_ar: 'جنيه مصري', ils_per_unit: 0.04 },
+      { code: 'TRY', name_ar: 'ليرة تركية', ils_per_unit: 0.0625 }
+    ],
+    fx_date: '2026-11-09',
+    stale: false
+  };
+
+  await test('«أسعار الذهب» — الحاسبة تضرب الوزن في سعر العيار من /api/prices وتُظهر تاريخ المصدر', async () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    const pricesRequests = [];
+    const base = buildFetchStub();
+    dom.window.fetch = async (url, options = {}) => {
+      if (String(url).split('?')[0] === '/api/prices') {
+        pricesRequests.push({ url: String(url), headers: options.headers || {} });
+        return jsonResponse(PRICES_PAYLOAD);
+      }
+      return base(url, options);
+    };
+
+    dom.window.openOurServices();
+    const section = document.getElementById('pricesToolsSection');
+    assert.ok(section, 'the prices section joins the destination in-app, not a new page');
+    assert.deepStrictEqual(
+      Array.from(section.querySelectorAll('.prices-tab')).map(tab => tab.textContent.trim()),
+      ['حاسبة الذهب', 'محوّل العملات'],
+      'the two tools are named, in order'
+    );
+    assert.strictEqual(document.querySelectorAll('#tabOurServices .calc-tab').length, 5,
+      'the five local calculators stay five — this is a separate group');
+
+    document.getElementById('pricesTabGold').click();
+    await waitFor(() => document.getElementById('pricesGoldBody').hidden === false);
+
+    assert.strictEqual(pricesRequests.length, 1, 'one call fetches both tools');
+    assert.strictEqual(pricesRequests[0].headers.Authorization, undefined,
+      'the prices endpoint is public — no site token rides along');
+    assert.strictEqual(
+      document.getElementById('pricesGoldSource').textContent,
+      'تاريخ سعر الذهب: ٩ نوفمبر ٢٠٢٦ — المصدر: gold-api.',
+      'the source date is shown, in Arabic'
+    );
+    assert.strictEqual(document.getElementById('pricesGoldStatus').textContent, '',
+      'a loaded tool carries no status line');
+
+    // ١٠ غرام × ٥٠٠ = ٥٬٠٠٠ بلا مصنعية، والعيار ٢١ من سعره هو (٤٣٧٫٥).
+    document.getElementById('pricesGoldWeight').value = '10';
+    document.getElementById('pricesGoldKarat').value = '24';
+    document.querySelector('#pricesPanelGold .calc-run').click();
+    assert.strictEqual(
+      document.getElementById('pricesGoldResult').textContent,
+      'قيمة المعدن بلا مصنعية: ٥٬٠٠٠ ₪ — سعر غرام عيار ٢٤ نحو ٥٠٠ ₪.',
+      'the metal value is weight × karat price, with «بلا مصنعية» in words'
+    );
+
+    document.getElementById('pricesGoldKarat').value = '21';
+    document.querySelector('#pricesPanelGold .calc-run').click();
+    assert.strictEqual(
+      document.getElementById('pricesGoldResult').textContent,
+      'قيمة المعدن بلا مصنعية: ٤٬٣٧٥ ₪ — سعر غرام عيار ٢١ نحو ٤٣٧٫٥٠ ₪.'
+    );
+
+    document.getElementById('pricesGoldWeight').value = '-5';
+    document.querySelector('#pricesPanelGold .calc-run').click();
+    assert.ok(document.getElementById('pricesGoldResult').textContent.includes('الوزن لا يكون سالباً'),
+      'a negative weight is refused in Arabic');
+    assert.strictEqual(document.getElementById('pricesGoldResult').classList.contains('is-error'), true);
+
+    // فتح الأداة الثانية لا يعيد الجلب — النسخة نفسها تخدم الاثنتين.
+    document.getElementById('pricesTabFx').click();
+    await waitFor(() => document.getElementById('pricesFxBody').hidden === false);
+    assert.strictEqual(pricesRequests.length, 1, 'the second tool reuses the fetched prices');
+    assert.strictEqual(document.getElementById('pricesPanelGold').hidden, true,
+      'one tool is on screen at a time');
+    assert.deepStrictEqual(
+      Array.from(document.getElementById('pricesFxCurrency').options).map(option => option.value),
+      ['USD', 'EUR', 'GBP', 'JOD', 'EGP', 'TRY'],
+      'the six currencies are the six the contract names'
+    );
+  });
+
+  await test('«محوّل العملات» — يحوّل في الاتجاهين بسعر ils_per_unit ويعرض تاريخ الصرف', async () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    const base = buildFetchStub();
+    dom.window.fetch = async (url, options = {}) => (
+      String(url).split('?')[0] === '/api/prices'
+        ? jsonResponse(PRICES_PAYLOAD)
+        : base(url, options)
+    );
+
+    dom.window.openOurServices();
+    document.getElementById('pricesTabFx').click();
+    await waitFor(() => document.getElementById('pricesFxBody').hidden === false);
+
+    assert.strictEqual(
+      document.getElementById('pricesFxSource').textContent,
+      'تاريخ سعر الصرف: ٩ نوفمبر ٢٠٢٦ — المصدر: Frankfurter.',
+      'the FX date and its source are shown, not implied'
+    );
+
+    document.getElementById('pricesFxAmount').value = '400';
+    document.getElementById('pricesFxCurrency').value = 'USD';
+    document.querySelector('#pricesPanelFx .calc-run').click();
+    assert.strictEqual(
+      document.getElementById('pricesFxResult').textContent,
+      '٤٠٠ ₪ = ١٠٠٫٠٠ دولار أمريكي بسعر ٤٫٠٠٠٠ ₪ للوحدة الواحدة.',
+      'shekels → currency at ils_per_unit'
+    );
+
+    document.getElementById('pricesFxDirection').value = 'to_ils';
+    document.querySelector('#pricesPanelFx .calc-run').click();
+    assert.strictEqual(
+      document.getElementById('pricesFxResult').textContent,
+      '٤٠٠٫٠٠ دولار أمريكي = ١٬٦٠٠ ₪ بسعر ٤٫٠٠٠٠ ₪ للوحدة الواحدة.',
+      'currency → shekels at the same rate'
+    );
+
+    document.getElementById('pricesFxAmount').value = 'ألف';
+    document.querySelector('#pricesPanelFx .calc-run').click();
+    assert.ok(document.getElementById('pricesFxResult').textContent.includes('المبلغ بالأرقام فقط'),
+      'text where a number belongs is refused in Arabic');
+    assert.strictEqual(/NaN|Infinity/.test(document.getElementById('pricesFxResult').textContent), false);
+  });
+
+  await test('حين لا تصل الأسعار يُخفى جسم الأداة وتاريخها ويبقى سطر عربي واحد', async () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    const base = buildFetchStub();
+    dom.window.fetch = async (url, options = {}) => (
+      String(url).split('?')[0] === '/api/prices'
+        ? jsonResponse({ success: false }, { status: 503 })
+        : base(url, options)
+    );
+
+    dom.window.openOurServices();
+    document.getElementById('pricesTabGold').click();
+    await waitFor(() => document.getElementById('pricesGoldStatus').textContent.includes('تعذّر جلب'));
+
+    assert.strictEqual(document.getElementById('pricesGoldBody').hidden, true,
+      'no calculator runs on an invented price');
+    assert.strictEqual(document.getElementById('pricesGoldSource').closest('[hidden]') !== null, true,
+      'and no date is shown either');
+    assert.ok(
+      document.getElementById('pricesGoldStatus').textContent.includes('تعذّر جلب أسعار الذهب والعملات الآن'),
+      'the message is Arabic and names what failed'
+    );
+    assert.strictEqual(document.getElementById('pricesGoldStatus').classList.contains('is-error'), true);
+
+    // أداة العملات الثانية تحمل الرسالة نفسها — لا واحدة تعمل وأخرى صامتة.
+    // فتحها يعيد المحاولة (لا نسخة محفوظة بعد)، فالسطر يمرّ بـ«جارٍ جلب الأسعار…»
+    // قبل أن يستقرّ على رسالة التعذّر.
+    document.getElementById('pricesTabFx').click();
+    await waitFor(() => document.getElementById('pricesFxStatus').textContent.includes('تعذّر جلب أسعار الذهب والعملات'));
+    assert.strictEqual(document.getElementById('pricesFxBody').hidden, true);
+    assert.ok(document.getElementById('pricesFxStatus').textContent.includes('تعذّر جلب أسعار الذهب والعملات'));
+  });
+
+  await test('الرابط العميق ?tab=ourServices يفتح الوجهة بأداتي الأسعار، وبلا نداء أسعار قبل فتح أداة', async () => {
+    // `initUrlNavigation` ينادي `switchTab('tabOurServices')` بعد الإقلاع، لا
+    // `openOurServices` — فالتحقين يجب أن يكون في `switchTab` نفسه وإلا فتح
+    // رابط المشاركة تبويباً بلا أدوات. وفتح التبويب لا يجلب الأسعار.
+    const dom = buildEnv({ url: 'http://localhost/?tab=ourServices' });
+    const { document } = dom.window;
+
+    const pricesRequests = [];
+    const base = buildFetchStub();
+    dom.window.fetch = async (url, options = {}) => {
+      if (String(url).split('?')[0] === '/api/prices') pricesRequests.push(String(url));
+      return base(url, options);
+    };
+
+    await waitFor(() => document.getElementById('pricesToolsSection'));
+    assert.ok(document.getElementById('tabOurServices').classList.contains('active-tab'),
+      'the deep link really opens the destination');
+    assert.ok(document.getElementById('pricesToolsSection'), 'and the tools are there, not a bare tab');
+
+    // الفتح وحده لا يجلب: أول نقر على أداة هو النداء الوحيد، وفتح الثانية يخدمه المخزَّن.
+    await delay(80);
+    assert.strictEqual(pricesRequests.length, 0, 'opening the destination fetches no prices');
+    document.getElementById('pricesTabGold').click();
+    await waitFor(() => pricesRequests.length === 1);
+    document.getElementById('pricesTabFx').click();
+    await delay(80);
+    assert.strictEqual(pricesRequests.length, 1, 'the second tool reuses the one fetched snapshot');
+  });
+
   await test('«آخر الأخبار» renders /api/news cards (breaking, category, relative time), then closes with Escape', async () => {
     const dom = buildEnv();
     await flushBoot();

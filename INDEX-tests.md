@@ -3,814 +3,820 @@
 > **مولَّد من `server/scripts/build-index.js` — لا تحرّره بيدك؛ شغّل `npm run index:build`.**
 > ملحق `INDEX.md`: كل حالة `await test(` في ملفَي الاختبار، مرتّبة بالملف ثم السطر.
 
-## حالات الاختبار — 1319
+## حالات الاختبار — 1329
 
 `npm test` يشغّل `web-dom` ثم `smoke`؛ `smoke` يحتاج MySQL حيّة، وكل حالة معرَّفة داخل ملفها.
 
 | الحالة | file:line |
 |---|---|
-| `GET /health reports the database is up` | `server/test/smoke.test.js:227` |
-| `GET /api/events returns approved events with reaction counts` | `server/test/smoke.test.js:233` |
-| `GET /api/events returns all events by default, while ?upcoming=1 filters to upcoming only` | `server/test/smoke.test.js:240` |
-| `GET /api/events?town= filters by town` | `server/test/smoke.test.js:251` |
-| `GET /api/events?search= matches Arabic text` | `server/test/smoke.test.js:256` |
-| `GET /api/stories exposes isLive` | `server/test/smoke.test.js:261` |
-| `GET /api/map/events returns Waze links` | `server/test/smoke.test.js:267` |
-| `GET /api/towns lists towns and per-town stats` | `server/test/smoke.test.js:273` |
-| `GET /api/towns carries a map centre for every real town, and none for القرى والتجمعات (#20 step 6)` | `server/test/smoke.test.js:279` |
-| `GET /api/app/version announces the mobile release` | `server/test/smoke.test.js:291` |
-| `POST /api/check-collision detects a booked date` | `server/test/smoke.test.js:300` |
-| `POST /api/check-collision rejects a malformed date` | `server/test/smoke.test.js:306` |
-| `GET /api/events/calendar counts a multi-day event on every day it covers, and leaves out link_only, unapproved and scheduled ones (تذكرة #175)` | `server/test/smoke.test.js:381` |
-| `GET /api/events/calendar honours X-App-Version like the feed: a legacy client never counts a type it cannot render (تذكرة #175)` | `server/test/smoke.test.js:397` |
-| `GET /api/events/calendar?region_id= narrows to that governorate, and its absence counts every governorate (تذكرة #175)` | `server/test/smoke.test.js:412` |
-| `GET /api/events/calendar rejects a malformed month with an Arabic 400, and answers a month with nothing in it with an empty list (تذكرة #175)` | `server/test/smoke.test.js:439` |
-| `A day the calendar counts is exactly what `?date_from=&date_to=` returns for it — one condition, two readings (تذكرة #175)` | `server/test/smoke.test.js:451` |
-| `GET /api/events/:id/calendar.ics serves a valid iCalendar file for an approved public event (تذكرة #176)` | `server/test/smoke.test.js:482` |
-| `calendar.ics SUMMARY is the event page's own headline — groom_name when there are no honorees (تذكرة #176)` | `server/test/smoke.test.js:519` |
-| `calendar.ics carries the page's time texts in DESCRIPTION, and invents none when nothing was written (تذكرة #176)` | `server/test/smoke.test.js:544` |
-| `calendar.ics is 404 for a pending, rejected, link_only, scheduled or missing event — the public visibility gate itself (تذكرة #176)` | `server/test/smoke.test.js:576` |
-| `the share page /e/:id never mentions calendar.ics (ADR-0006, تذكرة #176)` | `server/test/smoke.test.js:593` |
-| `GET /api/events/trending orders by the summed signals, and every one of the four kinds counts (تذكرة #177)` | `server/test/smoke.test.js:714` |
-| `GET /api/events/trending counts a signal by its own timestamp: five reactions older than the window leave their event out, today's one brings its event in (تذكرة #177)` | `server/test/smoke.test.js:743` |
-| `GET /api/events/trending honours the public gate and keeps funerals out by tone: a funeral loud with reactions, link_only, pending and a scheduled event all stay out even when they beat the only visible row (تذكرة #177)` | `server/test/smoke.test.js:768` |
-| `GET /api/events/trending?region_id= narrows to that governorate, and a malformed one is an Arabic 400 (تذكرة #177)` | `server/test/smoke.test.js:785` |
-| `GET /api/events/trending with no header and no region_id takes the account's governorate, and all_regions=1 widens it (تذكرة #177)` | `server/test/smoke.test.js:806` |
-| `GET /api/events/trending returns at most six rows, and the seventh weakest is the one left out (تذكرة #177)` | `server/test/smoke.test.js:835` |
-| `GET /api/events/trending honours X-App-Version like the feed: a legacy client never sees a type it cannot render (تذكرة #177)` | `server/test/smoke.test.js:858` |
-| `POST /api/auth/register creates an account` | `server/test/smoke.test.js:892` |
-| `POST /api/auth/register rejects a duplicate phone` | `server/test/smoke.test.js:901` |
-| `POST /api/auth/login rejects a wrong PIN` | `server/test/smoke.test.js:908` |
-| `POST /api/auth/login succeeds with the right PIN` | `server/test/smoke.test.js:915` |
-| `The register and login calls above each wrote a server-side analytics row for this user (issue #44) — no extra requests needed, just reading what already happened` | `server/test/smoke.test.js:923` |
-| `An anonymous request is counted per IP and reports RATE_LIMIT_MAX as its ceiling` | `server/test/smoke.test.js:942` |
-| `A signed-in request is counted per user and reports the larger RATE_LIMIT_USER_MAX ceiling` | `server/test/smoke.test.js:947` |
-| `A garbage bearer token is anonymous again — it keeps the per-IP ceiling` | `server/test/smoke.test.js:953` |
-| `authenticatedUserId reads a real token, and answers null for anything unusable` | `server/test/smoke.test.js:958` |
-| `GET /api/nokoot without a token is rejected` | `server/test/smoke.test.js:970` |
-| `POST /api/nokoot stores a ledger entry` | `server/test/smoke.test.js:975` |
-| `GET /api/nokoot returns totals and analytics` | `server/test/smoke.test.js:984` |
-| `DELETE /api/nokoot/:id removes the entry` | `server/test/smoke.test.js:990` |
-| `POST /api/admin/login rejects a wrong PIN` | `server/test/smoke.test.js:996` |
-| `POST /api/admin/login rejects a non-admin account` | `server/test/smoke.test.js:1003` |
-| `POST /api/admin/login succeeds for the super admin` | `server/test/smoke.test.js:1010` |
-| `GET /api/admin/stats is closed to a normal user` | `server/test/smoke.test.js:1018` |
-| `GET /api/admin/stats returns counters for an admin` | `server/test/smoke.test.js:1023` |
-| `POST /api/admin/broadcast is accepted` | `server/test/smoke.test.js:1029` |
-| `GET /api/occasion-types returns the five seeded types ordered by position, عرس first` | `server/test/smoke.test.js:1039` |
-| `عزا carries zero reactions while عرس carries all five` | `server/test/smoke.test.js:1048` |
-| `Seed a plain admin directly via the DB (no API creates that role)` | `server/test/smoke.test.js:1075` |
-| `A plain admin is rejected (403) on all four occasion-type admin routes` | `server/test/smoke.test.js:1088` |
-| `A super_admin passes GET /api/admin/occasion-types and gets the unpublished-type notice` | `server/test/smoke.test.js:1099` |
-| `Creating a type from the admin panel appears immediately in the public list — no deploy, no migration` | `server/test/smoke.test.js:1107` |
-| `Creating a type without honorees/town/event_date visible is rejected` | `server/test/smoke.test.js:1125` |
-| `Creating a type with a field_key outside the master set is rejected` | `server/test/smoke.test.js:1135` |
-| `A type with an event attached cannot be deleted — refused and disabled instead` | `server/test/smoke.test.js:1147` |
-| `A type with no events is deleted outright` | `server/test/smoke.test.js:1179` |
-| `Hiding a field on عرس hides it from the type config but does not touch existing event data` | `server/test/smoke.test.js:1185` |
-| `GET /api/occasion-types يحمل messages لكل نوع مزروع — بذرة، بالشكل العام بلا أعلام إدارة، ولا نصّ في الكود` | `server/test/smoke.test.js:1226` |
-| `السوبر أدمن وحده يدير الرسائل — أدمن البلدة يُردّ 403 على القراءة والإضافة والتعديل` | `server/test/smoke.test.js:1255` |
-| `إضافة رسالة وإطفاؤها: تظهر في الإدارة وفي الردّ العام، ويغيب المطفأ عن العميل وحده` | `server/test/smoke.test.js:1272` |
-| `تفصيل المناسبة: congratulations_count وinterested_count يصلان إلا ما أطفأه النوع، ولا شيء منهما على العزاء` | `server/test/smoke.test.js:1318` |
-| `A legacy-shaped event row is backfilled to عرس with one event_honorees row` | `server/test/smoke.test.js:1391` |
-| `Running the migration twice does not duplicate occasion types, honorees or people` | `server/test/smoke.test.js:1414` |
-| `إعادة الترحيل لا تكرّر رسائل الأنواع المزروعة — البذرة تُكتب في نوع بلا رسالة واحدة فقط` | `server/test/smoke.test.js:1433` |
-| `A default poster belongs to the occasion type: عرس gets one, عزا gets none` | `server/test/smoke.test.js:1466` |
-| `Publishing with five honorees, then searching by the fifth name, returns the event exactly once` | `server/test/smoke.test.js:1492` |
-| `groom_name is filled with the first honoree by position, written in the same transaction` | `server/test/smoke.test.js:1513` |
-| `A wedding without a second honoree (bride) is accepted — the second name is optional` | `server/test/smoke.test.js:1520` |
-| `A funeral (عزا) without event_end_date is rejected with an Arabic message` | `server/test/smoke.test.js:1530` |
-| `The rejection message names the field by its label in this type — المتوفَّى, not العريس` | `server/test/smoke.test.js:1545` |
-| `A wedding (عرس) without event_end_date is accepted — only عزا requires it` | `server/test/smoke.test.js:1560` |
-| `A field hidden for this type (youth_party_date on عزا) is silently ignored, not rejected` | `server/test/smoke.test.js:1570` |
-| `The default title generated for a funeral contains no festive wording` | `server/test/smoke.test.js:1590` |
-| `Publishing with two extra days out of date order stores them and returns them sorted by day_date` | `server/test/smoke.test.js:1602` |
-| `A multipart publish with extra_days[0][name] bracket keys stores the day` | `server/test/smoke.test.js:1629` |
-| `An extra day with a name but no date is rejected with اليوم 1 in the message` | `server/test/smoke.test.js:1655` |
-| `More than ten non-blank extra days is rejected` | `server/test/smoke.test.js:1664` |
-| `PATCH extra_days replaces the list, an empty list clears it, and an absent key leaves it untouched` | `server/test/smoke.test.js:1677` |
-| `Saving the days back exactly as GET returned them is a no-op — two stations on one date at different times (تذكرة #176)` | `server/test/smoke.test.js:1727` |
-| `A type where extra_days is hidden ignores posted days instead of rejecting them` | `server/test/smoke.test.js:1774` |
-| `GET /api/events list rows carry extra_days` | `server/test/smoke.test.js:1815` |
-| `An approved event whose main date has passed is still upcoming — and mapped — while an extra day is ahead` | `server/test/smoke.test.js:1827` |
-| `?date_from/?date_to find an event by an extra day or a youth party earlier than its event_date` | `server/test/smoke.test.js:1861` |
-| `Set up: an approved wedding with two extra days for the extra-days edit tests` | `server/test/smoke.test.js:1906` |
-| `Re-dating one extra day is critical: the event returns to pending and one extra_days amendment row is logged` | `server/test/smoke.test.js:1922` |
-| `Renaming one extra day is cosmetic: the event stays approved and the amendment row is cosmetic` | `server/test/smoke.test.js:1963` |
-| `Resubmitting the identical extra-days list rewrites no rows and logs no new amendment row` | `server/test/smoke.test.js:1985` |
-| `Swapping which named day sits on which date is critical: the event returns to pending and the amendment row is critical` | `server/test/smoke.test.js:2016` |
-| `An event whose date has passed is absent from the list and present in the archive` | `server/test/smoke.test.js:2047` |
-| `A عزا that started yesterday and spans today is still shown — COALESCE(event_end_date, event_date), not event_date alone` | `server/test/smoke.test.js:2064` |
-| `?date_from=/?date_to= return the events on those days — a past day too, and a spanning عزا by overlap` | `server/test/smoke.test.js:2085` |
-| `Default page size is 30, and the hard ceiling on ?limit= is enforced` | `server/test/smoke.test.js:2108` |
-| `?page= returns a different page than page 1` | `server/test/smoke.test.js:2116` |
-| `?occasion_type_id= filters on the server, not the client` | `server/test/smoke.test.js:2123` |
-| `congratulations_count is always present (zero when there are none), and latest_congratulation is null` | `server/test/smoke.test.js:2129` |
-| `Three تعازي on a عزا (which premoderates) are created pending, with sender_name taken from the account` | `server/test/smoke.test.js:2142` |
-| `The admin approves all three; only then does the count/preview reflect them, without duplicating the row` | `server/test/smoke.test.js:2164` |
-| `The congratulations counter/preview disappear from the card when show_congratulations_count is off, and return when it is back on` | `server/test/smoke.test.js:2180` |
-| `A request with no X-App-Version header only sees weddings from GET /api/events` | `server/test/smoke.test.js:2205` |
-| `A request with no X-App-Version header only sees weddings from GET /api/map/events` | `server/test/smoke.test.js:2211` |
-| `Reordering the type tabs does not change what a legacy client receives` | `server/test/smoke.test.js:2218` |
-| `An occasion type carries an explicit tone, and a renamed label never changes it` | `server/test/smoke.test.js:2239` |
-| `An unknown tone is rejected with an Arabic message` | `server/test/smoke.test.js:2263` |
-| `A type created from the panel is not sent to already-published clients` | `server/test/smoke.test.js:2281` |
-| `A request with a modern X-App-Version header sees every occasion type` | `server/test/smoke.test.js:2302` |
-| `A legacy client requesting the details of an unsupported occasion type gets 404 with the fixed Arabic message` | `server/test/smoke.test.js:2308` |
-| `A modern client requesting the same event passes through` | `server/test/smoke.test.js:2314` |
-| `Explicit list columns still include every field a legacy client reads: groom_name, title, family_clan, dinner_time` | `server/test/smoke.test.js:2319` |
-| `Set up: a logged-in user publishes an event (used for the edit-permission tests below)` | `server/test/smoke.test.js:2332` |
-| `The owner can edit their own event` | `server/test/smoke.test.js:2340` |
-| `A non-owner is rejected with 403` | `server/test/smoke.test.js:2349` |
-| `An admin can edit any event, including one it does not own` | `server/test/smoke.test.js:2362` |
-| `An orphaned event (created_by IS NULL) can only be edited by an admin` | `server/test/smoke.test.js:2371` |
-| `A cosmetic edit (title) keeps an approved event approved` | `server/test/smoke.test.js:2388` |
-| `A critical edit (event_date) sends an approved event back to pending` | `server/test/smoke.test.js:2399` |
-| `A critical edit (location_name) sends an approved event back to pending` | `server/test/smoke.test.js:2409` |
-| `GET /api/my-events returns what this user published, across all statuses` | `server/test/smoke.test.js:2420` |
-| `Ownership transfer works for an admin, and is rejected for anyone else` | `server/test/smoke.test.js:2426` |
-| `Set up: user publishes and admin approves a wedding for amendment-log tests` | `server/test/smoke.test.js:2449` |
-| `A cosmetic edit is logged and the event stays approved` | `server/test/smoke.test.js:2462` |
-| `A critical edit produces a pending amendment row and sends the event back to pending` | `server/test/smoke.test.js:2478` |
-| `Editing two fields in one request produces two amendment rows` | `server/test/smoke.test.js:2493` |
-| `Resubmitting the same value produces no new amendment row and no status change` | `server/test/smoke.test.js:2504` |
-| `Approving the event resolves every pending amendment row` | `server/test/smoke.test.js:2517` |
-| `An admin reads the amendment log` | `server/test/smoke.test.js:2535` |
-| `The owner reads their own event amendment log` | `server/test/smoke.test.js:2541` |
-| `A non-owner is rejected from reading the amendment log` | `server/test/smoke.test.js:2547` |
-| `The public cannot read the amendment log at all` | `server/test/smoke.test.js:2557` |
-| `Set up: an approved wedding with a pin and two honorees` | `server/test/smoke.test.js:2569` |
-| `Re-sending an unchanged pin as a number with fewer decimals is not an edit — approved stays approved, no amendment` | `server/test/smoke.test.js:2588` |
-| `Changing only the second honoree's name stays approved and logs one cosmetic 'honorees' amendment` | `server/test/smoke.test.js:2612` |
-| `Re-sending the identical honorees is not an edit — no new amendment and no row rewrite` | `server/test/smoke.test.js:2650` |
-| `Set up: an approved عزا, whose type hides youth_party_date` | `server/test/smoke.test.js:2680` |
-| `PATCHing a field the type hides is silently ignored, while a visible field in the same request still applies` | `server/test/smoke.test.js:2696` |
-| `Set up: an approved wedding for the multipart list-field edits` | `server/test/smoke.test.js:2717` |
-| `A multipart PATCH sending honorees as a JSON string replaces the names` | `server/test/smoke.test.js:2729` |
-| `A multipart PATCH sending extra_days as a JSON string stores the day` | `server/test/smoke.test.js:2746` |
-| `A multipart PATCH with a malformed JSON list string is rejected with the existing Arabic message` | `server/test/smoke.test.js:2762` |
-| `Set up: two funerals published in the same town on the same day` | `server/test/smoke.test.js:2790` |
-| `عزا checking against an overlapping عزا in the same town produces no warning (funerals never collision-check)` | `server/test/smoke.test.js:2818` |
-| `Checking a عرس against an existing عزا in the same town warns of a collision` | `server/test/smoke.test.js:2831` |
-| `Set up: a funeral spanning four days` | `server/test/smoke.test.js:2841` |
-| `A عرس on day two of a four-day عزا is detected — range intersection, not date equality` | `server/test/smoke.test.js:2856` |
-| `A عرس does not collide with a عرس in a different town on the same day` | `server/test/smoke.test.js:2864` |
-| `Set up: a wedding published on a free day` | `server/test/smoke.test.js:2879` |
-| `Changing the date to a day now booked by a عزا produces a fresh collision warning not seen at creation` | `server/test/smoke.test.js:2892` |
-| `The legacy check-collision shape (date + town only, no occasion_type_id) still works` | `server/test/smoke.test.js:2904` |
-| `Migration moves a row still carrying the old placeholder coordinates` | `server/test/smoke.test.js:2925` |
-| `Migration does not touch a row with a human-chosen coordinate` | `server/test/smoke.test.js:2934` |
-| `Migration drops the pin for a 'القرى والتجمعات' row carrying the old placeholder` | `server/test/smoke.test.js:2943` |
-| `Running the migration twice is safe and converges to the same result` | `server/test/smoke.test.js:2952` |
-| `Publishing under 'القرى والتجمعات' with no village_id is rejected (case 9)` | `server/test/smoke.test.js:2973` |
-| `A legacy row under 'القرى والتجمعات' with a NULL village_id and no requested name — inserted directly, since no publish path can produce one any more — still gets no pin` | `server/test/smoke.test.js:2986` |
-| `An event published in a village inherits that village's coordinates and gets a real pin (case 11)` | `server/test/smoke.test.js:3000` |
-| `Editing an event to a different village moves its pin as well as its village` | `server/test/smoke.test.js:3032` |
-| `Publishing under the catch-all with only a typed requested_village_name succeeds, gets no invented pin, and the moderation queue returns the name` | `server/test/smoke.test.js:3073` |
-| `requested_village_name outside the catch-all town is rejected` | `server/test/smoke.test.js:3105` |
-| `village_id and requested_village_name together are rejected` | `server/test/smoke.test.js:3119` |
-| `A typed name that is already an active village links to it silently and inherits its pin` | `server/test/smoke.test.js:3134` |
-| `POST /api/admin/events/:id/promote-village: plain admin 403; super_admin links every event that asked for the name, with exactly one village; a second promote reuses (and re-activates) it` | `server/test/smoke.test.js:3166` |
-| `A poster uploads and comes back as an absolute URL, not a relative one` | `server/test/smoke.test.js:3253` |
-| `PATCH replaces a poster from an uploaded file, not only from a URL` | `server/test/smoke.test.js:3267` |
-| `A multipart PATCH uploading a poster the type hides is ignored, while a visible change in the same request still applies` | `server/test/smoke.test.js:3295` |
-| `A JSON PATCH still works now that the route carries multer — the old path must not regress` | `server/test/smoke.test.js:3346` |
-| `A poster and an artist image upload together — three file fields are now allowed, not two` | `server/test/smoke.test.js:3365` |
-| `A file whose type is not on the allowlist is rejected with a message that names what IS accepted` | `server/test/smoke.test.js:3382` |
-| `A file sent under an unknown field name is rejected rather than silently stored` | `server/test/smoke.test.js:3392` |
-| `A pin inside the chosen town gets no location_warning on publish` | `server/test/smoke.test.js:3405` |
-| `A pin nearer another town gets a location_warning, but publishes with the chosen town untouched (no rejection, no auto-correction)` | `server/test/smoke.test.js:3422` |
-| `The same mismatch is re-detected on an edit that moves the pin further from the chosen town` | `server/test/smoke.test.js:3444` |
-| `An edit that does not touch latitude/longitude/town carries no location_warning` | `server/test/smoke.test.js:3454` |
-| `A publish that leaves dinner_time blank stores no time at all — not a forced 8:00` | `server/test/smoke.test.js:3464` |
-| `An edit may clear dinner_time — an emptied field is a real change, not a fallback to the old value` | `server/test/smoke.test.js:3476` |
-| `An explicit but out-of-range latitude is rejected with an Arabic message` | `server/test/smoke.test.js:3500` |
-| `An explicit, non-numeric longitude is rejected the same way` | `server/test/smoke.test.js:3509` |
-| `Publishing with no coordinates at all is still accepted, falling back to the town centre as before` | `server/test/smoke.test.js:3517` |
-| `A relative sticker URL comes back absolute, like every other media column` | `server/test/smoke.test.js:3530` |
-| `POST /api/events without a token is rejected (publishing now requires an account)` | `server/test/smoke.test.js:3559` |
-| `A logged-in (non-admin) submission lands in the pending queue` | `server/test/smoke.test.js:3565` |
-| `A pending event is hidden from the public list` | `server/test/smoke.test.js:3575` |
-| `An admin submission publishes immediately` | `server/test/smoke.test.js:3580` |
-| `An unknown town is rejected` | `server/test/smoke.test.js:3594` |
-| `GET /api/towns returns exactly the pre-table town list and centres, in the same order (TWN-1)` | `server/test/smoke.test.js:3605` |
-| `A town added to the towns table is listed and publishable with no deploy; disabling it withdraws both (TWN-1)` | `server/test/smoke.test.js:3615` |
-| `Re-running migrate never duplicates towns nor resurrects one the super_admin deleted (TWN-1)` | `server/test/smoke.test.js:3654` |
-| `GET /api/towns carries the regions key: النقب with its centre and every seeded town, while towns[] stays unchanged (TWN-2)` | `server/test/smoke.test.js:3678` |
-| `Publishing with town = the region name is accepted, gets no fallback pin, and never warns about a nearer town (TWN-2)` | `server/test/smoke.test.js:3691` |
-| `Resolving a pinless region-level event to a real town gives it that town's centre; an existing pin is never overwritten (TWN-2)` | `server/test/smoke.test.js:3712` |
-| `migrate moves every legacy 'غير محدد' town onto the region, and leaves real towns alone (TWN-2)` | `server/test/smoke.test.js:3736` |
-| `munasabatna-insert files an invitation with no known town under the region, still pending and pinless (TWN-2)` | `server/test/smoke.test.js:3756` |
-| `A super_admin may hand a local admin the region itself, and that admin then sees the region-level queue; a made-up name is still refused (TWN-2)` | `server/test/smoke.test.js:3774` |
-| `GET /api/towns keeps regions active-only with is_active and real counts, moves a stopped governorate to regions_soon as {id,name}, and still publishes only into the active name (#127)` | `server/test/smoke.test.js:3823` |
-| `Town management is super_admin only — a plain admin gets 403 on every /admin/towns and /admin/regions path (TWN-3)` | `server/test/smoke.test.js:3924` |
-| `GET /api/admin/towns lists the region with every town, its event count, and the villages catch-all marked locked (TWN-3)` | `server/test/smoke.test.js:3948` |
-| `Adding a town validates coordinates, refuses spelling-variant duplicates, the reserved sentinel and a region name (TWN-3)` | `server/test/smoke.test.js:3959` |
-| `A new town lands last; renaming is allowed until something stores its name, then refused; delete disables a used town and removes an unused one (TWN-3)` | `server/test/smoke.test.js:3976` |
-| `The villages catch-all can be reordered but never renamed, disabled, moved, given a centre or deleted (TWN-3)` | `server/test/smoke.test.js:4027` |
-| `PUT /api/admin/towns/order rewrites the order the public list follows, and refuses a partial list (TWN-3)` | `server/test/smoke.test.js:4040` |
-| `PATCH /api/admin/regions/:id edits the map centre/zoom, refuses an out-of-range zoom, and refuses renaming a region events are filed under (TWN-3)` | `server/test/smoke.test.js:4057` |
-| `PATCH /api/admin/events/:id/status approves the event` | `server/test/smoke.test.js:4078` |
-| `Reactions and congratulations attach to the event` | `server/test/smoke.test.js:4088` |
-| `An invalid reaction type is rejected` | `server/test/smoke.test.js:4100` |
-| `DELETE /api/admin/events/:id cascades to child rows` | `server/test/smoke.test.js:4107` |
-| `An unknown API route returns 404 JSON` | `server/test/smoke.test.js:4114` |
-| `POST /api/events/:id/congratulate without a token is rejected` | `server/test/smoke.test.js:4125` |
-| `Set up: a regular (non-admin) user publishes a عزا, the admin approves the event itself` | `server/test/smoke.test.js:4134` |
-| `A تعزية on this عزا is created pending, with no injected festive badge, sender_name from the account` | `server/test/smoke.test.js:4158` |
-| `The public (no token) does not see the pending تعزية` | `server/test/smoke.test.js:4172` |
-| `The sender sees their own pending تعزية; a different logged-in visitor does not` | `server/test/smoke.test.js:4177` |
-| `A non-owner, non-admin is rejected (403) from approving, deleting, or reading the moderation queue` | `server/test/smoke.test.js:4185` |
-| `GET .../congratulations rejects an unknown ?status= filter` | `server/test/smoke.test.js:4200` |
-| `The owner approves the pending تعزية — no admin involved — and it is now publicly visible` | `server/test/smoke.test.js:4205` |
-| `A second تعزية is approved by an admin instead of the owner` | `server/test/smoke.test.js:4216` |
-| `The owner can also reject a pending تعزية — it becomes hidden, not shown publicly` | `server/test/smoke.test.js:4229` |
-| `The same owner also publishes an approved عرس — ownership is not type-bound` | `server/test/smoke.test.js:4247` |
-| `A congratulation on this عرس publishes immediately — no premoderation outside عزا` | `server/test/smoke.test.js:4260` |
-| `The owner (a non-admin) deletes it — an ownership right, not an admin-only power, even in a type that never premoderates` | `server/test/smoke.test.js:4272` |
-| `Set up: a fresh, never-reviewed (auto-approved) congratulation to report` | `server/test/smoke.test.js:4286` |
-| `Set up: ${CONGRATULATION_REPORT_THRESHOLD} distinct reporter accounts` | `server/test/smoke.test.js:4301` |
-| `Reports under the threshold do not hide the message` | `server/test/smoke.test.js:4307` |
-| `The same person reporting twice is rejected (409) and does not double the count` | `server/test/smoke.test.js:4321` |
-| `The report that crosses the threshold auto-hides the message` | `server/test/smoke.test.js:4329` |
-| `DELETE /api/admin/comments/:id is gone (case 19) — the hard-delete route was removed, the row is not` | `server/test/smoke.test.js:4348` |
-| `Set up: an owner publishes an approved wedding for the reminder/announcement/notification tests` | `server/test/smoke.test.js:4373` |
-| `POST/DELETE .../remind toggles "ذكّرني", and re-pressing an active reminder does not duplicate the row` | `server/test/smoke.test.js:4390` |
-| `followers_count shows on a عرس event and disappears when show_followers_count is off — by the flag, not the type name` | `server/test/smoke.test.js:4412` |
-| `عزا is seeded with show_followers_count off, so it never carries followers_count — one death is never compared to another` | `server/test/smoke.test.js:4439` |
-| `is_reminded is true for the following user, false for a stranger, and false/absent for a guest` | `server/test/smoke.test.js:4463` |
-| `GET /api/my-reminders returns what this user is following` | `server/test/smoke.test.js:4474` |
-| `Set up: an admin publishes an upcoming and an already-ended wedding, and the follower follows both` | `server/test/smoke.test.js:4488` |
-| `PATCH /api/events/:id/remind mutes without unfollowing; a non-boolean is 400 and an event not in the list is 404` | `server/test/smoke.test.js:4507` |
-| `A muted follower is excluded from the reminder schedule and from an owner's cosmetic edit, while an unmuted follower still hears both` | `server/test/smoke.test.js:4551` |
-| `POST /api/events/:id/remind on a pending event is a 404 and writes no row` | `server/test/smoke.test.js:4576` |
-| `GET /api/my-reminders shapes «قائمتي»: counts, under_review_count, span strings, a bucket, upcoming before ended` | `server/test/smoke.test.js:4594` |
-| `under_review_count carries the same legacy filter as the list itself` | `server/test/smoke.test.js:4633` |
-| `myListBucket places every day in exactly one bucket, boundaries included` | `server/test/smoke.test.js:4670` |
-| `date_change appears only for an announcement published after the row was saved` | `server/test/smoke.test.js:4686` |
-| `DELETE /api/my-reminders?scope=ended clears only this user's ended rows; another scope is 400` | `server/test/smoke.test.js:4711` |
-| `Set up: the owner also reminds their own event — tests self-exclusion even when editor is both owner and follower` | `server/test/smoke.test.js:4736` |
-| `A critical event_date edit produces no live announcement until an admin approves it` | `server/test/smoke.test.js:4741` |
-| `Approving that edit publishes the announcement, naming the old and new date` | `server/test/smoke.test.js:4753` |
-| `The follower is notified; the owner who edited it themself is not, even though they also follow it` | `server/test/smoke.test.js:4794` |
-| `A second critical date edit — this time by an admin, not the owner — supersedes the first announcement; both rows stay in the table` | `server/test/smoke.test.js:4826` |
-| `This time both the follower and the owner (neither of them the editor) are notified` | `server/test/smoke.test.js:4851` |
-| `GET /api/notifications returns only this user's own rows, and PATCH marks one read` | `server/test/smoke.test.js:4865` |
-| `A user cannot read or mark-read another user's notification — secrecy at the query itself` | `server/test/smoke.test.js:4887` |
-| `A cosmetic edit publishes no announcement, but tells each follower once — never the stranger, and a second edit the same day refreshes that one row` | `server/test/smoke.test.js:4898` |
-| `A critical edit that is NOT a date change (location) is approved normally, never publishes a date announcement, but does notify as a venue change (issue #85, story 6)` | `server/test/smoke.test.js:4930` |
-| `An announcement about an occasion type a legacy client cannot render never reaches it` | `server/test/smoke.test.js:4973` |
-| `views_count stays a bare counter — repeated views by different identities never write a per-viewer row, and no such table exists` | `server/test/smoke.test.js:5007` |
-| `The live announcement disappears once its event's (new) date has passed` | `server/test/smoke.test.js:5035` |
-| `Set up: a followed wedding 4 days away, and a followed funeral 4 days away (notify_countdown off)` | `server/test/smoke.test.js:5082` |
-| `A follower of an event 4 days away gets exactly one event_soon row` | `server/test/smoke.test.js:5113` |
-| `The countdown body never names a date` | `server/test/smoke.test.js:5124` |
-| `An occasion type with notify_countdown = 0 produces NO countdown row, for any offset` | `server/test/smoke.test.js:5133` |
-| `Running the scheduler pass twice for the same day produces ONE row, not two` | `server/test/smoke.test.js:5141` |
-| `Set up: an owner publishes an approved wedding for the venue-change notification test` | `server/test/smoke.test.js:5158` |
-| `A venue change notifies followers; the user who made the change is not notified` | `server/test/smoke.test.js:5180` |
-| `Approval notifies the publisher` | `server/test/smoke.test.js:5242` |
-| `Rejection notifies the publisher and carries the reason` | `server/test/smoke.test.js:5265` |
-| `Set up: a publisher owns a funeral with two pending تعازي awaiting review` | `server/test/smoke.test.js:5298` |
-| `The moderation digest is ONE row carrying a count, not one row per message` | `server/test/smoke.test.js:5331` |
-| `Set up: capUser follows four unrelated events at four countdown offsets, and owns+follows a fifth at 0 days` | `server/test/smoke.test.js:5356` |
-| `The daily cap holds at three scheduled notifications, but an own-event one still arrives once the cap is spent` | `server/test/smoke.test.js:5404` |
-| `A venue change still arrives for this same user even though the daily cap is already spent` | `server/test/smoke.test.js:5424` |
-| `Exempt (own-event) event_soon rows must not be COUNTED by the cap — three of them must never block a fourth, unrelated one (issue #85 review, FIX 2)` | `server/test/smoke.test.js:5454` |
-| `Notification preferences: «مناسبة جديدة» is on by default, can be turned off, and only a boolean is accepted` | `server/test/smoke.test.js:5532` |
-| `A first approval tells everyone who kept «مناسبة جديدة» on — never the publisher or whoever turned it off — and asks the publisher to strengthen the event` | `server/test/smoke.test.js:5548` |
-| `Rejecting and re-approving never announces the same event twice, and keeps its first approval time` | `server/test/smoke.test.js:5574` |
-| `From the fourth new event of a day, each user gets ONE digest that updates in place and turns unread again` | `server/test/smoke.test.js:5588` |
-| `«مناسبة جديدة» تصل أهل المحافظة ومن بلا محافظة ولا تصل محافظة أخرى — صفوفاً ودفعاً (#161)` | `server/test/smoke.test.js:5629` |
-| `عدّاد «مناسبة جديدة» اليومي بمحافظة المناسبة: أول اعتماد في محافظة أخرى فرديّ لا ملخّص، ودفعه لا يستهلكه غيرها (#161)` | `server/test/smoke.test.js:5745` |
-| `من بلا محافظة يتلقّى ملخّصاً مستقلاً لكل محافظة بعددها الصحيح ودفعةً واحدة لكل منهما — لا صفّاً واحداً يُكتب فوقه (#161)` | `server/test/smoke.test.js:5828` |
-| `A followed event 2 days out reads «باقي يومين», the countdown's own idiom` | `server/test/smoke.test.js:5896` |
-| `The second «قوّي مناسبتك» arrives once, two days after the first, while something is still missing` | `server/test/smoke.test.js:5910` |
-| `A solemn occasion (عزا) is never asked to «strengthen» itself` | `server/test/smoke.test.js:5925` |
-| `The admin event list names who published each event` | `server/test/smoke.test.js:5943` |
-| `Activity log: who did what to which event — filterable, super admin only, and a deleted event stays readable` | `server/test/smoke.test.js:5952` |
-| `start() re-arms itself with a fresh, zone-aware setTimeout every cycle — never a fixed-length setInterval` | `server/test/smoke.test.js:6001` |
-| `The next run lands on 09:00 Asia/Jerusalem wall-clock across the next real DST boundary, not merely 24h later` | `server/test/smoke.test.js:6054` |
-| `GET /api/reminders/schedule returns the remaining offsets for a followed event and nothing for an unfollowed one` | `server/test/smoke.test.js:6111` |
-| `shouldDropSubscription: pure decision, no network — drops only on 404/410, keeps on 429/413/5xx/success` | `server/test/smoke.test.js:6159` |
-| `GET /api/notifications/vapid-public-key returns null with no VAPID keys configured, and never carries a private key` | `server/test/smoke.test.js:6169` |
-| `POST /api/notifications/subscribe is refused with an Arabic message (not a 500) when no VAPID keys are configured, and writes no row` | `server/test/smoke.test.js:6177` |
-| `A notification row is still written normally with no VAPID keys configured (push failure never blocks persistence)` | `server/test/smoke.test.js:6190` |
-| `Set up two users for push subscription storage/isolation tests` | `server/test/smoke.test.js:6226` |
-| `Subscribing stores exactly one row per device; re-subscribing the same device is idempotent, not a duplicate; the endpoint never appears in the response` | `server/test/smoke.test.js:6231` |
-| `A malformed subscription body is rejected with 400 in Arabic before ever reaching storage` | `server/test/smoke.test.js:6253` |
-| `An over-length endpoint is rejected with 400, never silently truncated and stored (issue #85 review, FIX 1)` | `server/test/smoke.test.js:6267` |
-| `A non-URL, and a non-https, endpoint are both rejected with 400 — a capability URL that is not even a URL is not worth storing` | `server/test/smoke.test.js:6293` |
-| `DELETE /api/notifications/subscribe also rejects an over-length endpoint with 400 (shares the same validation)` | `server/test/smoke.test.js:6312` |
-| `A user cannot see or remove another user's subscription, and unsubscribing an already-gone endpoint is not an error` | `server/test/smoke.test.js:6321` |
-| `A 429 with a short Retry-After triggers exactly one retry, and sendToUser itself returns without waiting for it (issue #85 review, FIX 2) — no real network call` | `server/test/smoke.test.js:6348` |
-| `A 429 whose Retry-After exceeds the retry ceiling is NOT retried, and still keeps the row` | `server/test/smoke.test.js:6392` |
-| `Deleting a user deletes their push subscriptions (story 21, FK ON DELETE CASCADE)` | `server/test/smoke.test.js:6426` |
-| `Admin creates a plain (non-ad) story` | `server/test/smoke.test.js:6455` |
-| `A regular user is rejected (403) from every /api/admin/stories route` | `server/test/smoke.test.js:6466` |
-| `An ad story with no advertiser_name is rejected with an Arabic message` | `server/test/smoke.test.js:6479` |
-| `An ad story with advertiser_name is accepted and carries the ad fields` | `server/test/smoke.test.js:6489` |
-| `A story link must be http(s); a video platform and CTA are stored and returned` | `server/test/smoke.test.js:6501` |
-| `The studio previews a YouTube link as a real 1080×1920 card without uploading it` | `server/test/smoke.test.js:6532` |
-| `Publishing a studio story uploads the generated poster, stores the link/CTA, and deletes the asset with the story` | `server/test/smoke.test.js:6564` |
-| `Publishing a studio story validates the placement before any Cloudinary upload or database write (#173)` | `server/test/smoke.test.js:6631` |
-| `Turning an existing story into an ad without an advertiser_name is rejected the same way on PATCH` | `server/test/smoke.test.js:6664` |
-| `The four ready-made expiry presets come from the server` | `server/test/smoke.test.js:6673` |
-| `An expired story is excluded from GET /api/stories; a not-yet-expired one and a never-expiring one both remain` | `server/test/smoke.test.js:6681` |
-| `An invalid expires_at is rejected instead of silently becoming null` | `server/test/smoke.test.js:6709` |
-| `Set up: two registered viewers from two different towns` | `server/test/smoke.test.js:6727` |
-| `A registered viewer watching the same story twice today is counted once` | `server/test/smoke.test.js:6741` |
-| `An anonymous viewer watching with the same device_id twice today is counted once` | `server/test/smoke.test.js:6752` |
-| `A view with no token and no device_id is rejected` | `server/test/smoke.test.js:6762` |
-| `A second, different registered viewer is counted as a third distinct view/viewer overall` | `server/test/smoke.test.js:6768` |
-| `Town breakdown reports one count per registered viewer's town, and a bucket for the anonymous device view` | `server/test/smoke.test.js:6776` |
-| `Clicks are counted, and CPM/eCPM/frequency never appear in the metrics response` | `server/test/smoke.test.js:6784` |
-| `A report is recorded once per person; a second report from the same person is rejected` | `server/test/smoke.test.js:6795` |
-| `Reporting a story requires a login` | `server/test/smoke.test.js:6802` |
-| `With no entry_promo_story_id the entry card is the first active story, source "auto"` | `server/test/smoke.test.js:6813` |
-| `Pinning a story id returns that story from the entry card with source "pinned"` | `server/test/smoke.test.js:6824` |
-| `Clearing entry_promo_story_id with an empty string returns the entry card to auto` | `server/test/smoke.test.js:6842` |
-| `A pinned story that is then deleted leaves the entry card on auto, without an error` | `server/test/smoke.test.js:6854` |
-| `A non-numeric entry_promo_story_id is rejected with an Arabic 400, and a town-scoped admin is refused (403)` | `server/test/smoke.test.js:6880` |
-| `With no active story the entry card is disabled, and every story's expiry is restored afterwards` | `server/test/smoke.test.js:6909` |
-| `Placement (#173): no X-App-Version receives bar stories only; a modern header receives all three` | `server/test/smoke.test.js:6928` |
-| `Placement (#173): the entry card never hands a legacy client a pinned carousel or feed story` | `server/test/smoke.test.js:6975` |
-| `Placement (#173): an unknown placement is refused with 400 and an Arabic message, and nothing is stored` | `server/test/smoke.test.js:7021` |
-| `Placement (#173): null and empty placements fall back to bar, and an update moves the story between positions` | `server/test/smoke.test.js:7063` |
-| `Placement (#173): views and clicks are recorded for carousel and feed stories exactly as for bar ones` | `server/test/smoke.test.js:7090` |
-| `Set up: a town-scoped admin, assigned to رهط via the super_admin's towns API` | `server/test/smoke.test.js:7145` |
-| `Set up: one pending event inside the scoped admin's town, one outside it` | `server/test/smoke.test.js:7167` |
-| `Case 1: a town-scoped admin approves an event in their own town — 200` | `server/test/smoke.test.js:7185` |
-| `Case 2: the same admin gets 404, not 403, for an event outside their towns` | `server/test/smoke.test.js:7192` |
-| `Case 3: GET /admin/events never returns the out-of-scope event to the scoped admin` | `server/test/smoke.test.js:7199` |
-| `Case 4: GET /admin/stats counts only the scoped admin's own town — matches a direct DB count for رهط exactly` | `server/test/smoke.test.js:7204` |
-| `Case 5: GET /admin/users is closed (403) to a plain admin — super_admin only now` | `server/test/smoke.test.js:7210` |
-| `Case 6: a super_admin passes every one of cases 1-5 — no town restriction, and /admin/users stays open to it` | `server/test/smoke.test.js:7215` |
-| `Case 7: an admin with zero admin_towns rows sees nothing and can approve nothing — fail closed` | `server/test/smoke.test.js:7237` |
-| `GET /admin/me reports the caller's own towns, and an admin with none gets an empty list` | `server/test/smoke.test.js:7271` |
-| `Case 8: an admin publishing in their own town is approved immediately; the same admin publishing outside it lands pending, never rejected` | `server/test/smoke.test.js:7286` |
-| `A super_admin's broadcast lands with scope_town = NULL and reaches a user in any town` | `server/test/smoke.test.js:7326` |
-| `A town admin's broadcast produces one row per own town and reaches only those users` | `server/test/smoke.test.js:7346` |
-| `A user in another town does NOT see a town-scoped broadcast` | `server/test/smoke.test.js:7361` |
-| `A town admin naming a town outside their scope gets 404, and writes zero rows` | `server/test/smoke.test.js:7366` |
-| `An admin with no assigned towns is refused and writes zero rows` | `server/test/smoke.test.js:7378` |
-| `An expired broadcast is absent from the live read and present in the notification centre` | `server/test/smoke.test.js:7392` |
-| `A «بلا شريط» broadcast (expires_at = NULL) never appears in the live read` | `server/test/smoke.test.js:7415` |
-| `Dismissing hides a broadcast from the live read for that user only, moves it to read in their centre, and it stays there` | `server/test/smoke.test.js:7431` |
-| `Dismissing a broadcast outside the caller's scope is 404` | `server/test/smoke.test.js:7458` |
-| `POST /api/notifications/read-all marks every personal notification and broadcast read, deletes nothing, and touches no one else` | `server/test/smoke.test.js:7463` |
-| `A user created AFTER the broadcast still sees it — proves no fan-out` | `server/test/smoke.test.js:7498` |
-| `The centre hides a broadcast published before the account registered, and keeps a newer one` | `server/test/smoke.test.js:7556` |
-| `A broadcast that expired more than 30 days ago drops out of the centre; one expired 10 days ago stays` | `server/test/smoke.test.js:7586` |
-| `GET /api/broadcasts/live is unchanged by the centre limits: only live broadcasts, even anonymously` | `server/test/smoke.test.js:7604` |
-| `An invalid tone is rejected in Arabic` | `server/test/smoke.test.js:7621` |
-| `A past expires_at is rejected in Arabic` | `server/test/smoke.test.js:7630` |
-| `An expires_at too far in the future is rejected` | `server/test/smoke.test.js:7639` |
-| `A non-super admin gets 404, not 403, on PATCH /admin/users/:id/role` | `server/test/smoke.test.js:7676` |
-| `super_admin is never grantable through this endpoint` | `server/test/smoke.test.js:7683` |
-| `Promotion reaches admin and nothing higher, and the response never carries pin_code` | `server/test/smoke.test.js:7690` |
-| `Promoting an already-admin user is rejected, not silently repeated` | `server/test/smoke.test.js:7706` |
-| `Demoting clears admin_towns in the same transaction` | `server/test/smoke.test.js:7713` |
-| `Demoting a plain user (never an admin) is rejected` | `server/test/smoke.test.js:7733` |
-| `Self-demotion is refused` | `server/test/smoke.test.js:7740` |
-| `The last remaining super_admin cannot be demoted` | `server/test/smoke.test.js:7748` |
-| `admin.demote is logged only for a successful commit, never for a rejected attempt` | `server/test/smoke.test.js:7767` |
-| `Case 10: sending village_id together with a non-catch-all town is rejected` | `server/test/smoke.test.js:7801` |
-| `Case 12: GET /api/towns with no X-App-Version returns the towns array unchanged, element by element, plus the new villages key, each row carrying its real region_id` | `server/test/smoke.test.js:7815` |
-| `Case 13: artist_name sent on a عزا publish is silently ignored — not stored, not rejected` | `server/test/smoke.test.js:7887` |
-| `Case 14: artist_name sent on a عرس publish is stored and comes back in GET /api/events` | `server/test/smoke.test.js:7910` |
-| `Set up: a super_admin creates a service category` | `server/test/smoke.test.js:7934` |
-| `Case 17: an admin-created provider needs no consent fields — the server records the consent itself` | `server/test/smoke.test.js:7943` |
-| `Case 18: an admin holding only رهط cannot create a provider for {رهط, حورة} — containment` | `server/test/smoke.test.js:7965` |
-| `Set up: a super_admin creates a real provider with a phone number` | `server/test/smoke.test.js:7983` |
-| `Case 15: GET /api/services/providers carries no phone key on any row` | `server/test/smoke.test.js:8000` |
-| `Case 16: GET /api/services/providers/:id carries phone` | `server/test/smoke.test.js:8008` |
-| `Optional phone: an admin creates a provider with no phone — 201, stored as NULL` | `server/test/smoke.test.js:8015` |
-| `Optional phone: a present but invalid phone is still rejected (400), and nothing is written` | `server/test/smoke.test.js:8026` |
-| `Optional phone: the detail returns phone: null; the list has no phone key and has_phone tells the two apart` | `server/test/smoke.test.js:8038` |
-| `Optional phone: PATCH sets the number, leaves it alone when the key is absent, and clears it with an empty string` | `server/test/smoke.test.js:8052` |
-| `Category attributes: creating a category with custom attributes saves and returns them` | `server/test/smoke.test.js:8083` |
-| `Category attributes: GET /api/services/categories returns attributes for active categories` | `server/test/smoke.test.js:8103` |
-| `Provider specs & estimates: creating a provider with package estimate and attributes` | `server/test/smoke.test.js:8114` |
-| `Provider specs & estimates: GET /api/services/providers carries specs, price_estimate_desc, price_type, and strictly NO phone` | `server/test/smoke.test.js:8136` |
-| `Provider search: ?search= filters by name, description, and specs` | `server/test/smoke.test.js:8148` |
-| `Provider specs & estimates: GET /api/services/providers/:id carries full details including phone` | `server/test/smoke.test.js:8156` |
-| `Set up: an owner publishes an approved event in the scoped admin's town, and a well-wisher congratulates it` | `server/test/smoke.test.js:8179` |
-| `Case 20: a town-scoped admin hides the comment — status becomes hidden, moderated_by is set to that admin` | `server/test/smoke.test.js:8208` |
-| `Case 21: the event owner cannot lift the block the admin placed` | `server/test/smoke.test.js:8220` |
-| `Set up: an approved wedding whose honoree name and clan carry HTML metacharacters` | `server/test/smoke.test.js:8358` |
-| `GET /e/:id on an approved event returns 200 HTML with absolute og:title/og:image/og:url` | `server/test/smoke.test.js:8374` |
-| `User text comes back escaped — in the page body AND inside content="…"` | `server/test/smoke.test.js:8386` |
-| `The preview leads with the occasion type, not the free-text title` | `server/test/smoke.test.js:8412` |
-| `og:image points at the generated card, and og:image:width/height declare its real 1200×1200 size` | `server/test/smoke.test.js:8418` |
-| `GET /e/:id/card.jpg on the approved event is a real 1200×1200 JPEG` | `server/test/smoke.test.js:8429` |
-| `Set up: مناسبة عزا معتمدة بلا ملصق (نوعها لا يحمل default_poster_url) لفحوص صورة التنزيل` | `server/test/smoke.test.js:8459` |
-| `GET /e/:id/download.png: PNG بعرض المصدر وارتفاعه + ارتفاع الشريط، بترويسة تنزيل` | `server/test/smoke.test.js:8476` |
-| `رمز QR على الشريط يطابق مصفوفة الوحدات لرابط الصفحة المطلق — وحدةً بوحدة` | `server/test/smoke.test.js:8498` |
-| `صورة التنزيل الثانية تُخدَم من كاش الخادم ولا تُعاد رسمها` | `server/test/smoke.test.js:8529` |
-| `مصدر التنزيل يتبع الملصق حين لا بطاقة أساسية: العرض والارتفاع مقاس الملصق نفسه` | `server/test/smoke.test.js:8544` |
-| `THE SIZE GUARD: a card built from a real (non-trivial) poster still stays under the WhatsApp preview limit` | `server/test/smoke.test.js:8563` |
-| `The footer mark/text sit clear of the decorative frame — lowest drawn content stays ≥12px above the companion rule` | `server/test/smoke.test.js:8581` |
-| `A second request for the same card is served from cache, not re-rendered` | `server/test/smoke.test.js:8618` |
-| `The Content-Security-Policy header is present on the share route, with a font source and still no script source` | `server/test/smoke.test.js:8630` |
-| `The Cairo woff2 files are actually served by the assets route with the woff2 content type` | `server/test/smoke.test.js:8645` |
-| `Both download buttons are present, and the secondary one points at the site root rather than the APK` | `server/test/smoke.test.js:8654` |
-| `صفحة /e/:id تحمل زرّ «نزّل الصورة» إلى /e/:id/download.png — لا إلى صورة أخرى (#182)` | `server/test/smoke.test.js:8667` |
-| `The three-reason strip is present` | `server/test/smoke.test.js:8678` |
-| `The page contains no <script tag at all` | `server/test/smoke.test.js:8685` |
-| `No date, venue, or phone value leaks anywhere in the response for an event that has all three set` | `server/test/smoke.test.js:8690` |
-| `Editing the event produces a different card, and the old cached one is evicted` | `server/test/smoke.test.js:8712` |
-| `Set up: a pending (not yet approved) wedding` | `server/test/smoke.test.js:8741` |
-| `GET /e/:id on a pending event, a non-existent id, and a non-numeric id all 404 with an identical body` | `server/test/smoke.test.js:8751` |
-| `GET /e/:id/card.jpg on a pending event, a non-existent id, and a non-numeric id all 404` | `server/test/smoke.test.js:8763` |
-| `GET /e/:id/download.png على مناسبة معلّقة أو معرّف مفقود/غير رقمي ⇒ 404 الموحّدة نفسها، لا صورة ولا 403` | `server/test/smoke.test.js:8772` |
-| `Set up: an approved wedding whose date has already passed` | `server/test/smoke.test.js:8792` |
-| `GET /e/:id on an expired approved event is still 200 and shows the «انتهت» marker` | `server/test/smoke.test.js:8802` |
-| `Set up: a poster-less عزا (solemn tone, no default_poster_url either)` | `server/test/smoke.test.js:8809` |
-| `The festive share page carries «أعراسنا» in og:site_name, the description, and the footer` | `server/test/smoke.test.js:8826` |
-| `A solemn-tone event with no poster renders a real card in the solemn palette, not the festive one` | `server/test/smoke.test.js:8838` |
-| `Both palettes expose a wordmark, and the generated card renders for each tone` | `server/test/smoke.test.js:8859` |
-| `The solemn (condolence) share page never carries «أعراسنا» anywhere, and still carries «مناسبات النقب»` | `server/test/smoke.test.js:8874` |
-| `Set up: an approved event for the share/download analytics tests below` | `server/test/smoke.test.js:8894` |
-| `A name from the closed list is accepted, and a row is actually written` | `server/test/smoke.test.js:8904` |
-| `A name outside the closed list is rejected with an Arabic message` | `server/test/smoke.test.js:8917` |
-| `A count-only name (share_page_viewed) sent WITH a token and a device_id still writes a row whose user_id and device_id are both NULL` | `server/test/smoke.test.js:8925` |
-| `The tighter analytics rate limit actually returns a rejection when exceeded` | `server/test/smoke.test.js:8940` |
-| `The analytics_events table has no event_id, ip, or user_agent column at all — the direct, permanent test of the governing rule` | `server/test/smoke.test.js:8951` |
-| `Exercising the nokoot (دفتر النقوط) routes writes ZERO analytics rows — the private ledger is not an exception` | `server/test/smoke.test.js:8960` |
-| `GET /e/:id/download 302-redirects to the APK url and records app_download_clicked with the event's town` | `server/test/smoke.test.js:8975` |
-| `GET /e/:id/download still redirects and records for a non-existent id — just with no content_town` | `server/test/smoke.test.js:8997` |
-| `A row older than the retention window loses its identity on fold and survives as a daily counter; running the fold twice does not double-count` | `server/test/smoke.test.js:9011` |
-| `Set up: two fresh users for the privacy tests below, each with a pre-existing identified analytics row (standing in for the register-time row a real sign-up would have written)` | `server/test/smoke.test.js:9071` |
-| `PATCH /api/auth/me opts a user out of behavioural analytics, and GET /api/auth/me reflects it — neither response carries pin_code` | `server/test/smoke.test.js:9087` |
-| `an expired or tampered token is 401 (sign in again), never 403 — 403 stays "not allowed"` | `server/test/smoke.test.js:9102` |
-| `GET /api/auth/me renews a plain user's token (a working one), and never an admin's` | `server/test/smoke.test.js:9119` |
-| `An opted-out signed-in user triggers an identified analytics event ⇒ zero rows written for them — not an anonymised one` | `server/test/smoke.test.js:9137` |
-| `Opting out changes nothing about the ability to use the app — a normal authenticated action still succeeds` | `server/test/smoke.test.js:9154` |
-| `POST /api/privacy/analytics-erasure erases only the caller's own analytics rows — another user's rows are untouched` | `server/test/smoke.test.js:9163` |
-| `Deleting an account removes its analytics rows too — the FK cascade, not a separate code path` | `server/test/smoke.test.js:9184` |
-| `POST /api/privacy/requests queues a formal request and states a deadline` | `server/test/smoke.test.js:9194` |
-| `POST /api/privacy/requests rejects an unknown request type` | `server/test/smoke.test.js:9207` |
-| `A town-scoped admin gets 403 on both the analytics read and the privacy request queue — super_admin only, never a town admin` | `server/test/smoke.test.js:9215` |
-| `A super_admin gets 200 on both, sees the queued request, and can close it` | `server/test/smoke.test.js:9223` |
-| `DELETE /api/account — no PIN is 400, a wrong PIN is 401, the right PIN is 200; an already-issued token stops answering with data afterwards` | `server/test/smoke.test.js:9247` |
-| `POST /api/privacy/deletion-request is public, folds Arabic-Indic digits and spaces, answers identically for a registered number, an unknown one and a duplicate, and queues exactly one erasure request` | `server/test/smoke.test.js:9276` |
-| `DELETE /api/admin/users/:id — a super_admin deletes another account, its queue row goes with it (CASCADE), deleting itself is refused, and an unknown id is 404` | `server/test/smoke.test.js:9334` |
-| `An old public request neither blocks the owner from filing a verified one nor gets promoted to verified` | `server/test/smoke.test.js:9377` |
-| `The scheduled daily pass deletes a user whose VERIFIED erasure request passed the 30-day deadline — and leaves the fresh, the access-only and the already-closed requests untouched; a second run is safe` | `server/test/smoke.test.js:9419` |
-| `executeErasureRequest refuses a fresh request when called directly — it re-proves eligibility, not just existence` | `server/test/smoke.test.js:9513` |
-| `A close committed after the job’s pending pre-read but held under a row lock makes the atomic eligibility check prevent the deletion` | `server/test/smoke.test.js:9545` |
-| `deleting your own account deletes your profile photo from Cloudinary, not just the row that pointed at it` | `server/test/smoke.test.js:9642` |
-| `a super_admin deleting an account from the panel deletes its profile photo too` | `server/test/smoke.test.js:9675` |
-| `GET /api/admin/analytics/users/:id (issue #44, user story 45) — a super_admin reads one user's own rows, isolated from another user's, with no event id of any kind, and pagination that behaves` | `server/test/smoke.test.js:9710` |
-| `GET /api/admin/analytics/overview, devices, and devices/:deviceId/log — super_admin tracks all viewers and devices while town admins are refused` | `server/test/smoke.test.js:9771` |
-| `GET /api/privacy/notice is public, names every event in the closed list in Arabic, and leaks no code identifiers` | `server/test/smoke.test.js:9848` |
-| `GET /api/settings/public answers cleanly before any setting was ever saved, and exposes nothing but the support number, the default audio and the providers layout` | `server/test/smoke.test.js:9873` |
-| `A plain (town-scoped) admin is refused on both GET and PUT /api/admin/settings — super_admin only` | `server/test/smoke.test.js:9884` |
-| `PUT /api/admin/settings rejects an invalid WhatsApp number with an Arabic message` | `server/test/smoke.test.js:9894` |
-| `PUT /api/admin/settings rejects a key outside the code-owned whitelist` | `server/test/smoke.test.js:9902` |
-| `A super_admin saves the support number, local and international forms normalise to the same canonical value, and it reads back on both the admin and public routes` | `server/test/smoke.test.js:9909` |
-| `A super_admin clears a previously-saved support number with an explicit empty value — it goes back to null everywhere, and an absent key leaves it untouched` | `server/test/smoke.test.js:9932` |
-| `providers_display: a super_admin saves «cards» and every client reads it back from the public route; a town-scoped admin is refused (403) and changes nothing` | `server/test/smoke.test.js:9972` |
-| `providers_display: an unknown value is rejected with an Arabic 400 and the saved choice stays` | `server/test/smoke.test.js:9995` |
-| `providers_display: clearing it with an explicit empty value returns the public route to the default «compact»` | `server/test/smoke.test.js:10008` |
-| `providers_display: a stale value in the table also reads as «compact» — the fallback lives in the service, not in a client` | `server/test/smoke.test.js:10018` |
-| `POST and DELETE /api/admin/settings/default-audio refuse a plain user and a town-scoped admin — super_admin only` | `server/test/smoke.test.js:10041` |
-| `POST /api/admin/settings/default-audio rejects a missing file, and a non-audio file under the audio field` | `server/test/smoke.test.js:10053` |
-| `A super_admin uploads the default audio — it is stored relative and comes back absolute on the admin and public routes` | `server/test/smoke.test.js:10064` |
-| `PUT /api/admin/settings refuses the default audio as free text — it can only be set by upload` | `server/test/smoke.test.js:10085` |
-| `DELETE /api/admin/settings/default-audio clears it back to null on the public route` | `server/test/smoke.test.js:10098` |
-| `GET /api/live answers cleanly before anything is ever saved` | `server/test/smoke.test.js:10114` |
-| `A plain (town-scoped) admin is refused on PUT for the live keys — super_admin only` | `server/test/smoke.test.js:10123` |
-| `PUT /api/admin/settings rejects a non-https stream URL` | `server/test/smoke.test.js:10130` |
-| `PUT /api/admin/settings rejects a stream URL whose host has no dot, and a value that is not a URL at all` | `server/test/smoke.test.js:10138` |
-| `Any https platform is accepted now — a non-TikTok host is no longer refused` | `server/test/smoke.test.js:10149` |
-| `A stream URL carrying embedded credentials is rejected with an Arabic message — the displayed link is a phishing shape` | `server/test/smoke.test.js:10158` |
-| `A stream URL carrying a newline is stored normalised, never as the raw string that was validated` | `server/test/smoke.test.js:10166` |
-| `A super_admin saves a valid channel URL — it reads back on both the admin route and GET /api/live` | `server/test/smoke.test.js:10180` |
-| `Saving a live title without an until is rejected with an Arabic message, and nothing is saved` | `server/test/smoke.test.js:10193` |
-| `Saving a live title with a FUTURE until marks the live active, falling back to the profile url` | `server/test/smoke.test.js:10206` |
-| `A distinct live_stream_url overrides the profile url in live.url, and a TikTok link is simply non-embeddable` | `server/test/smoke.test.js:10221` |
-| `Saving a PAST until keeps the live present but inactive` | `server/test/smoke.test.js:10232` |
-| `Clearing the title and until brings live back to null` | `server/test/smoke.test.js:10244` |
-| `GET /api/settings/public still returns exactly its three keys after the live settings were saved` | `server/test/smoke.test.js:10254` |
-| `With no channel and no live saved, /live, /live/card.jpg and /live/go all 404` | `server/test/smoke.test.js:10268` |
-| `Set up: a permanent channel link only, no live` | `server/test/smoke.test.js:10277` |
-| `/live with a channel link only renders the channel headline and no «مباشر الآن»` | `server/test/smoke.test.js:10284` |
-| `/live/go redirects to the profile url when there is no active live` | `server/test/smoke.test.js:10292` |
-| `Set up: an ACTIVE live (future until, its own live url)` | `server/test/smoke.test.js:10298` |
-| `/live with an active live shows the topic as the headline, in og:title, and with the «مباشر الآن» badge` | `server/test/smoke.test.js:10311` |
-| `/live/go redirects to the live url while active` | `server/test/smoke.test.js:10327` |
-| `Set up: the same live, now EXPIRED (until moved to the past)` | `server/test/smoke.test.js:10333` |
-| `/live with an EXPIRED live falls back to the channel state — no stale topic, no stale badge` | `server/test/smoke.test.js:10341` |
-| `/live/go redirects to the profile url once the live has expired` | `server/test/smoke.test.js:10352` |
-| `A topic carrying an injection attempt renders escaped — the raw <img never appears in the page body` | `server/test/smoke.test.js:10358` |
-| `/live/card.jpg is a real, non-empty JPEG, and a different topic produces a different cached file` | `server/test/smoke.test.js:10382` |
-| `/live/download 302-redirects to the APK url and records app_download_clicked with no content_town` | `server/test/smoke.test.js:10403` |
-| `Both new analytics event names (tiktok_page_viewed, tiktok_click_through) are accepted by analytics.service.js and stay count-only` | `server/test/smoke.test.js:10415` |
-| `A youtube.com/live/<id> stream link is saved and GET /api/live derives its youtube-nocookie embed_url` | `server/test/smoke.test.js:10441` |
-| `GET /api/live keeps its original shape for published APKs: profile_url and live.{title,until,url,active}` | `server/test/smoke.test.js:10460` |
-| `toEmbedUrl derives youtu.be, watch?v= (www and m.), embed/, and /channel/UC… links correctly` | `server/test/smoke.test.js:10470` |
-| `toEmbedUrl returns null for an @handle, TikTok, Facebook, a malformed id, and garbage` | `server/test/smoke.test.js:10484` |
-| `A TikTok stream link saves fine but GET /api/live answers embed_url: null (a plain link)` | `server/test/smoke.test.js:10499` |
-| `Migration renames tiktok_profile_url to live_channel_url, and running migrate twice in a row is safe` | `server/test/smoke.test.js:10511` |
-| `The rename never overwrites a value already saved under the new key` | `server/test/smoke.test.js:10528` |
-| `jerusalemDateString returns the Asia/Jerusalem date, not the UTC one, at 22:30Z (summer and winter)` | `server/test/smoke.test.js:10541` |
-| `PUT /api/admin/live/episodes/<today> without a token → 401, from a town admin → 403` | `server/test/smoke.test.js:10582` |
-| `A poll with fewer than two or more than four options is refused with 400` | `server/test/smoke.test.js:10592` |
-| `A poll question without options, options without a question, a blank option, and a bad date are refused with 400` | `server/test/smoke.test.js:10602` |
-| `A super_admin creates today's episode → 200 with the saved episode` | `server/test/smoke.test.js:10615` |
-| `Set up: yesterday with no poll, and two days ago with a poll (past dates are allowed)` | `server/test/smoke.test.js:10627` |
-| `GET /api/live/hub (anonymous): today has its poll without results, previous is the latest earlier day WITH a poll` | `server/test/smoke.test.js:10642` |
-| `POST vote without a token → 401` | `server/test/smoke.test.js:10662` |
-| `POST vote with an out-of-range or non-integer option_index → 400; on an unknown episode → 404` | `server/test/smoke.test.js:10667` |
-| `POST vote on an earlier day's episode → 400 «هذا النقاش مغلق»` | `server/test/smoke.test.js:10678` |
-| `The first vote → 200 with results; a second vote by the same account → 409` | `server/test/smoke.test.js:10690` |
-| `GET /api/live/hub shows today's results to the voter, and still hides them from a signed-in non-voter` | `server/test/smoke.test.js:10709` |
-| `After a vote, changing the poll options → 409; changing only the topic → 200` | `server/test/smoke.test.js:10720` |
-| `GET /api/admin/live/episodes lists the recent episodes newest first with vote_count, super_admin only` | `server/test/smoke.test.js:10737` |
-| `DELETE /api/admin/live/episodes/:id removes the episode and its votes; an unknown id → 404` | `server/test/smoke.test.js:10748` |
-| `A vote emits live_poll_<episodeId> with { results, total_votes } only — never my_vote` | `server/test/smoke.test.js:10798` |
-| `PUT /api/admin/settings with only the WhatsApp number emits no live_status and writes no live notification` | `server/test/smoke.test.js:10832` |
-| `First active live saved today → live_status, one system_notification, rows only for notify_new_events = 1` | `server/test/smoke.test.js:10851` |
-| `A second save the same day (extending until) → live_status again, but no new rows and no announcement` | `server/test/smoke.test.js:10893` |
-| `Saving a live whose until is already past → live_status, but no notification at all` | `server/test/smoke.test.js:10913` |
-| `/live/embed with no link saved at all → 404` | `server/test/smoke.test.js:10951` |
-| `Set up: an active YouTube live, today's episode with a poll, and yesterday's poll with three votes` | `server/test/smoke.test.js:10957` |
-| `GET /live names no platform and shows the topic, episode question, today's poll read-only, and yesterday's result` | `server/test/smoke.test.js:10994` |
-| `An <img onerror> in the episode topic renders escaped on /live, never as markup` | `server/test/smoke.test.js:11024` |
-| `GET /live/embed with a YouTube live → 200, an iframe onto embed_url with referrerpolicy, under its own CSP` | `server/test/smoke.test.js:11030` |
-| `/live/go still redirects to the active live's own link` | `server/test/smoke.test.js:11052` |
-| `/live/embed with a TikTok stream link → 404, and /live/go goes to that link as before` | `server/test/smoke.test.js:11058` |
-| `Set up: three events across three distinct towns (two weddings, one funeral) plus a fourth event in a fresh village` | `server/test/smoke.test.js:11093` |
-| `A single ?town= value returns exactly what it always has — the no-regression case` | `server/test/smoke.test.js:11142` |
-| `Two comma-separated towns return the union of both, and nothing from a third` | `server/test/smoke.test.js:11151` |
-| `A single occasion_type_id (the funeral) excludes a wedding event` | `server/test/smoke.test.js:11161` |
-| `Two comma-separated occasion_type_id values return the union of both types` | `server/test/smoke.test.js:11168` |
-| `?village_id= filters to only that village alone` | `server/test/smoke.test.js:11176` |
-| `village_id combined with a town in a DIFFERENT town returns the union of both places, not their (always-empty) intersection` | `server/test/smoke.test.js:11186` |
-| `village_id combined with town = 'القرى والتجمعات' itself is coherent: the catch-all town already contains every village's events, so the union is just that same catch-all set` | `server/test/smoke.test.js:11195` |
-| `Twenty comma-separated occasion_type_id values are accepted` | `server/test/smoke.test.js:11203` |
-| `Twenty-one comma-separated occasion_type_id values are rejected with 400 and an Arabic message — not a silent truncation to the first twenty` | `server/test/smoke.test.js:11209` |
-| `Twenty-one repetitions of the SAME occasion_type_id are also rejected — the cap counts raw values sent, not distinct ones after dedupe` | `server/test/smoke.test.js:11219` |
-| `A duplicated value in the list does not duplicate a row in the result` | `server/test/smoke.test.js:11226` |
-| `'الكل' inside a town list still means no town filter, exactly as a lone ?town=الكل` | `server/test/smoke.test.js:11232` |
-| `An unknown town value matches nothing, exactly like before list support existed — 200 with an empty list, not a 400` | `server/test/smoke.test.js:11246` |
-| `A request with no X-App-Version cannot see the non-legacy funeral type even when it asks for it by id inside a list` | `server/test/smoke.test.js:11252` |
-| `A legacy client requesting ONLY the non-legacy funeral type by id gets an empty result, never a widened one` | `server/test/smoke.test.js:11260` |
-| `GET /api/map/events supports the same town/occasion_type_id/village_id list filtering, including the legacy intersection` | `server/test/smoke.test.js:11266` |
-| `the migration turned the archive on for the wedding type only` | `server/test/smoke.test.js:11337` |
-| `a live on a CHANNEL link is not saved as an episode, and the admin is told why` | `server/test/smoke.test.js:11344` |
-| `a live on ONE video's link becomes today's episode, kept in its canonical watch form` | `server/test/smoke.test.js:11360` |
-| `while the live is on, today is the live itself — not in «الحلقات السابقة»` | `server/test/smoke.test.js:11375` |
-| `a topic the admin already typed for the day is kept when the live is re-saved` | `server/test/smoke.test.js:11382` |
-| `once the live ends, today's episode is listed under «الحلقات السابقة» with its own link and player` | `server/test/smoke.test.js:11392` |
-| `the /live page lists «الحلقات السابقة» as links to each episode page, titles escaped` | `server/test/smoke.test.js:11407` |
-| `PUT /api/admin/live/episodes/:date refuses a channel link as an episode video, and stores a video link canonically` | `server/test/smoke.test.js:11414` |
-| `an episode save without video_url keeps the recorded video (a broadcast may have landed after the form loaded); an empty one clears it` | `server/test/smoke.test.js:11430` |
-| `GET /live/e/:id is the branded episode page: escaped title, its own card as og:image, and «شاهد الحلقة»` | `server/test/smoke.test.js:11453` |
-| `the episode card is a 1200×1200 JPEG; /go redirects to the stored video only; /embed frames it` | `server/test/smoke.test.js:11465` |
-| `an unknown, malformed or video-less episode id is a 404 on every episode route` | `server/test/smoke.test.js:11482` |
-| `without Cloudinary keys, asking to upload a share image answers in Arabic instead of failing` | `server/test/smoke.test.js:11496` |
-| `share-image signing is super_admin only` | `server/test/smoke.test.js:11505` |
-| `the signature names a public_id inside this episode's own folder, and never carries the secret` | `server/test/smoke.test.js:11513` |
-| `registering a share image needs a real Cloudinary response signature for THIS episode` | `server/test/smoke.test.js:11528` |
-| `a verified share image is stored and drawn into the episode card` | `server/test/smoke.test.js:11543` |
-| `removing the share image goes back to the generated card, and deletes the file on Cloudinary` | `server/test/smoke.test.js:11561` |
-| `album photos: the type gate is the only gate — an upcoming wedding can be prepared, an ended funeral cannot` | `server/test/smoke.test.js:11645` |
-| `album routes: a town admin manages a wedding in their town; one with no towns gets 404, never 403` | `server/test/smoke.test.js:11659` |
-| `a verified photo is added and shows under the ended wedding in GET /api/events/:id` | `server/test/smoke.test.js:11671` |
-| `a user tags himself: pending and invisible, then searchable by a spelling variant after approval` | `server/test/smoke.test.js:11730` |
-| `a user withdraws the tag, re-requests, is rejected, and cannot re-request the same photo` | `server/test/smoke.test.js:11776` |
-| `a self-tag without a profile photo, or without confirm_phone, is refused and writes no row` | `server/test/smoke.test.js:11802` |
-| `a conditional tag keeps both descriptions and the phone-confirmation stamp, and the queue returns them` | `server/test/smoke.test.js:11827` |
-| `apply_caption adopts the suggestion on approval; without it — and on any rejection — the caption is untouched` | `server/test/smoke.test.js:11858` |
-| `descriptions longer than 200 characters are truncated, and blank ones are stored NULL` | `server/test/smoke.test.js:11911` |
-| `the tag queue counts match the rows of each status, and move as a tag is decided` | `server/test/smoke.test.js:11943` |
-| `three distinct privacy reports hide the photo; the admin restores it and it is public again` | `server/test/smoke.test.js:11975` |
-| `there is no album photo cap: 61 rows are accepted and every one is listed` | `server/test/smoke.test.js:12003` |
-| `GET /p/:id serves one photo with og:image, noindex, and no script — and 404s when hidden` | `server/test/smoke.test.js:12029` |
-| `GET /a/:id serves the album with its cover as og:image, noindex, and no script — and 404s when hidden or malformed` | `server/test/smoke.test.js:12053` |
-| `a person is a row: a honoree is findable by name, his album counted, and his page renders (ADR-0011)` | `server/test/smoke.test.js:12094` |
-| `two spellings of one name are one person, and a name with nothing public never appears` | `server/test/smoke.test.js:12124` |
-| `GET /api/admin/people suggests a nearer name with its photo count, and reading never merges (#107)` | `server/test/smoke.test.js:12154` |
-| `merging two people moves their tags, occasions and accounts, and only a super admin can (#107)` | `server/test/smoke.test.js:12177` |
-| `the archive is hidden (not deleted) when the event is unpublished or its type turns the archive off` | `server/test/smoke.test.js:12274` |
-| `deleting an archive photo removes the row and its Cloudinary file; a wrong event id is 404` | `server/test/smoke.test.js:12294` |
-| `POST /api/admin/albums builds a published album from the groom name alone, and a blank name is an Arabic 400` | `server/test/smoke.test.js:12305` |
-| `admin album photos: the album comes back in the public shape — the honoree album names itself after reopening, the event album keeps its event` | `server/test/smoke.test.js:12362` |
-| `a no-event album with no approved photo and no video is not public — the list, the search and its page all wait` | `server/test/smoke.test.js:12396` |
-| `a town admin creates an album in their own town and gets 404 outside it — never 403, and nothing is written` | `server/test/smoke.test.js:12451` |
-| `GET /api/admin/albums?without_event=1 lists honoree albums for a super admin, newest first, in the public shape` | `server/test/smoke.test.js:12504` |
-| `GET /api/admin/albums?without_event=1 hides another town’s honoree album — and the album route is 404, never 403` | `server/test/smoke.test.js:12529` |
-| `GET /api/admin/albums?without_event=1 never lists an album that has an event` | `server/test/smoke.test.js:12549` |
-| `GET /a/:id and GET /p/:id serve a no-event album and its photo instead of falling over` | `server/test/smoke.test.js:12561` |
-| `an album attached to an event is untouched: the same event object, the same fields, the same route` | `server/test/smoke.test.js:12594` |
-| `album videos: a YouTube link lands on the wedding album, in GET /api/albums/:id, and on its own public route with the YouTube thumbnail` | `server/test/smoke.test.js:12635` |
-| `album videos: a non-http link is an Arabic 400, the same link twice in one album is a 409, and another album accepts it` | `server/test/smoke.test.js:12670` |
-| `album videos: hiding removes it from the album and 404s its own public route; an unknown status is an Arabic 400` | `server/test/smoke.test.js:12701` |
-| `album videos: deleting removes the row and its public route, and touches no file — the link is external` | `server/test/smoke.test.js:12731` |
-| `album videos: a town admin outside the album’s scope gets 404 on all four video routes — never 403 — and nothing is written` | `server/test/smoke.test.js:12746` |
-| `album videos: a groom-only album (ADR-0012) takes a video, and its public route waits for the album to be published — event stays null` | `server/test/smoke.test.js:12777` |
-| `video share page: og:video.other, our own card as og:image, «شاهد الفيديو على يوتيوب», and the injected title escaped` | `server/test/smoke.test.js:12822` |
-| `the video card is a JPEG of its own, served with a short cache` | `server/test/smoke.test.js:12866` |
-| `a hidden video is a 404 on its page and its card, and comes back when it is approved again` | `server/test/smoke.test.js:12875` |
-| `a malformed and a non-existent video id are the same 404 on both video share routes` | `server/test/smoke.test.js:12892` |
-| `an ended-wedding album with no approved photo but one approved video is public — list, detail, /a/:id — and hiding the video hides it again` | `server/test/smoke.test.js:12905` |
-| `a groom-only album with no photo but one approved video is public in the list, the search and the person page — hiding the video hides it again` | `server/test/smoke.test.js:12979` |
-| `an uploaded poster is forwarded to Cloudinary and stored as its URL, with no copy left on disk` | `server/test/smoke.test.js:13066` |
-| `a poster replaced by PATCH, and an artist image, go to their own Cloudinary folders` | `server/test/smoke.test.js:13100` |
-| `replacing a poster deletes the old one from Cloudinary — unless another row still uses it` | `server/test/smoke.test.js:13127` |
-| `a JSON edit that leaves the poster alone deletes nothing; a typed external URL is never deleted` | `server/test/smoke.test.js:13164` |
-| `when Cloudinary fails, the publish still succeeds and the poster stays on this server` | `server/test/smoke.test.js:13180` |
-| `a refused publish uploads nothing to Cloudinary` | `server/test/smoke.test.js:13197` |
-| `the audio track stays on this server — only images go to Cloudinary` | `server/test/smoke.test.js:13208` |
-| `a service provider's image goes to Cloudinary too` | `server/test/smoke.test.js:13223` |
-| `Name matching: hamza, a joined «أبو», a one-letter typo, a dropped middle name and ة/ه all match` | `server/test/smoke.test.js:13265` |
-| `Name matching: a different father (a cousin), a different first name, or a different word never match` | `server/test/smoke.test.js:13274` |
-| `Set up: an admin publishes a wedding — nothing like it exists yet, so it goes straight out` | `server/test/smoke.test.js:13300` |
-| `A regular user publishing the same wedding is neither warned nor stopped — it queues as before` | `server/test/smoke.test.js:13308` |
-| `GET /api/admin/events flags the pending request as a certain duplicate before anyone presses approve` | `server/test/smoke.test.js:13317` |
-| `Approving it without confirming is refused with 409 POSSIBLE_DUPLICATE, and the event stays pending` | `server/test/smoke.test.js:13331` |
-| `Approving it with confirm_duplicate goes through, and the override is logged against both events` | `server/test/smoke.test.js:13343` |
-| `An admin's own publish with a one-letter typo the next day is refused (409, likely) and writes no row at all` | `server/test/smoke.test.js:13355` |
-| `The same publish confirmed through multipart (confirm_duplicate=1, as the panel and the app send it) goes live` | `server/test/smoke.test.js:13368` |
-| `A different groom of the same family, same day and town, is flagged — likely, never certain (تذكرة #159)` | `server/test/smoke.test.js:13393` |
-| `The same name in another town is still flagged, but only as likely — two towns, possibly two people` | `server/test/smoke.test.js:13405` |
-| `A town admin is never shown another town's unpublished request as a duplicate; the super_admin is` | `server/test/smoke.test.js:13415` |
-| `A rejected event is never a candidate — rejecting it is how a duplicate is cleared` | `server/test/smoke.test.js:13450` |
-| `POST /api/auth/me/avatar stores the photo — absolute URL out, relative path in the column — and GET /api/auth/me carries it` | `server/test/smoke.test.js:13489` |
-| `A second avatar upload replaces the first, and the replaced local file is gone from uploadsDir` | `server/test/smoke.test.js:13509` |
-| `A text file named x.png is refused with a 400 that names the accepted formats` | `server/test/smoke.test.js:13526` |
-| `POST /api/auth/me/avatar without a file is a 400 in Arabic` | `server/test/smoke.test.js:13535` |
-| `Set up: a brand-new account answers avatar_url: null — the key exists and is not undefined` | `server/test/smoke.test.js:13543` |
-| `PATCH /api/auth/me updates full_name and clan_town, and GET /api/auth/me reflects both` | `server/test/smoke.test.js:13552` |
-| `PATCH /api/auth/me refuses an empty full_name with a 400 in Arabic` | `server/test/smoke.test.js:13567` |
-| `PATCH /api/auth/me applies analytics_opt_out too when it rides along with a profile field` | `server/test/smoke.test.js:13576` |
-| `Set up: two fresh accounts with a real PIN hash — one holds the number the other will take` | `server/test/smoke.test.js:13590` |
-| `PATCH /api/auth/me/phone with a wrong PIN is a 400 and leaves the number unchanged` | `server/test/smoke.test.js:13596` |
-| `PATCH /api/auth/me/phone refuses another account's number with a 409` | `server/test/smoke.test.js:13608` |
-| `PATCH /api/auth/me/phone changes the number and returns a token signed with the new one` | `server/test/smoke.test.js:13621` |
-| `After the change, login with the old number is 401 and with the new one is 200` | `server/test/smoke.test.js:13655` |
-| `PATCH /api/auth/me carrying phone_number never writes it` | `server/test/smoke.test.js:13664` |
-| `مناسبة منشورة في بلدة حقيقية تحمل محافظة تلك البلدة (تذكرة #120)` | `server/test/smoke.test.js:13697` |
-| `مناسبة تحت البند الجامع مع region_id تحمل المحافظة المرسلة (تذكرة #120)` | `server/test/smoke.test.js:13712` |
-| `مناسبة تحت البند الجامع بلا region_id تحمل المحافظة الافتراضية — سلوك عميل 1.21.3 المنشور (تذكرة #120)` | `server/test/smoke.test.js:13725` |
-| `طلب لوحة قديم بلا region_id ينجح ويأخذ محافظة البند الجامع، وكل صفوف villages تحمل region_id (تذكرة #120)` | `server/test/smoke.test.js:13738` |
-| `POST /api/admin/events/:id/promote-village ينشئ القرية على محافظة مناسبتها (تذكرة #120)` | `server/test/smoke.test.js:13758` |
-| `PATCH /api/admin/towns/:id بنقل بلدة إلى محافظة ثانية يحدّث مناسباتها وقُراها في المعاملة نفسها (تذكرة #120)` | `server/test/smoke.test.js:13784` |
-| `تغيير village_id وحده يحفظ محافظة القرية لا المحافظة الافتراضية (تذكرة #120)` | `server/test/smoke.test.js:13827` |
-| `promote-village يرفض ربط مناسبة في محافظة ثانية بقرية تحمل الاسم نفسه في محافظة أخرى (تذكرة #120)` | `server/test/smoke.test.js:13863` |
-| `Set up: كل مناسبة اختبار تحمل محافظتها — النقب للبلدية، والثانية للثانية والقروية (تذكرة #121)` | `server/test/smoke.test.js:13975` |
-| `GET /api/events بلا X-Region لا يعيد أي مناسبة من المحافظة الثانية (تذكرة #121)` | `server/test/smoke.test.js:13982` |
-| `GET /api/events بـ X-Region للمحافظة الثانية يعيد صفوفها وحدها (تذكرة #121)` | `server/test/smoke.test.js:13990` |
-| `GET /api/map/events يعزل المحافظة نفسها: دبّوس لكل محافظة ولا تسريب (تذكرة #121)` | `server/test/smoke.test.js:14000` |
-| `all_regions=1 يتجاوز تقييد المحافظة في GET /api/events و GET /api/map/events، والافتراضي يبقى مقيَّداً (تذكرة #161)` | `server/test/smoke.test.js:14014` |
-| `إعلانات تغيير التاريخ في GET /api/events تعزل المحافظة كالمناسبة نفسها (تذكرة #121)` | `server/test/smoke.test.js:14049` |
-| `مناسبة قروية تحت البند الجامع بمحافظة ثانية تظهر لطلبها ولا تظهر لطلب النقب (تذكرة #121)` | `server/test/smoke.test.js:14100` |
-| `X-Region غير رقمي أو معرّف لا وجود له → 400 برسالة عربية (تذكرة #121)` | `server/test/smoke.test.js:14112` |
-| `محافظة موقوفة (is_active = 0) → الطلب ينجح ويعيد صفوف المحافظة الافتراضية (تذكرة #121)` | `server/test/smoke.test.js:14122` |
-| `PATCH /api/auth/me يقبل region_id، و publicUser و GET /api/auth/me يرجّعانه (تذكرة #121)` | `server/test/smoke.test.js:14149` |
-| `PATCH /api/auth/me بمعرّف محافظة وهمي → 400 عربي ولا يمسّ المكتوب (تذكرة #121)` | `server/test/smoke.test.js:14165` |
-| `مسجَّل بلا X-Region يرى محافظة حسابه، ومسح التفضيل (null) يعيده إلى الافتراضية (تذكرة #121)` | `server/test/smoke.test.js:14177` |
-| `حساب على محافظة موقوفة بلا X-Region يرى صفوف المحافظة الافتراضية (تذكرة #121)` | `server/test/smoke.test.js:14197` |
-| `GET /api/events/:id لمناسبة في محافظة أخرى يبقى 200 بترويسة النقب — التفاصيل عالمية (تذكرة #121)` | `server/test/smoke.test.js:14217` |
-| `غياب X-Region لا يغيّر صفوف فيد النقب ولا ترتيبها: مطابق تماماً لطلب صريح بـ X-Region: النقب (تذكرة #121)` | `server/test/smoke.test.js:14223` |
-| `CORS: طلب OPTIONS يسمح بترويسة X-Region القادمة من المتصفّح (تذكرة #121)` | `server/test/smoke.test.js:14236` |
-| `Set up: ألبوم في كل محافظة، وألبوم عريس في الثانية، وصورة موسومة لأجل البحث في الأشخاص (تذكرة #122)` | `server/test/smoke.test.js:14400` |
-| `GET /api/albums يعرض ألبومات المحافظة وحدها: ألبوم الثانية لا يظهر افتراضياً ويظهر بترويسة محافظتها، والعكس لألبوم النقب (تذكرة #122)` | `server/test/smoke.test.js:14417` |
-| `ألبوم العريس يتقيّد ببلدة صاحبه: ألبوم في بلدة المحافظة الثانية لا يظهر افتراضياً ويظهر لمحافظتها (تذكرة #122)` | `server/test/smoke.test.js:14431` |
-| `ألبوم العريس بلا بلدة مكانه غير معروف فيظهر في كل المحافظات — القائمة والبحث بالترويسين (تذكرة #122)` | `server/test/smoke.test.js:14446` |
-| `GET /api/photos يتقيّد بالألبوم: صورة ألبوم المحافظة الثانية لا تظهر افتراضياً وتظهر بترويسة محافظتها (تذكرة #122)` | `server/test/smoke.test.js:14463` |
-| `GET /api/search بنفس الكلمة: الألبوم والصورة يتقيّدان بالمحافظة، والأشخاص عالميون في التراويس كلها (تذكرة #122)` | `server/test/smoke.test.js:14483` |
-| `GET /api/stories: ستوري البلدة في محافظتها وحدها، وستوري بلا بلدة وإعلان المنصة في كل المحافظات (تذكرة #122)` | `server/test/smoke.test.js:14504` |
-| `GET /api/services/providers يعرض من يخدم بلدة في المحافظة وحدها: مزوّد الثانية لا يظهر افتراضياً ويظهر لمحافظتها (تذكرة #122)` | `server/test/smoke.test.js:14546` |
-| `GET /api/albums/:id و GET /api/people/:id يفتحان بالمعرّف لصفّ من محافظة أخرى بلا ترويسة (تذكرة #122)` | `server/test/smoke.test.js:14560` |
-| `غياب X-Region لا يقيّد أكثر من المحافظة الافتراضية: نتائج الاكتشاف مطابقة لطلب صريح بالنقب (تذكرة #122)` | `server/test/smoke.test.js:14581` |
-| `مناسبة في النقب ونفس الاسم والتاريخ في محافظة ثانية: نشر فوري بلا 409 (تذكرة #123)` | `server/test/smoke.test.js:14662` |
-| `نداء داخلي بلا region_id يرى مرشّح كل محافظة، وبمحافظة النقب لا يرى الثاني (تذكرة #123)` | `server/test/smoke.test.js:14680` |
-| `طلب مستخدم بنفس الاسم والتاريخ في محافظة ثانية لا يظهر تكراراً لصفّ النقب في الطابور (تذكرة #123)` | `server/test/smoke.test.js:14697` |
-| `نفس الاسم والتاريخ داخل المحافظة نفسها: الأدمن يُرفض بـ409 كما كان بالحرف (تذكرة #123)` | `server/test/smoke.test.js:14717` |
-| `نفس الاسم والتاريخ داخل المحافظة نفسها: المستخدم العادي لا يُمنع وطلبه يدخل الطابور (تذكرة #123)` | `server/test/smoke.test.js:14739` |
-| `town = اسم المحافظة يعني «مكان غير معروف» داخل محافظتها وحدها (تذكرة #123)` | `server/test/smoke.test.js:14762` |
-| `الاعتماد: تطابق في محافظة ثانية يمرّ بلا 409، وداخل المحافظة نفسها يُرفض بـ409 (تذكرة #123)` | `server/test/smoke.test.js:14792` |
-| `البند الجامع: المكان نفسه في محافظة أخرى لا يتصادم، وداخل المحافظة نفسها يتصادم (تذكرة #123)` | `server/test/smoke.test.js:14838` |
-| `إعداد: مناسبتان معتمدتان في رهط في اليوم نفسه وعائلتان مختلفتان (تذكرة #159)` | `server/test/smoke.test.js:14969` |
-| `تعديل الأدمن المطابق يُرفض بـ409 بنفس شكل النشر، ولا يكتب أي تغيير (تذكرة #159)` | `server/test/smoke.test.js:14988` |
-| `إعادة تعديل الأدمن مع confirm_duplicate تنجح، والتجاوز يُسجَّل (تذكرة #159)` | `server/test/smoke.test.js:15011` |
-| `إعادة حفظ لا تغيّر مدخلاً من مدخلات الحارس لا تعيد الـ409 ولا تسجّل تجاوزاً ثانياً (تذكرة #159)` | `server/test/smoke.test.js:15031` |
-| `حفظ المالك الذي لا يغيّر مدخلاً من مدخلات الحارس يبقى منشوراً ولو كان للصفّ شبيه معتمد (تذكرة #159)` | `server/test/smoke.test.js:15054` |
-| `تعديل المناسبة لا يُنبّه على نفسها: تغيير إملائي في اسمها يمرّ بلا 409 (تذكرة #159)` | `server/test/smoke.test.js:15087` |
-| `تعديل المالك المشتبه لا يُوقَف بـ409، ويعود pending مع الشبه في طابور الأدمن (تذكرة #159)` | `server/test/smoke.test.js:15105` |
-| `تعديل المالك غير المشتبه يتبع التصنيف القائم: التجميلي يبقى منشوراً والحرِج يعود للمراجعة (تذكرة #159)` | `server/test/smoke.test.js:15141` |
-| `أسماء مختلفة وعائلة واحدة (بإملاء آخر) في نفس البلدة والتاريخ تعطي likely لا certain (تذكرة #159)` | `server/test/smoke.test.js:15169` |
-| `نفس العائلة في محافظة أخرى لا تنبّه، ونفس الزوج في محافظة واحدة ينبّه — عبر بند «القرى والتجمعات» (تذكرة #159)` | `server/test/smoke.test.js:15196` |
-| `نقطة فحص الاستيراد تقرأ قرار حارس التكرار من الخدمة نفسها (تذكرة #160)` | `server/test/smoke.test.js:15308` |
-| `munasabatna-insert لا يدرج المشتبه، ويطبعه في قسم «تُخطِّي» مع المطابقة ودرجتها (تذكرة #160)` | `server/test/smoke.test.js:15341` |
-| `munasabatna-insert يُدرج المدخل غير المشتبه كما كان، ويعدّه في قسم «أُدرج» (تذكرة #160)` | `server/test/smoke.test.js:15362` |
-| `import-legacy-json يمرّر العائلة الحقيقية ويمرّ على الحارس، وتقريره يفصل الأقسام الأربعة (تذكرة #160)` | `server/test/smoke.test.js:15402` |
-| `POST /api/admin/regions ينشئ محافظة على نمط «إضافة بلدة»؛ الاسم المكرر 409، وبلا إحداثيات 400، وأدمن بلدة 403 (تذكرة #128)` | `server/test/smoke.test.js:15517` |
-| `POST /api/admin/villages بمحافظة يُخزّنها، و GET /api/admin/villages يعيد region_id في الصفّ (تذكرة #128)` | `server/test/smoke.test.js:15577` |
-| `بثّ باسم محافظة يكتب صفّاً لكل بلدة من بلداتها داخل نطاق الأدمن، ولا صفّ باسم المحافظة نفسه (تذكرة #128)` | `server/test/smoke.test.js:15603` |
-| `أدمن يملك بلدة واحدة في المحافظة يبثّ لها وحدها؛ وأدمن لا يملك شيئاً منها يُرفض 404 بلا كتابة (تذكرة #128)` | `server/test/smoke.test.js:15652` |
-| `سوبر أدمن يسمّي محافظة: صفّ لكل بلدة نشطة فيها ولا صفّ عام؛ وبلا اسم: صفّ عام واحد كما كان (تذكرة #128)` | `server/test/smoke.test.js:15706` |
-| `GET /api/admin/analytics/overview يحمل by_region إضافياً، وحدثان على بلدة المحافظة الثانية يزيدانها اثنين بالضبط (تذكرة #128)` | `server/test/smoke.test.js:15748` |
-| `صفّ بـ content_town = «القرى والتجمعات» مع مناسبة في المحافظة الثانية يذهب إلى «غير محدَّد» ولا يُسقَط (تذكرة #128)` | `server/test/smoke.test.js:15800` |
-| `GET /api/news يشتقّ منطقة المحافظة من اسمها ويعيد عقد القائمة كاملاً (وجهة «خدماتنا»)` | `server/test/smoke.test.js:15986` |
-| `general=1 يجبر الوجه العام بلا منطقة، ولا يرسل area للمصدر` | `server/test/smoke.test.js:16020` |
-| `مفاتيح مناطق الأخبار عربية — المصدر يردّ zone_not_found لكل مفتاح لاتيني` | `server/test/smoke.test.js:16033` |
-| `?limit= يُقصّ إلى سقف الخمسين بدل أن يُرفض أو يُمرَّر` | `server/test/smoke.test.js:16047` |
-| `?offset= ينتقل إلى الصفحة التالية ويُبلغ has_more بالصدق` | `server/test/smoke.test.js:16055` |
-| `إزاحة غير صالحة (سالب أو نصّ) تُرفض 400 برسالة عربية` | `server/test/smoke.test.js:16064` |
-| `GET /api/news/:id يعيد التفصيل: الكاتب والنصّ الكامل فقرات` | `server/test/smoke.test.js:16073` |
-| `خبر غير موجود أو غير منشور عند المصدر ← 404 عربي` | `server/test/smoke.test.js:16087` |
-| `فشل المصدر بلا كاش ← 502 بالرسالة العربية، لا قائمة فارغة تُوهم بالهدوء` | `server/test/smoke.test.js:16098` |
-| `بعد نجاح سابق، سقوط المصدر يخدم آخر نسخة محفوظة بدل 502` | `server/test/smoke.test.js:16111` |
-| `رسالة ApiError المقصودة تمرّ في الإنتاج، ورسالة الخطأ الداخلي تُحجب` | `server/test/smoke.test.js:16126` |
-| `POST /api/events defaults visibility to public, and an unknown value is refused with an Arabic 400` | `server/test/smoke.test.js:16192` |
-| `A link_only event is approved silently: no «مناسبة جديدة» row and no digest for anyone` | `server/test/smoke.test.js:16217` |
-| `The duplicate guard still compares against a link_only event — hiding never blinds it (تذكرة #166)` | `server/test/smoke.test.js:16266` |
-| `The public twin IS still announced — the silencing is the visibility, not a broken notification path` | `server/test/smoke.test.js:16286` |
-| `A link_only event is absent from the feed, the map, search, related events and the sitemap — even with no X-App-Version` | `server/test/smoke.test.js:16311` |
-| `A link_only event opens by id in the API and at /e/:id, with noindex in the meta tag AND the header; a public one is unchanged` | `server/test/smoke.test.js:16361` |
-| `Editing visibility hides an approved event without sending it back to review, and setting it public brings it back` | `server/test/smoke.test.js:16386` |
-| `POST /api/check-collision (public, no auth) never names a link_only event, while the public twin of that day and town still shows` | `server/test/smoke.test.js:16419` |
-| `The daily «مناسبة جديدة» count is public events only — a link_only approval neither takes one of the three nor inflates the digest` | `server/test/smoke.test.js:16445` |
-| `Set up: عرس معتمد يملكه حساب عادي، وعزاء معتمد — كلاهما من الأزرار نفسها` | `server/test/smoke.test.js:16564` |
-| `«جاي» بعدد 3 يُنشئ الجواب و«ذكّرني» معاً، ويردّ بحالة المستخدم والعدّاد` | `server/test/smoke.test.js:16601` |
-| `الجواب الثاني من الحساب نفسه يُحدّث الصفّ ولا يُضيف ثانياً` | `server/test/smoke.test.js:16627` |
-| `«مش جاي» لا يمسّ «ذكّرني»، و`DELETE` يسحب الجواب ولا يحذفه` | `server/test/smoke.test.js:16645` |
-| `عدد الحاضرين خارج 1..RSVP_PARTY_SIZE_MAX يُرفض بـ400 عربية، والغياب يعني 1` | `server/test/smoke.test.js:16675` |
-| `rsvp_going_count = مجموع العدد من الحساب والضيف معاً، في القائمة والتفصيل` | `server/test/smoke.test.js:16697` |
-| `العزاء: 404 على المسار، ولا rsvp_going_count في أي ردّ` | `server/test/smoke.test.js:16734` |
-| `«مين جاي»: الأسماء والعدد والمصدر والمجاميع للمالك وللأدمن، و404 لغيرهما، وبلا هاتف في أي جسم` | `server/test/smoke.test.js:16762` |
-| `نوع rsvp_enabled مطفأ لا يخرج عدّاده ولو وُجدت أجوبة — لا في التفصيل ولا في القائمة` | `server/test/smoke.test.js:16827` |
-| `طلب بلا X-App-Version لا ينكسر بالحقول الجديدة` | `server/test/smoke.test.js:16865` |
-| `إيقاع النشر المجدول مستقلّ عن الجولة اليومية: start() يسلّح مؤقّتاً أقصر من يوم (#167)` | `server/test/smoke.test.js:16937` |
-| `دورة نشر بدأت قبل stop() لا تعيد تسليح مؤقّت بعد stop() ثم start() (#167)` | `server/test/smoke.test.js:16964` |
-| `مناسبة بموعد نشر مستقبلي غائبة عن كل قائمة عامة وحاضرة بالتفصيل وبالرابط، ثم تظهر ويصل إشعارها مرة واحدة` | `server/test/smoke.test.js:17007` |
-| `فشلٌ بعد كتابة الإعلان وقبل التزامه يتراجع كاملاً فتُعلنها المحاولة التالية — لا يُفقد الإعلان (#167)` | `server/test/smoke.test.js:17139` |
-| `مناسبة بموعد نشر مستقبلي لا يُعلنها المجدول قبل موعدها ولو شُغّل عشر مرّات` | `server/test/smoke.test.js:17200` |
-| `أهلية الإعلان تُقرأ تحت القفل: ${change} بين جلب الدفعة والحجز يمنع الإعلان حتى تعود الأهلية (#167)` | `server/test/smoke.test.js:17282` |
-| `اعتمادُ مناسبة بموعد مستقبلي لا يستهلك حصة اليوم: أوّل مناسبة منشورة فعلاً تصل فرديّة لا ملخّصاً (#167)` | `server/test/smoke.test.js:17368` |
-| `حصة «مناسبة جديدة» المشتركة لا تتجاوز ثلاث فرادى عند إعلان مناسبتين متزامنتين في المحافظة نفسها (#167)` | `server/test/smoke.test.js:17423` |
-| `شاهد عزل الحصة: اختبارا «مناسبة جديدة» لا يمسّان مناسبات القسم السابقة ولا ملخّصاته (#167)` | `server/test/smoke.test.js:17507` |
-| `publish_at في الماضي أو غير صالح يُرفض 400 عربية في النشر والتعديل، وإعادة الموعد المخزَّن لا تُرفض` | `server/test/smoke.test.js:17530` |
-| `شرط publish_at يأخذ ساعة القدس مُعامَلةً لا NOW() (ساعة الجلسة UTC في الإنتاج) وتُظهر المجدولة عند موعدها القدسي (#167)` | `server/test/smoke.test.js:17594` |
-| `نافذة البقاء: نجاح منتهٍ منذ ٣ أيام يظهر في «القادم» بـ«انتهت»، ومنذ ٨ لا يظهر، وعرس منتهٍ أمس لا يظهر، والخريطة لا تعرض المنتهي` | `server/test/smoke.test.js:17667` |
-| `صفّ بلا نوع لا يبقى في «القادم» أبداً: منتهٍ منذ ٣٠ يوماً يخرج، والمنتهي اليوم يظهر (#167)` | `server/test/smoke.test.js:17740` |
-| `feed_linger_days: افتراضه 0، والسوبر أدمن يضبطه من مسار الأنواع (0..30) ويُرفض ما خارجه` | `server/test/smoke.test.js:17788` |
-| `ترقية صيغة #167 الأولى بلا علَم والعمود موجود تحفظ اختيار السوبر أدمن صفراً، والتثبيت الجديد يزرع 7 (#167)` | `server/test/smoke.test.js:17825` |
-| `Set up: عرس معتمد قادم، وعرس معتمد انتهى، وعزاء معتمد` | `server/test/smoke.test.js:17913` |
-| `الصفحة تحمل النموذج ولا <script>، والـCSP تحمل form-action 'self' لهذه الصفحة وحدها` | `server/test/smoke.test.js:17954` |
-| `إرسال صحيح يعيد التوجيه بالشارة، ويُنشئ صفّاً بالهاتف المطبَّع` | `server/test/smoke.test.js:17981` |
-| `الإرسال الثاني بالهاتف نفسه يُحدّث الصفّ ولا يُضيف ثانياً` | `server/test/smoke.test.js:18016` |
-| `هاتف فارغ يعطي رسالة عربية بلا صفّ` | `server/test/smoke.test.js:18041` |
-| `عدد 21 يعطي رسالة عربية بلا صفّ` | `server/test/smoke.test.js:18059` |
-| `الهاتف لا يظهر في أي ردّ /api ولا في /e/` | `server/test/smoke.test.js:18079` |
-| `نوع مطفأ أو مناسبة منتهية: لا نموذج، والـPOST يعطي 404 الموحّدة` | `server/test/smoke.test.js:18104` |
-| `طلب الضيف يستهلك دلو /api المجهول المشترك، حتى لو أُرفق رمز صالح` | `server/test/smoke.test.js:18132` |
-| `الطلب الحادي عشر من IP واحد في الساعة يعطي 429 بصفحة عربية` | `server/test/smoke.test.js:18168` |
-| `نصّا الخصوصية وADR-0006 محدَّثان بجمع اسم الضيف وهاتفه والإشارة إلى ADR-0015` | `server/test/smoke.test.js:18222` |
-| `Set up: عرس معتمد قادم، وعرس معتمد انتهى، وعزاء معتمد — كلها لحساب واحد` | `server/test/smoke.test.js:18276` |
-| `إنشاء ثلاثة أسماء يعيد ثلاثة روابط مختلفة، توكين كلٍّ منها ٣٢ حرفاً hex` | `server/test/smoke.test.js:18309` |
-| `غير المالك وأدمن خارج البلدة: 404 للمسارات الثلاثة — وأدمن البلدة يقرأ` | `server/test/smoke.test.js:18347` |
-| `صفحة الدعوة 200: «أهلاً <الاسم>» والاسم مسبقاً والتوكِن مخفيّ، noindex، بلا <script>` | `server/test/smoke.test.js:18379` |
-| `الفتح الأول يكتب opened_at، والثاني لا يغيّره` | `server/test/smoke.test.js:18414` |
-| `الجواب من الدعوة يكتب invite_id ويعود إلى صفحة الدعوة، ويظهر في «مين جاي»` | `server/test/smoke.test.js:18449` |
-| `جواب عادي بلا دعوة يبقى invite_id = NULL ويبقى على صفحة المناسبة` | `server/test/smoke.test.js:18496` |
-| `رمز خاطئ أو غير موجود أو لا يخصّ المناسبة: 404 الموحّدة بلا كتابة` | `server/test/smoke.test.js:18517` |
-| `مناسبة انتهت أو نوع مطفأ: صفحة الدعوة 404 ولو كان رمزها صحيحاً` | `server/test/smoke.test.js:18553` |
-| `حذف الدعوة لا يحذف الجواب: invite_id يصير NULL والصفّ يبقى في «مين جاي»` | `server/test/smoke.test.js:18569` |
-| `قائمة أسماء فارغة أو زائدة أو اسم فارغ: 400 عربية بلا صفّ جديد` | `server/test/smoke.test.js:18607` |
-| `PATCH /api/admin/events/:id/featured يكتب featured_until، والمبرزة تتصدّر تغذية محافظتها بـis_featured منطقية` | `server/test/smoke.test.js:18724` |
-| `الرابعة النشِطة في المحافظة نفسها 409 عربية، والرابعة في محافظة أخرى تُقبل` | `server/test/smoke.test.js:18760` |
-| `إلغاء الإبراز بـnull يعيد الصفّ لمكانه ويُفرّغ مقعد السقف` | `server/test/smoke.test.js:18807` |
-| `تاريخ انتهى (أمس) لا يُبرز: is_featured false والصفّ لا يتصدّر` | `server/test/smoke.test.js:18836` |
-| `أدمن خارج نطاق المناسبة يُردّ 404 لا 403 ولا يُكتب شيء، وأدمن داخله يمرّ` | `server/test/smoke.test.js:18852` |
-| `تاريخ الإبراز يُتحقَّق في validate.js: صيغة خاطئة 400، وغياب المفتاح 400 لا إلغاء صامت` | `server/test/smoke.test.js:18882` |
-| `الترقيم لا ينكسر: COUNT(*) يعدّ الصفوف نفسها، والمبرزة تظهر مرة واحدة عبر الصفحات` | `server/test/smoke.test.js:18903` |
-| `السقف يحرس الانتقال إلى نشِط وحده: تاريخ مستقبلي لصفّ غير مبرز 409، وتاريخ منقضٍ له 200` | `server/test/smoke.test.js:18932` |
-| `طلبان متزامنان لإبراز مناسبتين مختلفتين بمقعد حرّ واحد: أحدهما 200 والآخر 409، والنشِطة لا تتجاوز السقف` | `server/test/smoke.test.js:18970` |
-| `GET /api/stats/ticker عام — كل صفّ { region_id, name, upcoming_count }، وtotal مجموع الصفوف، وupdated_at لحظة` | `server/test/smoke.test.js:19088` |
-| `عدّ المحافظة يطابق القائمة العامة نفسها — المعلّقة والمجدولة لا تُعدّان` | `server/test/smoke.test.js:19119` |
-| `مناسبة «بالرابط فقط» معتمدة وقادمة لا تُعدّ في الشريط` | `server/test/smoke.test.js:19160` |
-| `مناسبة انتهى امتدادها لا تُعدّ «قادمة» — وهي معتمدة ويجدها زائر في الأرشيف` | `server/test/smoke.test.js:19176` |
-| `الطلب الثاني خلال الكاش لا يستعلم شيئاً، وupdated_at لحظة التعبئة نفسها` | `server/test/smoke.test.js:19198` |
-| `الكاش هو ما يجمّد الرقم: مناسبة قادمة ثالثة لا تُحتسب حتى تنتهي مدّته، ثم تُحتسب` | `server/test/smoke.test.js:19236` |
-| `Set up: مناسبة عرس ومناسبة عزاء معتمدتان لصاحب البطاقة` | `server/test/smoke.test.js:19392` |
-| `GET /api/card-templates عام: ١٢ قالباً وأربعة مقاسات وخمس عائلات خطوط` | `server/test/smoke.test.js:19436` |
-| `المعاينة تعيد image/png بالمقاس المصغّر الصحيح للمقاسات الأربعة` | `server/test/smoke.test.js:19464` |
-| `الحفظ يعيد رابطاً بالمقاس الكامل لكل مقاس، وكل بطاقة أساسية وحدها` | `server/test/smoke.test.js:19487` |
-| `download.png يفضّل البطاقة الأساسية على الملصق: مقاس الناتج = مقاس البطاقة المحفوظة + الشريط (#182)` | `server/test/smoke.test.js:19524` |
-| `غير المالك يُردّ بـ404 في القائمة والحفظ والمعاينة` | `server/test/smoke.test.js:19537` |
-| `اختيار بلا لون أو قالب أو مقاس يُردّ 400 عربية لا 500` | `server/test/smoke.test.js:19579` |
-| `طلب مرفوض بملف لا يترك صورة يتيمة في uploads` | `server/test/smoke.test.js:19600` |
-| `العزاء لا يرى إلا قوالب النبرة الهادئة — ولو أُرسل قالب فرح رُدّ 400` | `server/test/smoke.test.js:19641` |
-| `البطاقة الأساسية تصير og:image، وحذفها يعيد البطاقة المولَّدة` | `server/test/smoke.test.js:19678` |
-| `PATCH يجعل البطاقة المطلوبة أساسية وحدها` | `server/test/smoke.test.js:19718` |
-| `photo_source: upload يحفظ صورة المصدر ويُبقي photo_url حيّة` | `server/test/smoke.test.js:19740` |
-| `معاينة متكررة تتجاوز الحدّ ⇒ 429 برسالة عربية` | `server/test/smoke.test.js:19783` |
+| `GET /health reports the database is up` | `server/test/smoke.test.js:228` |
+| `GET /api/events returns approved events with reaction counts` | `server/test/smoke.test.js:234` |
+| `GET /api/events returns all events by default, while ?upcoming=1 filters to upcoming only` | `server/test/smoke.test.js:241` |
+| `GET /api/events?town= filters by town` | `server/test/smoke.test.js:252` |
+| `GET /api/events?search= matches Arabic text` | `server/test/smoke.test.js:257` |
+| `GET /api/stories exposes isLive` | `server/test/smoke.test.js:262` |
+| `GET /api/map/events returns Waze links` | `server/test/smoke.test.js:268` |
+| `GET /api/towns lists towns and per-town stats` | `server/test/smoke.test.js:274` |
+| `GET /api/towns carries a map centre for every real town, and none for القرى والتجمعات (#20 step 6)` | `server/test/smoke.test.js:280` |
+| `GET /api/app/version announces the mobile release` | `server/test/smoke.test.js:292` |
+| `POST /api/check-collision detects a booked date` | `server/test/smoke.test.js:301` |
+| `POST /api/check-collision rejects a malformed date` | `server/test/smoke.test.js:307` |
+| `GET /api/events/calendar counts a multi-day event on every day it covers, and leaves out link_only, unapproved and scheduled ones (تذكرة #175)` | `server/test/smoke.test.js:382` |
+| `GET /api/events/calendar honours X-App-Version like the feed: a legacy client never counts a type it cannot render (تذكرة #175)` | `server/test/smoke.test.js:398` |
+| `GET /api/events/calendar?region_id= narrows to that governorate, and its absence counts every governorate (تذكرة #175)` | `server/test/smoke.test.js:413` |
+| `GET /api/events/calendar rejects a malformed month with an Arabic 400, and answers a month with nothing in it with an empty list (تذكرة #175)` | `server/test/smoke.test.js:440` |
+| `A day the calendar counts is exactly what `?date_from=&date_to=` returns for it — one condition, two readings (تذكرة #175)` | `server/test/smoke.test.js:452` |
+| `GET /api/events/:id/calendar.ics serves a valid iCalendar file for an approved public event (تذكرة #176)` | `server/test/smoke.test.js:483` |
+| `calendar.ics SUMMARY is the event page's own headline — groom_name when there are no honorees (تذكرة #176)` | `server/test/smoke.test.js:520` |
+| `calendar.ics carries the page's time texts in DESCRIPTION, and invents none when nothing was written (تذكرة #176)` | `server/test/smoke.test.js:545` |
+| `calendar.ics is 404 for a pending, rejected, link_only, scheduled or missing event — the public visibility gate itself (تذكرة #176)` | `server/test/smoke.test.js:577` |
+| `the share page /e/:id never mentions calendar.ics (ADR-0006, تذكرة #176)` | `server/test/smoke.test.js:594` |
+| `GET /api/events/trending orders by the summed signals, and every one of the four kinds counts (تذكرة #177)` | `server/test/smoke.test.js:715` |
+| `GET /api/events/trending counts a signal by its own timestamp: five reactions older than the window leave their event out, today's one brings its event in (تذكرة #177)` | `server/test/smoke.test.js:744` |
+| `GET /api/events/trending honours the public gate and keeps funerals out by tone: a funeral loud with reactions, link_only, pending and a scheduled event all stay out even when they beat the only visible row (تذكرة #177)` | `server/test/smoke.test.js:769` |
+| `GET /api/events/trending?region_id= narrows to that governorate, and a malformed one is an Arabic 400 (تذكرة #177)` | `server/test/smoke.test.js:786` |
+| `GET /api/events/trending with no header and no region_id takes the account's governorate, and all_regions=1 widens it (تذكرة #177)` | `server/test/smoke.test.js:807` |
+| `GET /api/events/trending returns at most six rows, and the seventh weakest is the one left out (تذكرة #177)` | `server/test/smoke.test.js:836` |
+| `GET /api/events/trending honours X-App-Version like the feed: a legacy client never sees a type it cannot render (تذكرة #177)` | `server/test/smoke.test.js:859` |
+| `POST /api/auth/register creates an account` | `server/test/smoke.test.js:893` |
+| `POST /api/auth/register rejects a duplicate phone` | `server/test/smoke.test.js:902` |
+| `POST /api/auth/login rejects a wrong PIN` | `server/test/smoke.test.js:909` |
+| `POST /api/auth/login succeeds with the right PIN` | `server/test/smoke.test.js:916` |
+| `The register and login calls above each wrote a server-side analytics row for this user (issue #44) — no extra requests needed, just reading what already happened` | `server/test/smoke.test.js:924` |
+| `An anonymous request is counted per IP and reports RATE_LIMIT_MAX as its ceiling` | `server/test/smoke.test.js:943` |
+| `A signed-in request is counted per user and reports the larger RATE_LIMIT_USER_MAX ceiling` | `server/test/smoke.test.js:948` |
+| `A garbage bearer token is anonymous again — it keeps the per-IP ceiling` | `server/test/smoke.test.js:954` |
+| `authenticatedUserId reads a real token, and answers null for anything unusable` | `server/test/smoke.test.js:959` |
+| `GET /api/nokoot without a token is rejected` | `server/test/smoke.test.js:971` |
+| `POST /api/nokoot stores a ledger entry` | `server/test/smoke.test.js:976` |
+| `GET /api/nokoot returns totals and analytics` | `server/test/smoke.test.js:985` |
+| `DELETE /api/nokoot/:id removes the entry` | `server/test/smoke.test.js:991` |
+| `POST /api/admin/login rejects a wrong PIN` | `server/test/smoke.test.js:997` |
+| `POST /api/admin/login rejects a non-admin account` | `server/test/smoke.test.js:1004` |
+| `POST /api/admin/login succeeds for the super admin` | `server/test/smoke.test.js:1011` |
+| `GET /api/admin/stats is closed to a normal user` | `server/test/smoke.test.js:1019` |
+| `GET /api/admin/stats returns counters for an admin` | `server/test/smoke.test.js:1024` |
+| `POST /api/admin/broadcast is accepted` | `server/test/smoke.test.js:1030` |
+| `GET /api/occasion-types returns the five seeded types ordered by position, عرس first` | `server/test/smoke.test.js:1040` |
+| `عزا carries zero reactions while عرس carries all five` | `server/test/smoke.test.js:1049` |
+| `Seed a plain admin directly via the DB (no API creates that role)` | `server/test/smoke.test.js:1076` |
+| `A plain admin is rejected (403) on all four occasion-type admin routes` | `server/test/smoke.test.js:1089` |
+| `A super_admin passes GET /api/admin/occasion-types and gets the unpublished-type notice` | `server/test/smoke.test.js:1100` |
+| `Creating a type from the admin panel appears immediately in the public list — no deploy, no migration` | `server/test/smoke.test.js:1108` |
+| `Creating a type without honorees/town/event_date visible is rejected` | `server/test/smoke.test.js:1126` |
+| `Creating a type with a field_key outside the master set is rejected` | `server/test/smoke.test.js:1136` |
+| `A type with an event attached cannot be deleted — refused and disabled instead` | `server/test/smoke.test.js:1148` |
+| `A type with no events is deleted outright` | `server/test/smoke.test.js:1180` |
+| `Hiding a field on عرس hides it from the type config but does not touch existing event data` | `server/test/smoke.test.js:1186` |
+| `GET /api/occasion-types يحمل messages لكل نوع مزروع — بذرة، بالشكل العام بلا أعلام إدارة، ولا نصّ في الكود` | `server/test/smoke.test.js:1227` |
+| `السوبر أدمن وحده يدير الرسائل — أدمن البلدة يُردّ 403 على القراءة والإضافة والتعديل` | `server/test/smoke.test.js:1256` |
+| `إضافة رسالة وإطفاؤها: تظهر في الإدارة وفي الردّ العام، ويغيب المطفأ عن العميل وحده` | `server/test/smoke.test.js:1273` |
+| `تفصيل المناسبة: congratulations_count وinterested_count يصلان إلا ما أطفأه النوع، ولا شيء منهما على العزاء` | `server/test/smoke.test.js:1319` |
+| `A legacy-shaped event row is backfilled to عرس with one event_honorees row` | `server/test/smoke.test.js:1392` |
+| `Running the migration twice does not duplicate occasion types, honorees or people` | `server/test/smoke.test.js:1415` |
+| `إعادة الترحيل لا تكرّر رسائل الأنواع المزروعة — البذرة تُكتب في نوع بلا رسالة واحدة فقط` | `server/test/smoke.test.js:1434` |
+| `A default poster belongs to the occasion type: عرس gets one, عزا gets none` | `server/test/smoke.test.js:1467` |
+| `Publishing with five honorees, then searching by the fifth name, returns the event exactly once` | `server/test/smoke.test.js:1493` |
+| `groom_name is filled with the first honoree by position, written in the same transaction` | `server/test/smoke.test.js:1514` |
+| `A wedding without a second honoree (bride) is accepted — the second name is optional` | `server/test/smoke.test.js:1521` |
+| `A funeral (عزا) without event_end_date is rejected with an Arabic message` | `server/test/smoke.test.js:1531` |
+| `The rejection message names the field by its label in this type — المتوفَّى, not العريس` | `server/test/smoke.test.js:1546` |
+| `A wedding (عرس) without event_end_date is accepted — only عزا requires it` | `server/test/smoke.test.js:1561` |
+| `A field hidden for this type (youth_party_date on عزا) is silently ignored, not rejected` | `server/test/smoke.test.js:1571` |
+| `The default title generated for a funeral contains no festive wording` | `server/test/smoke.test.js:1591` |
+| `Publishing with two extra days out of date order stores them and returns them sorted by day_date` | `server/test/smoke.test.js:1603` |
+| `A multipart publish with extra_days[0][name] bracket keys stores the day` | `server/test/smoke.test.js:1630` |
+| `An extra day with a name but no date is rejected with اليوم 1 in the message` | `server/test/smoke.test.js:1656` |
+| `More than ten non-blank extra days is rejected` | `server/test/smoke.test.js:1665` |
+| `PATCH extra_days replaces the list, an empty list clears it, and an absent key leaves it untouched` | `server/test/smoke.test.js:1678` |
+| `Saving the days back exactly as GET returned them is a no-op — two stations on one date at different times (تذكرة #176)` | `server/test/smoke.test.js:1728` |
+| `A type where extra_days is hidden ignores posted days instead of rejecting them` | `server/test/smoke.test.js:1775` |
+| `GET /api/events list rows carry extra_days` | `server/test/smoke.test.js:1816` |
+| `An approved event whose main date has passed is still upcoming — and mapped — while an extra day is ahead` | `server/test/smoke.test.js:1828` |
+| `?date_from/?date_to find an event by an extra day or a youth party earlier than its event_date` | `server/test/smoke.test.js:1862` |
+| `Set up: an approved wedding with two extra days for the extra-days edit tests` | `server/test/smoke.test.js:1907` |
+| `Re-dating one extra day is critical: the event returns to pending and one extra_days amendment row is logged` | `server/test/smoke.test.js:1923` |
+| `Renaming one extra day is cosmetic: the event stays approved and the amendment row is cosmetic` | `server/test/smoke.test.js:1964` |
+| `Resubmitting the identical extra-days list rewrites no rows and logs no new amendment row` | `server/test/smoke.test.js:1986` |
+| `Swapping which named day sits on which date is critical: the event returns to pending and the amendment row is critical` | `server/test/smoke.test.js:2017` |
+| `An event whose date has passed is absent from the list and present in the archive` | `server/test/smoke.test.js:2048` |
+| `A عزا that started yesterday and spans today is still shown — COALESCE(event_end_date, event_date), not event_date alone` | `server/test/smoke.test.js:2065` |
+| `?date_from=/?date_to= return the events on those days — a past day too, and a spanning عزا by overlap` | `server/test/smoke.test.js:2086` |
+| `Default page size is 30, and the hard ceiling on ?limit= is enforced` | `server/test/smoke.test.js:2109` |
+| `?page= returns a different page than page 1` | `server/test/smoke.test.js:2117` |
+| `?occasion_type_id= filters on the server, not the client` | `server/test/smoke.test.js:2124` |
+| `congratulations_count is always present (zero when there are none), and latest_congratulation is null` | `server/test/smoke.test.js:2130` |
+| `Three تعازي on a عزا (which premoderates) are created pending, with sender_name taken from the account` | `server/test/smoke.test.js:2143` |
+| `The admin approves all three; only then does the count/preview reflect them, without duplicating the row` | `server/test/smoke.test.js:2165` |
+| `The congratulations counter/preview disappear from the card when show_congratulations_count is off, and return when it is back on` | `server/test/smoke.test.js:2181` |
+| `A request with no X-App-Version header only sees weddings from GET /api/events` | `server/test/smoke.test.js:2206` |
+| `A request with no X-App-Version header only sees weddings from GET /api/map/events` | `server/test/smoke.test.js:2212` |
+| `Reordering the type tabs does not change what a legacy client receives` | `server/test/smoke.test.js:2219` |
+| `An occasion type carries an explicit tone, and a renamed label never changes it` | `server/test/smoke.test.js:2240` |
+| `An unknown tone is rejected with an Arabic message` | `server/test/smoke.test.js:2264` |
+| `A type created from the panel is not sent to already-published clients` | `server/test/smoke.test.js:2282` |
+| `A request with a modern X-App-Version header sees every occasion type` | `server/test/smoke.test.js:2303` |
+| `A legacy client requesting the details of an unsupported occasion type gets 404 with the fixed Arabic message` | `server/test/smoke.test.js:2309` |
+| `A modern client requesting the same event passes through` | `server/test/smoke.test.js:2315` |
+| `Explicit list columns still include every field a legacy client reads: groom_name, title, family_clan, dinner_time` | `server/test/smoke.test.js:2320` |
+| `Set up: a logged-in user publishes an event (used for the edit-permission tests below)` | `server/test/smoke.test.js:2333` |
+| `The owner can edit their own event` | `server/test/smoke.test.js:2341` |
+| `A non-owner is rejected with 403` | `server/test/smoke.test.js:2350` |
+| `An admin can edit any event, including one it does not own` | `server/test/smoke.test.js:2363` |
+| `An orphaned event (created_by IS NULL) can only be edited by an admin` | `server/test/smoke.test.js:2372` |
+| `A cosmetic edit (title) keeps an approved event approved` | `server/test/smoke.test.js:2389` |
+| `A critical edit (event_date) sends an approved event back to pending` | `server/test/smoke.test.js:2400` |
+| `A critical edit (location_name) sends an approved event back to pending` | `server/test/smoke.test.js:2410` |
+| `GET /api/my-events returns what this user published, across all statuses` | `server/test/smoke.test.js:2421` |
+| `Ownership transfer works for an admin, and is rejected for anyone else` | `server/test/smoke.test.js:2427` |
+| `Set up: user publishes and admin approves a wedding for amendment-log tests` | `server/test/smoke.test.js:2450` |
+| `A cosmetic edit is logged and the event stays approved` | `server/test/smoke.test.js:2463` |
+| `A critical edit produces a pending amendment row and sends the event back to pending` | `server/test/smoke.test.js:2479` |
+| `Editing two fields in one request produces two amendment rows` | `server/test/smoke.test.js:2494` |
+| `Resubmitting the same value produces no new amendment row and no status change` | `server/test/smoke.test.js:2505` |
+| `Approving the event resolves every pending amendment row` | `server/test/smoke.test.js:2518` |
+| `An admin reads the amendment log` | `server/test/smoke.test.js:2536` |
+| `The owner reads their own event amendment log` | `server/test/smoke.test.js:2542` |
+| `A non-owner is rejected from reading the amendment log` | `server/test/smoke.test.js:2548` |
+| `The public cannot read the amendment log at all` | `server/test/smoke.test.js:2558` |
+| `Set up: an approved wedding with a pin and two honorees` | `server/test/smoke.test.js:2570` |
+| `Re-sending an unchanged pin as a number with fewer decimals is not an edit — approved stays approved, no amendment` | `server/test/smoke.test.js:2589` |
+| `Changing only the second honoree's name stays approved and logs one cosmetic 'honorees' amendment` | `server/test/smoke.test.js:2613` |
+| `Re-sending the identical honorees is not an edit — no new amendment and no row rewrite` | `server/test/smoke.test.js:2651` |
+| `Set up: an approved عزا, whose type hides youth_party_date` | `server/test/smoke.test.js:2681` |
+| `PATCHing a field the type hides is silently ignored, while a visible field in the same request still applies` | `server/test/smoke.test.js:2697` |
+| `Set up: an approved wedding for the multipart list-field edits` | `server/test/smoke.test.js:2718` |
+| `A multipart PATCH sending honorees as a JSON string replaces the names` | `server/test/smoke.test.js:2730` |
+| `A multipart PATCH sending extra_days as a JSON string stores the day` | `server/test/smoke.test.js:2747` |
+| `A multipart PATCH with a malformed JSON list string is rejected with the existing Arabic message` | `server/test/smoke.test.js:2763` |
+| `Set up: two funerals published in the same town on the same day` | `server/test/smoke.test.js:2791` |
+| `عزا checking against an overlapping عزا in the same town produces no warning (funerals never collision-check)` | `server/test/smoke.test.js:2819` |
+| `Checking a عرس against an existing عزا in the same town warns of a collision` | `server/test/smoke.test.js:2832` |
+| `Set up: a funeral spanning four days` | `server/test/smoke.test.js:2842` |
+| `A عرس on day two of a four-day عزا is detected — range intersection, not date equality` | `server/test/smoke.test.js:2857` |
+| `A عرس does not collide with a عرس in a different town on the same day` | `server/test/smoke.test.js:2865` |
+| `Set up: a wedding published on a free day` | `server/test/smoke.test.js:2880` |
+| `Changing the date to a day now booked by a عزا produces a fresh collision warning not seen at creation` | `server/test/smoke.test.js:2893` |
+| `The legacy check-collision shape (date + town only, no occasion_type_id) still works` | `server/test/smoke.test.js:2905` |
+| `Migration moves a row still carrying the old placeholder coordinates` | `server/test/smoke.test.js:2926` |
+| `Migration does not touch a row with a human-chosen coordinate` | `server/test/smoke.test.js:2935` |
+| `Migration drops the pin for a 'القرى والتجمعات' row carrying the old placeholder` | `server/test/smoke.test.js:2944` |
+| `Running the migration twice is safe and converges to the same result` | `server/test/smoke.test.js:2953` |
+| `Publishing under 'القرى والتجمعات' with no village_id is rejected (case 9)` | `server/test/smoke.test.js:2974` |
+| `A legacy row under 'القرى والتجمعات' with a NULL village_id and no requested name — inserted directly, since no publish path can produce one any more — still gets no pin` | `server/test/smoke.test.js:2987` |
+| `An event published in a village inherits that village's coordinates and gets a real pin (case 11)` | `server/test/smoke.test.js:3001` |
+| `Editing an event to a different village moves its pin as well as its village` | `server/test/smoke.test.js:3033` |
+| `Publishing under the catch-all with only a typed requested_village_name succeeds, gets no invented pin, and the moderation queue returns the name` | `server/test/smoke.test.js:3074` |
+| `requested_village_name outside the catch-all town is rejected` | `server/test/smoke.test.js:3106` |
+| `village_id and requested_village_name together are rejected` | `server/test/smoke.test.js:3120` |
+| `A typed name that is already an active village links to it silently and inherits its pin` | `server/test/smoke.test.js:3135` |
+| `POST /api/admin/events/:id/promote-village: plain admin 403; super_admin links every event that asked for the name, with exactly one village; a second promote reuses (and re-activates) it` | `server/test/smoke.test.js:3167` |
+| `A poster uploads and comes back as an absolute URL, not a relative one` | `server/test/smoke.test.js:3254` |
+| `PATCH replaces a poster from an uploaded file, not only from a URL` | `server/test/smoke.test.js:3268` |
+| `A multipart PATCH uploading a poster the type hides is ignored, while a visible change in the same request still applies` | `server/test/smoke.test.js:3296` |
+| `A JSON PATCH still works now that the route carries multer — the old path must not regress` | `server/test/smoke.test.js:3347` |
+| `A poster and an artist image upload together — three file fields are now allowed, not two` | `server/test/smoke.test.js:3366` |
+| `A file whose type is not on the allowlist is rejected with a message that names what IS accepted` | `server/test/smoke.test.js:3383` |
+| `A file sent under an unknown field name is rejected rather than silently stored` | `server/test/smoke.test.js:3393` |
+| `A pin inside the chosen town gets no location_warning on publish` | `server/test/smoke.test.js:3406` |
+| `A pin nearer another town gets a location_warning, but publishes with the chosen town untouched (no rejection, no auto-correction)` | `server/test/smoke.test.js:3423` |
+| `The same mismatch is re-detected on an edit that moves the pin further from the chosen town` | `server/test/smoke.test.js:3445` |
+| `An edit that does not touch latitude/longitude/town carries no location_warning` | `server/test/smoke.test.js:3455` |
+| `A publish that leaves dinner_time blank stores no time at all — not a forced 8:00` | `server/test/smoke.test.js:3465` |
+| `An edit may clear dinner_time — an emptied field is a real change, not a fallback to the old value` | `server/test/smoke.test.js:3477` |
+| `An explicit but out-of-range latitude is rejected with an Arabic message` | `server/test/smoke.test.js:3501` |
+| `An explicit, non-numeric longitude is rejected the same way` | `server/test/smoke.test.js:3510` |
+| `Publishing with no coordinates at all is still accepted, falling back to the town centre as before` | `server/test/smoke.test.js:3518` |
+| `A relative sticker URL comes back absolute, like every other media column` | `server/test/smoke.test.js:3531` |
+| `POST /api/events without a token is rejected (publishing now requires an account)` | `server/test/smoke.test.js:3560` |
+| `A logged-in (non-admin) submission lands in the pending queue` | `server/test/smoke.test.js:3566` |
+| `A pending event is hidden from the public list` | `server/test/smoke.test.js:3576` |
+| `An admin submission publishes immediately` | `server/test/smoke.test.js:3581` |
+| `An unknown town is rejected` | `server/test/smoke.test.js:3595` |
+| `GET /api/towns returns exactly the pre-table town list and centres, in the same order (TWN-1)` | `server/test/smoke.test.js:3606` |
+| `A town added to the towns table is listed and publishable with no deploy; disabling it withdraws both (TWN-1)` | `server/test/smoke.test.js:3616` |
+| `Re-running migrate never duplicates towns nor resurrects one the super_admin deleted (TWN-1)` | `server/test/smoke.test.js:3655` |
+| `GET /api/towns carries the regions key: النقب with its centre and every seeded town, while towns[] stays unchanged (TWN-2)` | `server/test/smoke.test.js:3679` |
+| `Publishing with town = the region name is accepted, gets no fallback pin, and never warns about a nearer town (TWN-2)` | `server/test/smoke.test.js:3692` |
+| `Resolving a pinless region-level event to a real town gives it that town's centre; an existing pin is never overwritten (TWN-2)` | `server/test/smoke.test.js:3713` |
+| `migrate moves every legacy 'غير محدد' town onto the region, and leaves real towns alone (TWN-2)` | `server/test/smoke.test.js:3737` |
+| `munasabatna-insert files an invitation with no known town under the region, still pending and pinless (TWN-2)` | `server/test/smoke.test.js:3757` |
+| `A super_admin may hand a local admin the region itself, and that admin then sees the region-level queue; a made-up name is still refused (TWN-2)` | `server/test/smoke.test.js:3775` |
+| `GET /api/towns keeps regions active-only with is_active and real counts, moves a stopped governorate to regions_soon as {id,name}, and still publishes only into the active name (#127)` | `server/test/smoke.test.js:3824` |
+| `Town management is super_admin only — a plain admin gets 403 on every /admin/towns and /admin/regions path (TWN-3)` | `server/test/smoke.test.js:3925` |
+| `GET /api/admin/towns lists the region with every town, its event count, and the villages catch-all marked locked (TWN-3)` | `server/test/smoke.test.js:3949` |
+| `Adding a town validates coordinates, refuses spelling-variant duplicates, the reserved sentinel and a region name (TWN-3)` | `server/test/smoke.test.js:3960` |
+| `A new town lands last; renaming is allowed until something stores its name, then refused; delete disables a used town and removes an unused one (TWN-3)` | `server/test/smoke.test.js:3977` |
+| `The villages catch-all can be reordered but never renamed, disabled, moved, given a centre or deleted (TWN-3)` | `server/test/smoke.test.js:4028` |
+| `PUT /api/admin/towns/order rewrites the order the public list follows, and refuses a partial list (TWN-3)` | `server/test/smoke.test.js:4041` |
+| `PATCH /api/admin/regions/:id edits the map centre/zoom, refuses an out-of-range zoom, and refuses renaming a region events are filed under (TWN-3)` | `server/test/smoke.test.js:4058` |
+| `PATCH /api/admin/events/:id/status approves the event` | `server/test/smoke.test.js:4079` |
+| `Reactions and congratulations attach to the event` | `server/test/smoke.test.js:4089` |
+| `An invalid reaction type is rejected` | `server/test/smoke.test.js:4101` |
+| `DELETE /api/admin/events/:id cascades to child rows` | `server/test/smoke.test.js:4108` |
+| `An unknown API route returns 404 JSON` | `server/test/smoke.test.js:4115` |
+| `POST /api/events/:id/congratulate without a token is rejected` | `server/test/smoke.test.js:4126` |
+| `Set up: a regular (non-admin) user publishes a عزا, the admin approves the event itself` | `server/test/smoke.test.js:4135` |
+| `A تعزية on this عزا is created pending, with no injected festive badge, sender_name from the account` | `server/test/smoke.test.js:4159` |
+| `The public (no token) does not see the pending تعزية` | `server/test/smoke.test.js:4173` |
+| `The sender sees their own pending تعزية; a different logged-in visitor does not` | `server/test/smoke.test.js:4178` |
+| `A non-owner, non-admin is rejected (403) from approving, deleting, or reading the moderation queue` | `server/test/smoke.test.js:4186` |
+| `GET .../congratulations rejects an unknown ?status= filter` | `server/test/smoke.test.js:4201` |
+| `The owner approves the pending تعزية — no admin involved — and it is now publicly visible` | `server/test/smoke.test.js:4206` |
+| `A second تعزية is approved by an admin instead of the owner` | `server/test/smoke.test.js:4217` |
+| `The owner can also reject a pending تعزية — it becomes hidden, not shown publicly` | `server/test/smoke.test.js:4230` |
+| `The same owner also publishes an approved عرس — ownership is not type-bound` | `server/test/smoke.test.js:4248` |
+| `A congratulation on this عرس publishes immediately — no premoderation outside عزا` | `server/test/smoke.test.js:4261` |
+| `The owner (a non-admin) deletes it — an ownership right, not an admin-only power, even in a type that never premoderates` | `server/test/smoke.test.js:4273` |
+| `Set up: a fresh, never-reviewed (auto-approved) congratulation to report` | `server/test/smoke.test.js:4287` |
+| `Set up: ${CONGRATULATION_REPORT_THRESHOLD} distinct reporter accounts` | `server/test/smoke.test.js:4302` |
+| `Reports under the threshold do not hide the message` | `server/test/smoke.test.js:4308` |
+| `The same person reporting twice is rejected (409) and does not double the count` | `server/test/smoke.test.js:4322` |
+| `The report that crosses the threshold auto-hides the message` | `server/test/smoke.test.js:4330` |
+| `DELETE /api/admin/comments/:id is gone (case 19) — the hard-delete route was removed, the row is not` | `server/test/smoke.test.js:4349` |
+| `Set up: an owner publishes an approved wedding for the reminder/announcement/notification tests` | `server/test/smoke.test.js:4374` |
+| `POST/DELETE .../remind toggles "ذكّرني", and re-pressing an active reminder does not duplicate the row` | `server/test/smoke.test.js:4391` |
+| `followers_count shows on a عرس event and disappears when show_followers_count is off — by the flag, not the type name` | `server/test/smoke.test.js:4413` |
+| `عزا is seeded with show_followers_count off, so it never carries followers_count — one death is never compared to another` | `server/test/smoke.test.js:4440` |
+| `is_reminded is true for the following user, false for a stranger, and false/absent for a guest` | `server/test/smoke.test.js:4464` |
+| `GET /api/my-reminders returns what this user is following` | `server/test/smoke.test.js:4475` |
+| `Set up: an admin publishes an upcoming and an already-ended wedding, and the follower follows both` | `server/test/smoke.test.js:4489` |
+| `PATCH /api/events/:id/remind mutes without unfollowing; a non-boolean is 400 and an event not in the list is 404` | `server/test/smoke.test.js:4508` |
+| `A muted follower is excluded from the reminder schedule and from an owner's cosmetic edit, while an unmuted follower still hears both` | `server/test/smoke.test.js:4552` |
+| `POST /api/events/:id/remind on a pending event is a 404 and writes no row` | `server/test/smoke.test.js:4577` |
+| `GET /api/my-reminders shapes «قائمتي»: counts, under_review_count, span strings, a bucket, upcoming before ended` | `server/test/smoke.test.js:4595` |
+| `under_review_count carries the same legacy filter as the list itself` | `server/test/smoke.test.js:4634` |
+| `myListBucket places every day in exactly one bucket, boundaries included` | `server/test/smoke.test.js:4671` |
+| `date_change appears only for an announcement published after the row was saved` | `server/test/smoke.test.js:4687` |
+| `DELETE /api/my-reminders?scope=ended clears only this user's ended rows; another scope is 400` | `server/test/smoke.test.js:4712` |
+| `Set up: the owner also reminds their own event — tests self-exclusion even when editor is both owner and follower` | `server/test/smoke.test.js:4737` |
+| `A critical event_date edit produces no live announcement until an admin approves it` | `server/test/smoke.test.js:4742` |
+| `Approving that edit publishes the announcement, naming the old and new date` | `server/test/smoke.test.js:4754` |
+| `The follower is notified; the owner who edited it themself is not, even though they also follow it` | `server/test/smoke.test.js:4795` |
+| `A second critical date edit — this time by an admin, not the owner — supersedes the first announcement; both rows stay in the table` | `server/test/smoke.test.js:4827` |
+| `This time both the follower and the owner (neither of them the editor) are notified` | `server/test/smoke.test.js:4852` |
+| `GET /api/notifications returns only this user's own rows, and PATCH marks one read` | `server/test/smoke.test.js:4866` |
+| `A user cannot read or mark-read another user's notification — secrecy at the query itself` | `server/test/smoke.test.js:4888` |
+| `A cosmetic edit publishes no announcement, but tells each follower once — never the stranger, and a second edit the same day refreshes that one row` | `server/test/smoke.test.js:4899` |
+| `A critical edit that is NOT a date change (location) is approved normally, never publishes a date announcement, but does notify as a venue change (issue #85, story 6)` | `server/test/smoke.test.js:4931` |
+| `An announcement about an occasion type a legacy client cannot render never reaches it` | `server/test/smoke.test.js:4974` |
+| `views_count stays a bare counter — repeated views by different identities never write a per-viewer row, and no such table exists` | `server/test/smoke.test.js:5008` |
+| `The live announcement disappears once its event's (new) date has passed` | `server/test/smoke.test.js:5036` |
+| `Set up: a followed wedding 4 days away, and a followed funeral 4 days away (notify_countdown off)` | `server/test/smoke.test.js:5083` |
+| `A follower of an event 4 days away gets exactly one event_soon row` | `server/test/smoke.test.js:5114` |
+| `The countdown body never names a date` | `server/test/smoke.test.js:5125` |
+| `An occasion type with notify_countdown = 0 produces NO countdown row, for any offset` | `server/test/smoke.test.js:5134` |
+| `Running the scheduler pass twice for the same day produces ONE row, not two` | `server/test/smoke.test.js:5142` |
+| `Set up: an owner publishes an approved wedding for the venue-change notification test` | `server/test/smoke.test.js:5159` |
+| `A venue change notifies followers; the user who made the change is not notified` | `server/test/smoke.test.js:5181` |
+| `Approval notifies the publisher` | `server/test/smoke.test.js:5243` |
+| `Rejection notifies the publisher and carries the reason` | `server/test/smoke.test.js:5266` |
+| `Set up: a publisher owns a funeral with two pending تعازي awaiting review` | `server/test/smoke.test.js:5299` |
+| `The moderation digest is ONE row carrying a count, not one row per message` | `server/test/smoke.test.js:5332` |
+| `Set up: capUser follows four unrelated events at four countdown offsets, and owns+follows a fifth at 0 days` | `server/test/smoke.test.js:5357` |
+| `The daily cap holds at three scheduled notifications, but an own-event one still arrives once the cap is spent` | `server/test/smoke.test.js:5405` |
+| `A venue change still arrives for this same user even though the daily cap is already spent` | `server/test/smoke.test.js:5425` |
+| `Exempt (own-event) event_soon rows must not be COUNTED by the cap — three of them must never block a fourth, unrelated one (issue #85 review, FIX 2)` | `server/test/smoke.test.js:5455` |
+| `Notification preferences: «مناسبة جديدة» is on by default, can be turned off, and only a boolean is accepted` | `server/test/smoke.test.js:5533` |
+| `A first approval tells everyone who kept «مناسبة جديدة» on — never the publisher or whoever turned it off — and asks the publisher to strengthen the event` | `server/test/smoke.test.js:5549` |
+| `Rejecting and re-approving never announces the same event twice, and keeps its first approval time` | `server/test/smoke.test.js:5575` |
+| `From the fourth new event of a day, each user gets ONE digest that updates in place and turns unread again` | `server/test/smoke.test.js:5589` |
+| `«مناسبة جديدة» تصل أهل المحافظة ومن بلا محافظة ولا تصل محافظة أخرى — صفوفاً ودفعاً (#161)` | `server/test/smoke.test.js:5630` |
+| `عدّاد «مناسبة جديدة» اليومي بمحافظة المناسبة: أول اعتماد في محافظة أخرى فرديّ لا ملخّص، ودفعه لا يستهلكه غيرها (#161)` | `server/test/smoke.test.js:5746` |
+| `من بلا محافظة يتلقّى ملخّصاً مستقلاً لكل محافظة بعددها الصحيح ودفعةً واحدة لكل منهما — لا صفّاً واحداً يُكتب فوقه (#161)` | `server/test/smoke.test.js:5829` |
+| `A followed event 2 days out reads «باقي يومين», the countdown's own idiom` | `server/test/smoke.test.js:5897` |
+| `The second «قوّي مناسبتك» arrives once, two days after the first, while something is still missing` | `server/test/smoke.test.js:5911` |
+| `A solemn occasion (عزا) is never asked to «strengthen» itself` | `server/test/smoke.test.js:5926` |
+| `The admin event list names who published each event` | `server/test/smoke.test.js:5944` |
+| `Activity log: who did what to which event — filterable, super admin only, and a deleted event stays readable` | `server/test/smoke.test.js:5953` |
+| `start() re-arms itself with a fresh, zone-aware setTimeout every cycle — never a fixed-length setInterval` | `server/test/smoke.test.js:6002` |
+| `The next run lands on 09:00 Asia/Jerusalem wall-clock across the next real DST boundary, not merely 24h later` | `server/test/smoke.test.js:6055` |
+| `GET /api/reminders/schedule returns the remaining offsets for a followed event and nothing for an unfollowed one` | `server/test/smoke.test.js:6112` |
+| `shouldDropSubscription: pure decision, no network — drops only on 404/410, keeps on 429/413/5xx/success` | `server/test/smoke.test.js:6160` |
+| `GET /api/notifications/vapid-public-key returns null with no VAPID keys configured, and never carries a private key` | `server/test/smoke.test.js:6170` |
+| `POST /api/notifications/subscribe is refused with an Arabic message (not a 500) when no VAPID keys are configured, and writes no row` | `server/test/smoke.test.js:6178` |
+| `A notification row is still written normally with no VAPID keys configured (push failure never blocks persistence)` | `server/test/smoke.test.js:6191` |
+| `Set up two users for push subscription storage/isolation tests` | `server/test/smoke.test.js:6227` |
+| `Subscribing stores exactly one row per device; re-subscribing the same device is idempotent, not a duplicate; the endpoint never appears in the response` | `server/test/smoke.test.js:6232` |
+| `A malformed subscription body is rejected with 400 in Arabic before ever reaching storage` | `server/test/smoke.test.js:6254` |
+| `An over-length endpoint is rejected with 400, never silently truncated and stored (issue #85 review, FIX 1)` | `server/test/smoke.test.js:6268` |
+| `A non-URL, and a non-https, endpoint are both rejected with 400 — a capability URL that is not even a URL is not worth storing` | `server/test/smoke.test.js:6294` |
+| `DELETE /api/notifications/subscribe also rejects an over-length endpoint with 400 (shares the same validation)` | `server/test/smoke.test.js:6313` |
+| `A user cannot see or remove another user's subscription, and unsubscribing an already-gone endpoint is not an error` | `server/test/smoke.test.js:6322` |
+| `A 429 with a short Retry-After triggers exactly one retry, and sendToUser itself returns without waiting for it (issue #85 review, FIX 2) — no real network call` | `server/test/smoke.test.js:6349` |
+| `A 429 whose Retry-After exceeds the retry ceiling is NOT retried, and still keeps the row` | `server/test/smoke.test.js:6393` |
+| `Deleting a user deletes their push subscriptions (story 21, FK ON DELETE CASCADE)` | `server/test/smoke.test.js:6427` |
+| `Admin creates a plain (non-ad) story` | `server/test/smoke.test.js:6456` |
+| `A regular user is rejected (403) from every /api/admin/stories route` | `server/test/smoke.test.js:6467` |
+| `An ad story with no advertiser_name is rejected with an Arabic message` | `server/test/smoke.test.js:6480` |
+| `An ad story with advertiser_name is accepted and carries the ad fields` | `server/test/smoke.test.js:6490` |
+| `A story link must be http(s); a video platform and CTA are stored and returned` | `server/test/smoke.test.js:6502` |
+| `The studio previews a YouTube link as a real 1080×1920 card without uploading it` | `server/test/smoke.test.js:6533` |
+| `Publishing a studio story uploads the generated poster, stores the link/CTA, and deletes the asset with the story` | `server/test/smoke.test.js:6565` |
+| `Publishing a studio story validates the placement before any Cloudinary upload or database write (#173)` | `server/test/smoke.test.js:6632` |
+| `Turning an existing story into an ad without an advertiser_name is rejected the same way on PATCH` | `server/test/smoke.test.js:6665` |
+| `The four ready-made expiry presets come from the server` | `server/test/smoke.test.js:6674` |
+| `An expired story is excluded from GET /api/stories; a not-yet-expired one and a never-expiring one both remain` | `server/test/smoke.test.js:6682` |
+| `An invalid expires_at is rejected instead of silently becoming null` | `server/test/smoke.test.js:6710` |
+| `Set up: two registered viewers from two different towns` | `server/test/smoke.test.js:6728` |
+| `A registered viewer watching the same story twice today is counted once` | `server/test/smoke.test.js:6742` |
+| `An anonymous viewer watching with the same device_id twice today is counted once` | `server/test/smoke.test.js:6753` |
+| `A view with no token and no device_id is rejected` | `server/test/smoke.test.js:6763` |
+| `A second, different registered viewer is counted as a third distinct view/viewer overall` | `server/test/smoke.test.js:6769` |
+| `Town breakdown reports one count per registered viewer's town, and a bucket for the anonymous device view` | `server/test/smoke.test.js:6777` |
+| `Clicks are counted, and CPM/eCPM/frequency never appear in the metrics response` | `server/test/smoke.test.js:6785` |
+| `A report is recorded once per person; a second report from the same person is rejected` | `server/test/smoke.test.js:6796` |
+| `Reporting a story requires a login` | `server/test/smoke.test.js:6803` |
+| `With no entry_promo_story_id the entry card is the first active story, source "auto"` | `server/test/smoke.test.js:6814` |
+| `Pinning a story id returns that story from the entry card with source "pinned"` | `server/test/smoke.test.js:6825` |
+| `Clearing entry_promo_story_id with an empty string returns the entry card to auto` | `server/test/smoke.test.js:6843` |
+| `A pinned story that is then deleted leaves the entry card on auto, without an error` | `server/test/smoke.test.js:6855` |
+| `A non-numeric entry_promo_story_id is rejected with an Arabic 400, and a town-scoped admin is refused (403)` | `server/test/smoke.test.js:6881` |
+| `With no active story the entry card is disabled, and every story's expiry is restored afterwards` | `server/test/smoke.test.js:6910` |
+| `Placement (#173): no X-App-Version receives bar stories only; a modern header receives all three` | `server/test/smoke.test.js:6929` |
+| `Placement (#173): the entry card never hands a legacy client a pinned carousel or feed story` | `server/test/smoke.test.js:6976` |
+| `Placement (#173): an unknown placement is refused with 400 and an Arabic message, and nothing is stored` | `server/test/smoke.test.js:7022` |
+| `Placement (#173): null and empty placements fall back to bar, and an update moves the story between positions` | `server/test/smoke.test.js:7064` |
+| `Placement (#173): views and clicks are recorded for carousel and feed stories exactly as for bar ones` | `server/test/smoke.test.js:7091` |
+| `Set up: a town-scoped admin, assigned to رهط via the super_admin's towns API` | `server/test/smoke.test.js:7146` |
+| `Set up: one pending event inside the scoped admin's town, one outside it` | `server/test/smoke.test.js:7168` |
+| `Case 1: a town-scoped admin approves an event in their own town — 200` | `server/test/smoke.test.js:7186` |
+| `Case 2: the same admin gets 404, not 403, for an event outside their towns` | `server/test/smoke.test.js:7193` |
+| `Case 3: GET /admin/events never returns the out-of-scope event to the scoped admin` | `server/test/smoke.test.js:7200` |
+| `Case 4: GET /admin/stats counts only the scoped admin's own town — matches a direct DB count for رهط exactly` | `server/test/smoke.test.js:7205` |
+| `Case 5: GET /admin/users is closed (403) to a plain admin — super_admin only now` | `server/test/smoke.test.js:7211` |
+| `Case 6: a super_admin passes every one of cases 1-5 — no town restriction, and /admin/users stays open to it` | `server/test/smoke.test.js:7216` |
+| `Case 7: an admin with zero admin_towns rows sees nothing and can approve nothing — fail closed` | `server/test/smoke.test.js:7238` |
+| `GET /admin/me reports the caller's own towns, and an admin with none gets an empty list` | `server/test/smoke.test.js:7272` |
+| `Case 8: an admin publishing in their own town is approved immediately; the same admin publishing outside it lands pending, never rejected` | `server/test/smoke.test.js:7287` |
+| `A super_admin's broadcast lands with scope_town = NULL and reaches a user in any town` | `server/test/smoke.test.js:7327` |
+| `A town admin's broadcast produces one row per own town and reaches only those users` | `server/test/smoke.test.js:7347` |
+| `A user in another town does NOT see a town-scoped broadcast` | `server/test/smoke.test.js:7362` |
+| `A town admin naming a town outside their scope gets 404, and writes zero rows` | `server/test/smoke.test.js:7367` |
+| `An admin with no assigned towns is refused and writes zero rows` | `server/test/smoke.test.js:7379` |
+| `An expired broadcast is absent from the live read and present in the notification centre` | `server/test/smoke.test.js:7393` |
+| `A «بلا شريط» broadcast (expires_at = NULL) never appears in the live read` | `server/test/smoke.test.js:7416` |
+| `Dismissing hides a broadcast from the live read for that user only, moves it to read in their centre, and it stays there` | `server/test/smoke.test.js:7432` |
+| `Dismissing a broadcast outside the caller's scope is 404` | `server/test/smoke.test.js:7459` |
+| `POST /api/notifications/read-all marks every personal notification and broadcast read, deletes nothing, and touches no one else` | `server/test/smoke.test.js:7464` |
+| `A user created AFTER the broadcast still sees it — proves no fan-out` | `server/test/smoke.test.js:7499` |
+| `The centre hides a broadcast published before the account registered, and keeps a newer one` | `server/test/smoke.test.js:7557` |
+| `A broadcast that expired more than 30 days ago drops out of the centre; one expired 10 days ago stays` | `server/test/smoke.test.js:7587` |
+| `GET /api/broadcasts/live is unchanged by the centre limits: only live broadcasts, even anonymously` | `server/test/smoke.test.js:7605` |
+| `An invalid tone is rejected in Arabic` | `server/test/smoke.test.js:7622` |
+| `A past expires_at is rejected in Arabic` | `server/test/smoke.test.js:7631` |
+| `An expires_at too far in the future is rejected` | `server/test/smoke.test.js:7640` |
+| `A non-super admin gets 404, not 403, on PATCH /admin/users/:id/role` | `server/test/smoke.test.js:7677` |
+| `super_admin is never grantable through this endpoint` | `server/test/smoke.test.js:7684` |
+| `Promotion reaches admin and nothing higher, and the response never carries pin_code` | `server/test/smoke.test.js:7691` |
+| `Promoting an already-admin user is rejected, not silently repeated` | `server/test/smoke.test.js:7707` |
+| `Demoting clears admin_towns in the same transaction` | `server/test/smoke.test.js:7714` |
+| `Demoting a plain user (never an admin) is rejected` | `server/test/smoke.test.js:7734` |
+| `Self-demotion is refused` | `server/test/smoke.test.js:7741` |
+| `The last remaining super_admin cannot be demoted` | `server/test/smoke.test.js:7749` |
+| `admin.demote is logged only for a successful commit, never for a rejected attempt` | `server/test/smoke.test.js:7768` |
+| `Case 10: sending village_id together with a non-catch-all town is rejected` | `server/test/smoke.test.js:7802` |
+| `Case 12: GET /api/towns with no X-App-Version returns the towns array unchanged, element by element, plus the new villages key, each row carrying its real region_id` | `server/test/smoke.test.js:7816` |
+| `Case 13: artist_name sent on a عزا publish is silently ignored — not stored, not rejected` | `server/test/smoke.test.js:7888` |
+| `Case 14: artist_name sent on a عرس publish is stored and comes back in GET /api/events` | `server/test/smoke.test.js:7911` |
+| `Set up: a super_admin creates a service category` | `server/test/smoke.test.js:7935` |
+| `Case 17: an admin-created provider needs no consent fields — the server records the consent itself` | `server/test/smoke.test.js:7944` |
+| `Case 18: an admin holding only رهط cannot create a provider for {رهط, حورة} — containment` | `server/test/smoke.test.js:7966` |
+| `Set up: a super_admin creates a real provider with a phone number` | `server/test/smoke.test.js:7984` |
+| `Case 15: GET /api/services/providers carries no phone key on any row` | `server/test/smoke.test.js:8001` |
+| `Case 16: GET /api/services/providers/:id carries phone` | `server/test/smoke.test.js:8009` |
+| `Optional phone: an admin creates a provider with no phone — 201, stored as NULL` | `server/test/smoke.test.js:8016` |
+| `Optional phone: a present but invalid phone is still rejected (400), and nothing is written` | `server/test/smoke.test.js:8027` |
+| `Optional phone: the detail returns phone: null; the list has no phone key and has_phone tells the two apart` | `server/test/smoke.test.js:8039` |
+| `Optional phone: PATCH sets the number, leaves it alone when the key is absent, and clears it with an empty string` | `server/test/smoke.test.js:8053` |
+| `Category attributes: creating a category with custom attributes saves and returns them` | `server/test/smoke.test.js:8084` |
+| `Category attributes: GET /api/services/categories returns attributes for active categories` | `server/test/smoke.test.js:8104` |
+| `Provider specs & estimates: creating a provider with package estimate and attributes` | `server/test/smoke.test.js:8115` |
+| `Provider specs & estimates: GET /api/services/providers carries specs, price_estimate_desc, price_type, and strictly NO phone` | `server/test/smoke.test.js:8137` |
+| `Provider search: ?search= filters by name, description, and specs` | `server/test/smoke.test.js:8149` |
+| `Provider specs & estimates: GET /api/services/providers/:id carries full details including phone` | `server/test/smoke.test.js:8157` |
+| `Set up: an owner publishes an approved event in the scoped admin's town, and a well-wisher congratulates it` | `server/test/smoke.test.js:8180` |
+| `Case 20: a town-scoped admin hides the comment — status becomes hidden, moderated_by is set to that admin` | `server/test/smoke.test.js:8209` |
+| `Case 21: the event owner cannot lift the block the admin placed` | `server/test/smoke.test.js:8221` |
+| `Set up: an approved wedding whose honoree name and clan carry HTML metacharacters` | `server/test/smoke.test.js:8359` |
+| `GET /e/:id on an approved event returns 200 HTML with absolute og:title/og:image/og:url` | `server/test/smoke.test.js:8375` |
+| `User text comes back escaped — in the page body AND inside content="…"` | `server/test/smoke.test.js:8387` |
+| `The preview leads with the occasion type, not the free-text title` | `server/test/smoke.test.js:8413` |
+| `og:image points at the generated card, and og:image:width/height declare its real 1200×1200 size` | `server/test/smoke.test.js:8419` |
+| `GET /e/:id/card.jpg on the approved event is a real 1200×1200 JPEG` | `server/test/smoke.test.js:8430` |
+| `Set up: مناسبة عزا معتمدة بلا ملصق (نوعها لا يحمل default_poster_url) لفحوص صورة التنزيل` | `server/test/smoke.test.js:8460` |
+| `GET /e/:id/download.png: PNG بعرض المصدر وارتفاعه + ارتفاع الشريط، بترويسة تنزيل` | `server/test/smoke.test.js:8477` |
+| `رمز QR على الشريط يطابق مصفوفة الوحدات لرابط الصفحة المطلق — وحدةً بوحدة` | `server/test/smoke.test.js:8499` |
+| `صورة التنزيل الثانية تُخدَم من كاش الخادم ولا تُعاد رسمها` | `server/test/smoke.test.js:8530` |
+| `مصدر التنزيل يتبع الملصق حين لا بطاقة أساسية: العرض والارتفاع مقاس الملصق نفسه` | `server/test/smoke.test.js:8545` |
+| `THE SIZE GUARD: a card built from a real (non-trivial) poster still stays under the WhatsApp preview limit` | `server/test/smoke.test.js:8564` |
+| `The footer mark/text sit clear of the decorative frame — lowest drawn content stays ≥12px above the companion rule` | `server/test/smoke.test.js:8582` |
+| `A second request for the same card is served from cache, not re-rendered` | `server/test/smoke.test.js:8619` |
+| `The Content-Security-Policy header is present on the share route, with a font source and still no script source` | `server/test/smoke.test.js:8631` |
+| `The Cairo woff2 files are actually served by the assets route with the woff2 content type` | `server/test/smoke.test.js:8646` |
+| `Both download buttons are present, and the secondary one points at the site root rather than the APK` | `server/test/smoke.test.js:8655` |
+| `صفحة /e/:id تحمل زرّ «نزّل الصورة» إلى /e/:id/download.png — لا إلى صورة أخرى (#182)` | `server/test/smoke.test.js:8668` |
+| `The three-reason strip is present` | `server/test/smoke.test.js:8679` |
+| `The page contains no <script tag at all` | `server/test/smoke.test.js:8686` |
+| `No date, venue, or phone value leaks anywhere in the response for an event that has all three set` | `server/test/smoke.test.js:8691` |
+| `Editing the event produces a different card, and the old cached one is evicted` | `server/test/smoke.test.js:8713` |
+| `Set up: a pending (not yet approved) wedding` | `server/test/smoke.test.js:8742` |
+| `GET /e/:id on a pending event, a non-existent id, and a non-numeric id all 404 with an identical body` | `server/test/smoke.test.js:8752` |
+| `GET /e/:id/card.jpg on a pending event, a non-existent id, and a non-numeric id all 404` | `server/test/smoke.test.js:8764` |
+| `GET /e/:id/download.png على مناسبة معلّقة أو معرّف مفقود/غير رقمي ⇒ 404 الموحّدة نفسها، لا صورة ولا 403` | `server/test/smoke.test.js:8773` |
+| `Set up: an approved wedding whose date has already passed` | `server/test/smoke.test.js:8793` |
+| `GET /e/:id on an expired approved event is still 200 and shows the «انتهت» marker` | `server/test/smoke.test.js:8803` |
+| `Set up: a poster-less عزا (solemn tone, no default_poster_url either)` | `server/test/smoke.test.js:8810` |
+| `The festive share page carries «أعراسنا» in og:site_name, the description, and the footer` | `server/test/smoke.test.js:8827` |
+| `A solemn-tone event with no poster renders a real card in the solemn palette, not the festive one` | `server/test/smoke.test.js:8839` |
+| `Both palettes expose a wordmark, and the generated card renders for each tone` | `server/test/smoke.test.js:8860` |
+| `The solemn (condolence) share page never carries «أعراسنا» anywhere, and still carries «مناسبات النقب»` | `server/test/smoke.test.js:8875` |
+| `Set up: an approved event for the share/download analytics tests below` | `server/test/smoke.test.js:8895` |
+| `A name from the closed list is accepted, and a row is actually written` | `server/test/smoke.test.js:8905` |
+| `A name outside the closed list is rejected with an Arabic message` | `server/test/smoke.test.js:8918` |
+| `A count-only name (share_page_viewed) sent WITH a token and a device_id still writes a row whose user_id and device_id are both NULL` | `server/test/smoke.test.js:8926` |
+| `The tighter analytics rate limit actually returns a rejection when exceeded` | `server/test/smoke.test.js:8941` |
+| `The analytics_events table has no event_id, ip, or user_agent column at all — the direct, permanent test of the governing rule` | `server/test/smoke.test.js:8952` |
+| `Exercising the nokoot (دفتر النقوط) routes writes ZERO analytics rows — the private ledger is not an exception` | `server/test/smoke.test.js:8961` |
+| `GET /e/:id/download 302-redirects to the APK url and records app_download_clicked with the event's town` | `server/test/smoke.test.js:8976` |
+| `GET /e/:id/download still redirects and records for a non-existent id — just with no content_town` | `server/test/smoke.test.js:8998` |
+| `A row older than the retention window loses its identity on fold and survives as a daily counter; running the fold twice does not double-count` | `server/test/smoke.test.js:9012` |
+| `Set up: two fresh users for the privacy tests below, each with a pre-existing identified analytics row (standing in for the register-time row a real sign-up would have written)` | `server/test/smoke.test.js:9072` |
+| `PATCH /api/auth/me opts a user out of behavioural analytics, and GET /api/auth/me reflects it — neither response carries pin_code` | `server/test/smoke.test.js:9088` |
+| `an expired or tampered token is 401 (sign in again), never 403 — 403 stays "not allowed"` | `server/test/smoke.test.js:9103` |
+| `GET /api/auth/me renews a plain user's token (a working one), and never an admin's` | `server/test/smoke.test.js:9120` |
+| `An opted-out signed-in user triggers an identified analytics event ⇒ zero rows written for them — not an anonymised one` | `server/test/smoke.test.js:9138` |
+| `Opting out changes nothing about the ability to use the app — a normal authenticated action still succeeds` | `server/test/smoke.test.js:9155` |
+| `POST /api/privacy/analytics-erasure erases only the caller's own analytics rows — another user's rows are untouched` | `server/test/smoke.test.js:9164` |
+| `Deleting an account removes its analytics rows too — the FK cascade, not a separate code path` | `server/test/smoke.test.js:9185` |
+| `POST /api/privacy/requests queues a formal request and states a deadline` | `server/test/smoke.test.js:9195` |
+| `POST /api/privacy/requests rejects an unknown request type` | `server/test/smoke.test.js:9208` |
+| `A town-scoped admin gets 403 on both the analytics read and the privacy request queue — super_admin only, never a town admin` | `server/test/smoke.test.js:9216` |
+| `A super_admin gets 200 on both, sees the queued request, and can close it` | `server/test/smoke.test.js:9224` |
+| `DELETE /api/account — no PIN is 400, a wrong PIN is 401, the right PIN is 200; an already-issued token stops answering with data afterwards` | `server/test/smoke.test.js:9248` |
+| `POST /api/privacy/deletion-request is public, folds Arabic-Indic digits and spaces, answers identically for a registered number, an unknown one and a duplicate, and queues exactly one erasure request` | `server/test/smoke.test.js:9277` |
+| `DELETE /api/admin/users/:id — a super_admin deletes another account, its queue row goes with it (CASCADE), deleting itself is refused, and an unknown id is 404` | `server/test/smoke.test.js:9335` |
+| `An old public request neither blocks the owner from filing a verified one nor gets promoted to verified` | `server/test/smoke.test.js:9378` |
+| `The scheduled daily pass deletes a user whose VERIFIED erasure request passed the 30-day deadline — and leaves the fresh, the access-only and the already-closed requests untouched; a second run is safe` | `server/test/smoke.test.js:9420` |
+| `executeErasureRequest refuses a fresh request when called directly — it re-proves eligibility, not just existence` | `server/test/smoke.test.js:9514` |
+| `A close committed after the job’s pending pre-read but held under a row lock makes the atomic eligibility check prevent the deletion` | `server/test/smoke.test.js:9546` |
+| `deleting your own account deletes your profile photo from Cloudinary, not just the row that pointed at it` | `server/test/smoke.test.js:9643` |
+| `a super_admin deleting an account from the panel deletes its profile photo too` | `server/test/smoke.test.js:9676` |
+| `GET /api/admin/analytics/users/:id (issue #44, user story 45) — a super_admin reads one user's own rows, isolated from another user's, with no event id of any kind, and pagination that behaves` | `server/test/smoke.test.js:9711` |
+| `GET /api/admin/analytics/overview, devices, and devices/:deviceId/log — super_admin tracks all viewers and devices while town admins are refused` | `server/test/smoke.test.js:9772` |
+| `GET /api/privacy/notice is public, names every event in the closed list in Arabic, and leaks no code identifiers` | `server/test/smoke.test.js:9849` |
+| `GET /api/settings/public answers cleanly before any setting was ever saved, and exposes nothing but the support number, the default audio and the providers layout` | `server/test/smoke.test.js:9874` |
+| `A plain (town-scoped) admin is refused on both GET and PUT /api/admin/settings — super_admin only` | `server/test/smoke.test.js:9885` |
+| `PUT /api/admin/settings rejects an invalid WhatsApp number with an Arabic message` | `server/test/smoke.test.js:9895` |
+| `PUT /api/admin/settings rejects a key outside the code-owned whitelist` | `server/test/smoke.test.js:9903` |
+| `A super_admin saves the support number, local and international forms normalise to the same canonical value, and it reads back on both the admin and public routes` | `server/test/smoke.test.js:9910` |
+| `A super_admin clears a previously-saved support number with an explicit empty value — it goes back to null everywhere, and an absent key leaves it untouched` | `server/test/smoke.test.js:9933` |
+| `providers_display: a super_admin saves «cards» and every client reads it back from the public route; a town-scoped admin is refused (403) and changes nothing` | `server/test/smoke.test.js:9973` |
+| `providers_display: an unknown value is rejected with an Arabic 400 and the saved choice stays` | `server/test/smoke.test.js:9996` |
+| `providers_display: clearing it with an explicit empty value returns the public route to the default «compact»` | `server/test/smoke.test.js:10009` |
+| `providers_display: a stale value in the table also reads as «compact» — the fallback lives in the service, not in a client` | `server/test/smoke.test.js:10019` |
+| `POST and DELETE /api/admin/settings/default-audio refuse a plain user and a town-scoped admin — super_admin only` | `server/test/smoke.test.js:10042` |
+| `POST /api/admin/settings/default-audio rejects a missing file, and a non-audio file under the audio field` | `server/test/smoke.test.js:10054` |
+| `A super_admin uploads the default audio — it is stored relative and comes back absolute on the admin and public routes` | `server/test/smoke.test.js:10065` |
+| `PUT /api/admin/settings refuses the default audio as free text — it can only be set by upload` | `server/test/smoke.test.js:10086` |
+| `DELETE /api/admin/settings/default-audio clears it back to null on the public route` | `server/test/smoke.test.js:10099` |
+| `GET /api/live answers cleanly before anything is ever saved` | `server/test/smoke.test.js:10115` |
+| `A plain (town-scoped) admin is refused on PUT for the live keys — super_admin only` | `server/test/smoke.test.js:10124` |
+| `PUT /api/admin/settings rejects a non-https stream URL` | `server/test/smoke.test.js:10131` |
+| `PUT /api/admin/settings rejects a stream URL whose host has no dot, and a value that is not a URL at all` | `server/test/smoke.test.js:10139` |
+| `Any https platform is accepted now — a non-TikTok host is no longer refused` | `server/test/smoke.test.js:10150` |
+| `A stream URL carrying embedded credentials is rejected with an Arabic message — the displayed link is a phishing shape` | `server/test/smoke.test.js:10159` |
+| `A stream URL carrying a newline is stored normalised, never as the raw string that was validated` | `server/test/smoke.test.js:10167` |
+| `A super_admin saves a valid channel URL — it reads back on both the admin route and GET /api/live` | `server/test/smoke.test.js:10181` |
+| `Saving a live title without an until is rejected with an Arabic message, and nothing is saved` | `server/test/smoke.test.js:10194` |
+| `Saving a live title with a FUTURE until marks the live active, falling back to the profile url` | `server/test/smoke.test.js:10207` |
+| `A distinct live_stream_url overrides the profile url in live.url, and a TikTok link is simply non-embeddable` | `server/test/smoke.test.js:10222` |
+| `Saving a PAST until keeps the live present but inactive` | `server/test/smoke.test.js:10233` |
+| `Clearing the title and until brings live back to null` | `server/test/smoke.test.js:10245` |
+| `GET /api/settings/public still returns exactly its three keys after the live settings were saved` | `server/test/smoke.test.js:10255` |
+| `With no channel and no live saved, /live, /live/card.jpg and /live/go all 404` | `server/test/smoke.test.js:10269` |
+| `Set up: a permanent channel link only, no live` | `server/test/smoke.test.js:10278` |
+| `/live with a channel link only renders the channel headline and no «مباشر الآن»` | `server/test/smoke.test.js:10285` |
+| `/live/go redirects to the profile url when there is no active live` | `server/test/smoke.test.js:10293` |
+| `Set up: an ACTIVE live (future until, its own live url)` | `server/test/smoke.test.js:10299` |
+| `/live with an active live shows the topic as the headline, in og:title, and with the «مباشر الآن» badge` | `server/test/smoke.test.js:10312` |
+| `/live/go redirects to the live url while active` | `server/test/smoke.test.js:10328` |
+| `Set up: the same live, now EXPIRED (until moved to the past)` | `server/test/smoke.test.js:10334` |
+| `/live with an EXPIRED live falls back to the channel state — no stale topic, no stale badge` | `server/test/smoke.test.js:10342` |
+| `/live/go redirects to the profile url once the live has expired` | `server/test/smoke.test.js:10353` |
+| `A topic carrying an injection attempt renders escaped — the raw <img never appears in the page body` | `server/test/smoke.test.js:10359` |
+| `/live/card.jpg is a real, non-empty JPEG, and a different topic produces a different cached file` | `server/test/smoke.test.js:10383` |
+| `/live/download 302-redirects to the APK url and records app_download_clicked with no content_town` | `server/test/smoke.test.js:10404` |
+| `Both new analytics event names (tiktok_page_viewed, tiktok_click_through) are accepted by analytics.service.js and stay count-only` | `server/test/smoke.test.js:10416` |
+| `A youtube.com/live/<id> stream link is saved and GET /api/live derives its youtube-nocookie embed_url` | `server/test/smoke.test.js:10442` |
+| `GET /api/live keeps its original shape for published APKs: profile_url and live.{title,until,url,active}` | `server/test/smoke.test.js:10461` |
+| `toEmbedUrl derives youtu.be, watch?v= (www and m.), embed/, and /channel/UC… links correctly` | `server/test/smoke.test.js:10471` |
+| `toEmbedUrl returns null for an @handle, TikTok, Facebook, a malformed id, and garbage` | `server/test/smoke.test.js:10485` |
+| `A TikTok stream link saves fine but GET /api/live answers embed_url: null (a plain link)` | `server/test/smoke.test.js:10500` |
+| `Migration renames tiktok_profile_url to live_channel_url, and running migrate twice in a row is safe` | `server/test/smoke.test.js:10512` |
+| `The rename never overwrites a value already saved under the new key` | `server/test/smoke.test.js:10529` |
+| `jerusalemDateString returns the Asia/Jerusalem date, not the UTC one, at 22:30Z (summer and winter)` | `server/test/smoke.test.js:10542` |
+| `PUT /api/admin/live/episodes/<today> without a token → 401, from a town admin → 403` | `server/test/smoke.test.js:10583` |
+| `A poll with fewer than two or more than four options is refused with 400` | `server/test/smoke.test.js:10593` |
+| `A poll question without options, options without a question, a blank option, and a bad date are refused with 400` | `server/test/smoke.test.js:10603` |
+| `A super_admin creates today's episode → 200 with the saved episode` | `server/test/smoke.test.js:10616` |
+| `Set up: yesterday with no poll, and two days ago with a poll (past dates are allowed)` | `server/test/smoke.test.js:10628` |
+| `GET /api/live/hub (anonymous): today has its poll without results, previous is the latest earlier day WITH a poll` | `server/test/smoke.test.js:10643` |
+| `POST vote without a token → 401` | `server/test/smoke.test.js:10663` |
+| `POST vote with an out-of-range or non-integer option_index → 400; on an unknown episode → 404` | `server/test/smoke.test.js:10668` |
+| `POST vote on an earlier day's episode → 400 «هذا النقاش مغلق»` | `server/test/smoke.test.js:10679` |
+| `The first vote → 200 with results; a second vote by the same account → 409` | `server/test/smoke.test.js:10691` |
+| `GET /api/live/hub shows today's results to the voter, and still hides them from a signed-in non-voter` | `server/test/smoke.test.js:10710` |
+| `After a vote, changing the poll options → 409; changing only the topic → 200` | `server/test/smoke.test.js:10721` |
+| `GET /api/admin/live/episodes lists the recent episodes newest first with vote_count, super_admin only` | `server/test/smoke.test.js:10738` |
+| `DELETE /api/admin/live/episodes/:id removes the episode and its votes; an unknown id → 404` | `server/test/smoke.test.js:10749` |
+| `A vote emits live_poll_<episodeId> with { results, total_votes } only — never my_vote` | `server/test/smoke.test.js:10799` |
+| `PUT /api/admin/settings with only the WhatsApp number emits no live_status and writes no live notification` | `server/test/smoke.test.js:10833` |
+| `First active live saved today → live_status, one system_notification, rows only for notify_new_events = 1` | `server/test/smoke.test.js:10852` |
+| `A second save the same day (extending until) → live_status again, but no new rows and no announcement` | `server/test/smoke.test.js:10894` |
+| `Saving a live whose until is already past → live_status, but no notification at all` | `server/test/smoke.test.js:10914` |
+| `/live/embed with no link saved at all → 404` | `server/test/smoke.test.js:10952` |
+| `Set up: an active YouTube live, today's episode with a poll, and yesterday's poll with three votes` | `server/test/smoke.test.js:10958` |
+| `GET /live names no platform and shows the topic, episode question, today's poll read-only, and yesterday's result` | `server/test/smoke.test.js:10995` |
+| `An <img onerror> in the episode topic renders escaped on /live, never as markup` | `server/test/smoke.test.js:11025` |
+| `GET /live/embed with a YouTube live → 200, an iframe onto embed_url with referrerpolicy, under its own CSP` | `server/test/smoke.test.js:11031` |
+| `/live/go still redirects to the active live's own link` | `server/test/smoke.test.js:11053` |
+| `/live/embed with a TikTok stream link → 404, and /live/go goes to that link as before` | `server/test/smoke.test.js:11059` |
+| `Set up: three events across three distinct towns (two weddings, one funeral) plus a fourth event in a fresh village` | `server/test/smoke.test.js:11094` |
+| `A single ?town= value returns exactly what it always has — the no-regression case` | `server/test/smoke.test.js:11143` |
+| `Two comma-separated towns return the union of both, and nothing from a third` | `server/test/smoke.test.js:11152` |
+| `A single occasion_type_id (the funeral) excludes a wedding event` | `server/test/smoke.test.js:11162` |
+| `Two comma-separated occasion_type_id values return the union of both types` | `server/test/smoke.test.js:11169` |
+| `?village_id= filters to only that village alone` | `server/test/smoke.test.js:11177` |
+| `village_id combined with a town in a DIFFERENT town returns the union of both places, not their (always-empty) intersection` | `server/test/smoke.test.js:11187` |
+| `village_id combined with town = 'القرى والتجمعات' itself is coherent: the catch-all town already contains every village's events, so the union is just that same catch-all set` | `server/test/smoke.test.js:11196` |
+| `Twenty comma-separated occasion_type_id values are accepted` | `server/test/smoke.test.js:11204` |
+| `Twenty-one comma-separated occasion_type_id values are rejected with 400 and an Arabic message — not a silent truncation to the first twenty` | `server/test/smoke.test.js:11210` |
+| `Twenty-one repetitions of the SAME occasion_type_id are also rejected — the cap counts raw values sent, not distinct ones after dedupe` | `server/test/smoke.test.js:11220` |
+| `A duplicated value in the list does not duplicate a row in the result` | `server/test/smoke.test.js:11227` |
+| `'الكل' inside a town list still means no town filter, exactly as a lone ?town=الكل` | `server/test/smoke.test.js:11233` |
+| `An unknown town value matches nothing, exactly like before list support existed — 200 with an empty list, not a 400` | `server/test/smoke.test.js:11247` |
+| `A request with no X-App-Version cannot see the non-legacy funeral type even when it asks for it by id inside a list` | `server/test/smoke.test.js:11253` |
+| `A legacy client requesting ONLY the non-legacy funeral type by id gets an empty result, never a widened one` | `server/test/smoke.test.js:11261` |
+| `GET /api/map/events supports the same town/occasion_type_id/village_id list filtering, including the legacy intersection` | `server/test/smoke.test.js:11267` |
+| `the migration turned the archive on for the wedding type only` | `server/test/smoke.test.js:11338` |
+| `a live on a CHANNEL link is not saved as an episode, and the admin is told why` | `server/test/smoke.test.js:11345` |
+| `a live on ONE video's link becomes today's episode, kept in its canonical watch form` | `server/test/smoke.test.js:11361` |
+| `while the live is on, today is the live itself — not in «الحلقات السابقة»` | `server/test/smoke.test.js:11376` |
+| `a topic the admin already typed for the day is kept when the live is re-saved` | `server/test/smoke.test.js:11383` |
+| `once the live ends, today's episode is listed under «الحلقات السابقة» with its own link and player` | `server/test/smoke.test.js:11393` |
+| `the /live page lists «الحلقات السابقة» as links to each episode page, titles escaped` | `server/test/smoke.test.js:11408` |
+| `PUT /api/admin/live/episodes/:date refuses a channel link as an episode video, and stores a video link canonically` | `server/test/smoke.test.js:11415` |
+| `an episode save without video_url keeps the recorded video (a broadcast may have landed after the form loaded); an empty one clears it` | `server/test/smoke.test.js:11431` |
+| `GET /live/e/:id is the branded episode page: escaped title, its own card as og:image, and «شاهد الحلقة»` | `server/test/smoke.test.js:11454` |
+| `the episode card is a 1200×1200 JPEG; /go redirects to the stored video only; /embed frames it` | `server/test/smoke.test.js:11466` |
+| `an unknown, malformed or video-less episode id is a 404 on every episode route` | `server/test/smoke.test.js:11483` |
+| `without Cloudinary keys, asking to upload a share image answers in Arabic instead of failing` | `server/test/smoke.test.js:11497` |
+| `share-image signing is super_admin only` | `server/test/smoke.test.js:11506` |
+| `the signature names a public_id inside this episode's own folder, and never carries the secret` | `server/test/smoke.test.js:11514` |
+| `registering a share image needs a real Cloudinary response signature for THIS episode` | `server/test/smoke.test.js:11529` |
+| `a verified share image is stored and drawn into the episode card` | `server/test/smoke.test.js:11544` |
+| `removing the share image goes back to the generated card, and deletes the file on Cloudinary` | `server/test/smoke.test.js:11562` |
+| `album photos: the type gate is the only gate — an upcoming wedding can be prepared, an ended funeral cannot` | `server/test/smoke.test.js:11646` |
+| `album routes: a town admin manages a wedding in their town; one with no towns gets 404, never 403` | `server/test/smoke.test.js:11660` |
+| `a verified photo is added and shows under the ended wedding in GET /api/events/:id` | `server/test/smoke.test.js:11672` |
+| `a user tags himself: pending and invisible, then searchable by a spelling variant after approval` | `server/test/smoke.test.js:11731` |
+| `a user withdraws the tag, re-requests, is rejected, and cannot re-request the same photo` | `server/test/smoke.test.js:11777` |
+| `a self-tag without a profile photo, or without confirm_phone, is refused and writes no row` | `server/test/smoke.test.js:11803` |
+| `a conditional tag keeps both descriptions and the phone-confirmation stamp, and the queue returns them` | `server/test/smoke.test.js:11828` |
+| `apply_caption adopts the suggestion on approval; without it — and on any rejection — the caption is untouched` | `server/test/smoke.test.js:11859` |
+| `descriptions longer than 200 characters are truncated, and blank ones are stored NULL` | `server/test/smoke.test.js:11912` |
+| `the tag queue counts match the rows of each status, and move as a tag is decided` | `server/test/smoke.test.js:11944` |
+| `three distinct privacy reports hide the photo; the admin restores it and it is public again` | `server/test/smoke.test.js:11976` |
+| `there is no album photo cap: 61 rows are accepted and every one is listed` | `server/test/smoke.test.js:12004` |
+| `GET /p/:id serves one photo with og:image, noindex, and no script — and 404s when hidden` | `server/test/smoke.test.js:12030` |
+| `GET /a/:id serves the album with its cover as og:image, noindex, and no script — and 404s when hidden or malformed` | `server/test/smoke.test.js:12054` |
+| `a person is a row: a honoree is findable by name, his album counted, and his page renders (ADR-0011)` | `server/test/smoke.test.js:12095` |
+| `two spellings of one name are one person, and a name with nothing public never appears` | `server/test/smoke.test.js:12125` |
+| `GET /api/admin/people suggests a nearer name with its photo count, and reading never merges (#107)` | `server/test/smoke.test.js:12155` |
+| `merging two people moves their tags, occasions and accounts, and only a super admin can (#107)` | `server/test/smoke.test.js:12178` |
+| `the archive is hidden (not deleted) when the event is unpublished or its type turns the archive off` | `server/test/smoke.test.js:12275` |
+| `deleting an archive photo removes the row and its Cloudinary file; a wrong event id is 404` | `server/test/smoke.test.js:12295` |
+| `POST /api/admin/albums builds a published album from the groom name alone, and a blank name is an Arabic 400` | `server/test/smoke.test.js:12306` |
+| `admin album photos: the album comes back in the public shape — the honoree album names itself after reopening, the event album keeps its event` | `server/test/smoke.test.js:12363` |
+| `a no-event album with no approved photo and no video is not public — the list, the search and its page all wait` | `server/test/smoke.test.js:12397` |
+| `a town admin creates an album in their own town and gets 404 outside it — never 403, and nothing is written` | `server/test/smoke.test.js:12452` |
+| `GET /api/admin/albums?without_event=1 lists honoree albums for a super admin, newest first, in the public shape` | `server/test/smoke.test.js:12505` |
+| `GET /api/admin/albums?without_event=1 hides another town’s honoree album — and the album route is 404, never 403` | `server/test/smoke.test.js:12530` |
+| `GET /api/admin/albums?without_event=1 never lists an album that has an event` | `server/test/smoke.test.js:12550` |
+| `GET /a/:id and GET /p/:id serve a no-event album and its photo instead of falling over` | `server/test/smoke.test.js:12562` |
+| `an album attached to an event is untouched: the same event object, the same fields, the same route` | `server/test/smoke.test.js:12595` |
+| `album videos: a YouTube link lands on the wedding album, in GET /api/albums/:id, and on its own public route with the YouTube thumbnail` | `server/test/smoke.test.js:12636` |
+| `album videos: a non-http link is an Arabic 400, the same link twice in one album is a 409, and another album accepts it` | `server/test/smoke.test.js:12671` |
+| `album videos: hiding removes it from the album and 404s its own public route; an unknown status is an Arabic 400` | `server/test/smoke.test.js:12702` |
+| `album videos: deleting removes the row and its public route, and touches no file — the link is external` | `server/test/smoke.test.js:12732` |
+| `album videos: a town admin outside the album’s scope gets 404 on all four video routes — never 403 — and nothing is written` | `server/test/smoke.test.js:12747` |
+| `album videos: a groom-only album (ADR-0012) takes a video, and its public route waits for the album to be published — event stays null` | `server/test/smoke.test.js:12778` |
+| `video share page: og:video.other, our own card as og:image, «شاهد الفيديو على يوتيوب», and the injected title escaped` | `server/test/smoke.test.js:12823` |
+| `the video card is a JPEG of its own, served with a short cache` | `server/test/smoke.test.js:12867` |
+| `a hidden video is a 404 on its page and its card, and comes back when it is approved again` | `server/test/smoke.test.js:12876` |
+| `a malformed and a non-existent video id are the same 404 on both video share routes` | `server/test/smoke.test.js:12893` |
+| `an ended-wedding album with no approved photo but one approved video is public — list, detail, /a/:id — and hiding the video hides it again` | `server/test/smoke.test.js:12906` |
+| `a groom-only album with no photo but one approved video is public in the list, the search and the person page — hiding the video hides it again` | `server/test/smoke.test.js:12980` |
+| `an uploaded poster is forwarded to Cloudinary and stored as its URL, with no copy left on disk` | `server/test/smoke.test.js:13067` |
+| `a poster replaced by PATCH, and an artist image, go to their own Cloudinary folders` | `server/test/smoke.test.js:13101` |
+| `replacing a poster deletes the old one from Cloudinary — unless another row still uses it` | `server/test/smoke.test.js:13128` |
+| `a JSON edit that leaves the poster alone deletes nothing; a typed external URL is never deleted` | `server/test/smoke.test.js:13165` |
+| `when Cloudinary fails, the publish still succeeds and the poster stays on this server` | `server/test/smoke.test.js:13181` |
+| `a refused publish uploads nothing to Cloudinary` | `server/test/smoke.test.js:13198` |
+| `the audio track stays on this server — only images go to Cloudinary` | `server/test/smoke.test.js:13209` |
+| `a service provider's image goes to Cloudinary too` | `server/test/smoke.test.js:13224` |
+| `Name matching: hamza, a joined «أبو», a one-letter typo, a dropped middle name and ة/ه all match` | `server/test/smoke.test.js:13266` |
+| `Name matching: a different father (a cousin), a different first name, or a different word never match` | `server/test/smoke.test.js:13275` |
+| `Set up: an admin publishes a wedding — nothing like it exists yet, so it goes straight out` | `server/test/smoke.test.js:13301` |
+| `A regular user publishing the same wedding is neither warned nor stopped — it queues as before` | `server/test/smoke.test.js:13309` |
+| `GET /api/admin/events flags the pending request as a certain duplicate before anyone presses approve` | `server/test/smoke.test.js:13318` |
+| `Approving it without confirming is refused with 409 POSSIBLE_DUPLICATE, and the event stays pending` | `server/test/smoke.test.js:13332` |
+| `Approving it with confirm_duplicate goes through, and the override is logged against both events` | `server/test/smoke.test.js:13344` |
+| `An admin's own publish with a one-letter typo the next day is refused (409, likely) and writes no row at all` | `server/test/smoke.test.js:13356` |
+| `The same publish confirmed through multipart (confirm_duplicate=1, as the panel and the app send it) goes live` | `server/test/smoke.test.js:13369` |
+| `A different groom of the same family, same day and town, is flagged — likely, never certain (تذكرة #159)` | `server/test/smoke.test.js:13394` |
+| `The same name in another town is still flagged, but only as likely — two towns, possibly two people` | `server/test/smoke.test.js:13406` |
+| `A town admin is never shown another town's unpublished request as a duplicate; the super_admin is` | `server/test/smoke.test.js:13416` |
+| `A rejected event is never a candidate — rejecting it is how a duplicate is cleared` | `server/test/smoke.test.js:13451` |
+| `POST /api/auth/me/avatar stores the photo — absolute URL out, relative path in the column — and GET /api/auth/me carries it` | `server/test/smoke.test.js:13490` |
+| `A second avatar upload replaces the first, and the replaced local file is gone from uploadsDir` | `server/test/smoke.test.js:13510` |
+| `A text file named x.png is refused with a 400 that names the accepted formats` | `server/test/smoke.test.js:13527` |
+| `POST /api/auth/me/avatar without a file is a 400 in Arabic` | `server/test/smoke.test.js:13536` |
+| `Set up: a brand-new account answers avatar_url: null — the key exists and is not undefined` | `server/test/smoke.test.js:13544` |
+| `PATCH /api/auth/me updates full_name and clan_town, and GET /api/auth/me reflects both` | `server/test/smoke.test.js:13553` |
+| `PATCH /api/auth/me refuses an empty full_name with a 400 in Arabic` | `server/test/smoke.test.js:13568` |
+| `PATCH /api/auth/me applies analytics_opt_out too when it rides along with a profile field` | `server/test/smoke.test.js:13577` |
+| `Set up: two fresh accounts with a real PIN hash — one holds the number the other will take` | `server/test/smoke.test.js:13591` |
+| `PATCH /api/auth/me/phone with a wrong PIN is a 400 and leaves the number unchanged` | `server/test/smoke.test.js:13597` |
+| `PATCH /api/auth/me/phone refuses another account's number with a 409` | `server/test/smoke.test.js:13609` |
+| `PATCH /api/auth/me/phone changes the number and returns a token signed with the new one` | `server/test/smoke.test.js:13622` |
+| `After the change, login with the old number is 401 and with the new one is 200` | `server/test/smoke.test.js:13656` |
+| `PATCH /api/auth/me carrying phone_number never writes it` | `server/test/smoke.test.js:13665` |
+| `مناسبة منشورة في بلدة حقيقية تحمل محافظة تلك البلدة (تذكرة #120)` | `server/test/smoke.test.js:13698` |
+| `مناسبة تحت البند الجامع مع region_id تحمل المحافظة المرسلة (تذكرة #120)` | `server/test/smoke.test.js:13713` |
+| `مناسبة تحت البند الجامع بلا region_id تحمل المحافظة الافتراضية — سلوك عميل 1.21.3 المنشور (تذكرة #120)` | `server/test/smoke.test.js:13726` |
+| `طلب لوحة قديم بلا region_id ينجح ويأخذ محافظة البند الجامع، وكل صفوف villages تحمل region_id (تذكرة #120)` | `server/test/smoke.test.js:13739` |
+| `POST /api/admin/events/:id/promote-village ينشئ القرية على محافظة مناسبتها (تذكرة #120)` | `server/test/smoke.test.js:13759` |
+| `PATCH /api/admin/towns/:id بنقل بلدة إلى محافظة ثانية يحدّث مناسباتها وقُراها في المعاملة نفسها (تذكرة #120)` | `server/test/smoke.test.js:13785` |
+| `تغيير village_id وحده يحفظ محافظة القرية لا المحافظة الافتراضية (تذكرة #120)` | `server/test/smoke.test.js:13828` |
+| `promote-village يرفض ربط مناسبة في محافظة ثانية بقرية تحمل الاسم نفسه في محافظة أخرى (تذكرة #120)` | `server/test/smoke.test.js:13864` |
+| `Set up: كل مناسبة اختبار تحمل محافظتها — النقب للبلدية، والثانية للثانية والقروية (تذكرة #121)` | `server/test/smoke.test.js:13976` |
+| `GET /api/events بلا X-Region لا يعيد أي مناسبة من المحافظة الثانية (تذكرة #121)` | `server/test/smoke.test.js:13983` |
+| `GET /api/events بـ X-Region للمحافظة الثانية يعيد صفوفها وحدها (تذكرة #121)` | `server/test/smoke.test.js:13991` |
+| `GET /api/map/events يعزل المحافظة نفسها: دبّوس لكل محافظة ولا تسريب (تذكرة #121)` | `server/test/smoke.test.js:14001` |
+| `all_regions=1 يتجاوز تقييد المحافظة في GET /api/events و GET /api/map/events، والافتراضي يبقى مقيَّداً (تذكرة #161)` | `server/test/smoke.test.js:14015` |
+| `إعلانات تغيير التاريخ في GET /api/events تعزل المحافظة كالمناسبة نفسها (تذكرة #121)` | `server/test/smoke.test.js:14050` |
+| `مناسبة قروية تحت البند الجامع بمحافظة ثانية تظهر لطلبها ولا تظهر لطلب النقب (تذكرة #121)` | `server/test/smoke.test.js:14101` |
+| `X-Region غير رقمي أو معرّف لا وجود له → 400 برسالة عربية (تذكرة #121)` | `server/test/smoke.test.js:14113` |
+| `محافظة موقوفة (is_active = 0) → الطلب ينجح ويعيد صفوف المحافظة الافتراضية (تذكرة #121)` | `server/test/smoke.test.js:14123` |
+| `PATCH /api/auth/me يقبل region_id، و publicUser و GET /api/auth/me يرجّعانه (تذكرة #121)` | `server/test/smoke.test.js:14150` |
+| `PATCH /api/auth/me بمعرّف محافظة وهمي → 400 عربي ولا يمسّ المكتوب (تذكرة #121)` | `server/test/smoke.test.js:14166` |
+| `مسجَّل بلا X-Region يرى محافظة حسابه، ومسح التفضيل (null) يعيده إلى الافتراضية (تذكرة #121)` | `server/test/smoke.test.js:14178` |
+| `حساب على محافظة موقوفة بلا X-Region يرى صفوف المحافظة الافتراضية (تذكرة #121)` | `server/test/smoke.test.js:14198` |
+| `GET /api/events/:id لمناسبة في محافظة أخرى يبقى 200 بترويسة النقب — التفاصيل عالمية (تذكرة #121)` | `server/test/smoke.test.js:14218` |
+| `غياب X-Region لا يغيّر صفوف فيد النقب ولا ترتيبها: مطابق تماماً لطلب صريح بـ X-Region: النقب (تذكرة #121)` | `server/test/smoke.test.js:14224` |
+| `CORS: طلب OPTIONS يسمح بترويسة X-Region القادمة من المتصفّح (تذكرة #121)` | `server/test/smoke.test.js:14237` |
+| `Set up: ألبوم في كل محافظة، وألبوم عريس في الثانية، وصورة موسومة لأجل البحث في الأشخاص (تذكرة #122)` | `server/test/smoke.test.js:14401` |
+| `GET /api/albums يعرض ألبومات المحافظة وحدها: ألبوم الثانية لا يظهر افتراضياً ويظهر بترويسة محافظتها، والعكس لألبوم النقب (تذكرة #122)` | `server/test/smoke.test.js:14418` |
+| `ألبوم العريس يتقيّد ببلدة صاحبه: ألبوم في بلدة المحافظة الثانية لا يظهر افتراضياً ويظهر لمحافظتها (تذكرة #122)` | `server/test/smoke.test.js:14432` |
+| `ألبوم العريس بلا بلدة مكانه غير معروف فيظهر في كل المحافظات — القائمة والبحث بالترويسين (تذكرة #122)` | `server/test/smoke.test.js:14447` |
+| `GET /api/photos يتقيّد بالألبوم: صورة ألبوم المحافظة الثانية لا تظهر افتراضياً وتظهر بترويسة محافظتها (تذكرة #122)` | `server/test/smoke.test.js:14464` |
+| `GET /api/search بنفس الكلمة: الألبوم والصورة يتقيّدان بالمحافظة، والأشخاص عالميون في التراويس كلها (تذكرة #122)` | `server/test/smoke.test.js:14484` |
+| `GET /api/stories: ستوري البلدة في محافظتها وحدها، وستوري بلا بلدة وإعلان المنصة في كل المحافظات (تذكرة #122)` | `server/test/smoke.test.js:14505` |
+| `GET /api/services/providers يعرض من يخدم بلدة في المحافظة وحدها: مزوّد الثانية لا يظهر افتراضياً ويظهر لمحافظتها (تذكرة #122)` | `server/test/smoke.test.js:14547` |
+| `GET /api/albums/:id و GET /api/people/:id يفتحان بالمعرّف لصفّ من محافظة أخرى بلا ترويسة (تذكرة #122)` | `server/test/smoke.test.js:14561` |
+| `غياب X-Region لا يقيّد أكثر من المحافظة الافتراضية: نتائج الاكتشاف مطابقة لطلب صريح بالنقب (تذكرة #122)` | `server/test/smoke.test.js:14582` |
+| `مناسبة في النقب ونفس الاسم والتاريخ في محافظة ثانية: نشر فوري بلا 409 (تذكرة #123)` | `server/test/smoke.test.js:14663` |
+| `نداء داخلي بلا region_id يرى مرشّح كل محافظة، وبمحافظة النقب لا يرى الثاني (تذكرة #123)` | `server/test/smoke.test.js:14681` |
+| `طلب مستخدم بنفس الاسم والتاريخ في محافظة ثانية لا يظهر تكراراً لصفّ النقب في الطابور (تذكرة #123)` | `server/test/smoke.test.js:14698` |
+| `نفس الاسم والتاريخ داخل المحافظة نفسها: الأدمن يُرفض بـ409 كما كان بالحرف (تذكرة #123)` | `server/test/smoke.test.js:14718` |
+| `نفس الاسم والتاريخ داخل المحافظة نفسها: المستخدم العادي لا يُمنع وطلبه يدخل الطابور (تذكرة #123)` | `server/test/smoke.test.js:14740` |
+| `town = اسم المحافظة يعني «مكان غير معروف» داخل محافظتها وحدها (تذكرة #123)` | `server/test/smoke.test.js:14763` |
+| `الاعتماد: تطابق في محافظة ثانية يمرّ بلا 409، وداخل المحافظة نفسها يُرفض بـ409 (تذكرة #123)` | `server/test/smoke.test.js:14793` |
+| `البند الجامع: المكان نفسه في محافظة أخرى لا يتصادم، وداخل المحافظة نفسها يتصادم (تذكرة #123)` | `server/test/smoke.test.js:14839` |
+| `إعداد: مناسبتان معتمدتان في رهط في اليوم نفسه وعائلتان مختلفتان (تذكرة #159)` | `server/test/smoke.test.js:14970` |
+| `تعديل الأدمن المطابق يُرفض بـ409 بنفس شكل النشر، ولا يكتب أي تغيير (تذكرة #159)` | `server/test/smoke.test.js:14989` |
+| `إعادة تعديل الأدمن مع confirm_duplicate تنجح، والتجاوز يُسجَّل (تذكرة #159)` | `server/test/smoke.test.js:15012` |
+| `إعادة حفظ لا تغيّر مدخلاً من مدخلات الحارس لا تعيد الـ409 ولا تسجّل تجاوزاً ثانياً (تذكرة #159)` | `server/test/smoke.test.js:15032` |
+| `حفظ المالك الذي لا يغيّر مدخلاً من مدخلات الحارس يبقى منشوراً ولو كان للصفّ شبيه معتمد (تذكرة #159)` | `server/test/smoke.test.js:15055` |
+| `تعديل المناسبة لا يُنبّه على نفسها: تغيير إملائي في اسمها يمرّ بلا 409 (تذكرة #159)` | `server/test/smoke.test.js:15088` |
+| `تعديل المالك المشتبه لا يُوقَف بـ409، ويعود pending مع الشبه في طابور الأدمن (تذكرة #159)` | `server/test/smoke.test.js:15106` |
+| `تعديل المالك غير المشتبه يتبع التصنيف القائم: التجميلي يبقى منشوراً والحرِج يعود للمراجعة (تذكرة #159)` | `server/test/smoke.test.js:15142` |
+| `أسماء مختلفة وعائلة واحدة (بإملاء آخر) في نفس البلدة والتاريخ تعطي likely لا certain (تذكرة #159)` | `server/test/smoke.test.js:15170` |
+| `نفس العائلة في محافظة أخرى لا تنبّه، ونفس الزوج في محافظة واحدة ينبّه — عبر بند «القرى والتجمعات» (تذكرة #159)` | `server/test/smoke.test.js:15197` |
+| `نقطة فحص الاستيراد تقرأ قرار حارس التكرار من الخدمة نفسها (تذكرة #160)` | `server/test/smoke.test.js:15309` |
+| `munasabatna-insert لا يدرج المشتبه، ويطبعه في قسم «تُخطِّي» مع المطابقة ودرجتها (تذكرة #160)` | `server/test/smoke.test.js:15342` |
+| `munasabatna-insert يُدرج المدخل غير المشتبه كما كان، ويعدّه في قسم «أُدرج» (تذكرة #160)` | `server/test/smoke.test.js:15363` |
+| `import-legacy-json يمرّر العائلة الحقيقية ويمرّ على الحارس، وتقريره يفصل الأقسام الأربعة (تذكرة #160)` | `server/test/smoke.test.js:15403` |
+| `POST /api/admin/regions ينشئ محافظة على نمط «إضافة بلدة»؛ الاسم المكرر 409، وبلا إحداثيات 400، وأدمن بلدة 403 (تذكرة #128)` | `server/test/smoke.test.js:15518` |
+| `POST /api/admin/villages بمحافظة يُخزّنها، و GET /api/admin/villages يعيد region_id في الصفّ (تذكرة #128)` | `server/test/smoke.test.js:15578` |
+| `بثّ باسم محافظة يكتب صفّاً لكل بلدة من بلداتها داخل نطاق الأدمن، ولا صفّ باسم المحافظة نفسه (تذكرة #128)` | `server/test/smoke.test.js:15604` |
+| `أدمن يملك بلدة واحدة في المحافظة يبثّ لها وحدها؛ وأدمن لا يملك شيئاً منها يُرفض 404 بلا كتابة (تذكرة #128)` | `server/test/smoke.test.js:15653` |
+| `سوبر أدمن يسمّي محافظة: صفّ لكل بلدة نشطة فيها ولا صفّ عام؛ وبلا اسم: صفّ عام واحد كما كان (تذكرة #128)` | `server/test/smoke.test.js:15707` |
+| `GET /api/admin/analytics/overview يحمل by_region إضافياً، وحدثان على بلدة المحافظة الثانية يزيدانها اثنين بالضبط (تذكرة #128)` | `server/test/smoke.test.js:15749` |
+| `صفّ بـ content_town = «القرى والتجمعات» مع مناسبة في المحافظة الثانية يذهب إلى «غير محدَّد» ولا يُسقَط (تذكرة #128)` | `server/test/smoke.test.js:15801` |
+| `GET /api/news يشتقّ منطقة المحافظة من اسمها ويعيد عقد القائمة كاملاً (وجهة «خدماتنا»)` | `server/test/smoke.test.js:15987` |
+| `general=1 يجبر الوجه العام بلا منطقة، ولا يرسل area للمصدر` | `server/test/smoke.test.js:16021` |
+| `مفاتيح مناطق الأخبار عربية — المصدر يردّ zone_not_found لكل مفتاح لاتيني` | `server/test/smoke.test.js:16034` |
+| `?limit= يُقصّ إلى سقف الخمسين بدل أن يُرفض أو يُمرَّر` | `server/test/smoke.test.js:16048` |
+| `?offset= ينتقل إلى الصفحة التالية ويُبلغ has_more بالصدق` | `server/test/smoke.test.js:16056` |
+| `إزاحة غير صالحة (سالب أو نصّ) تُرفض 400 برسالة عربية` | `server/test/smoke.test.js:16065` |
+| `GET /api/news/:id يعيد التفصيل: الكاتب والنصّ الكامل فقرات` | `server/test/smoke.test.js:16074` |
+| `خبر غير موجود أو غير منشور عند المصدر ← 404 عربي` | `server/test/smoke.test.js:16088` |
+| `فشل المصدر بلا كاش ← 502 بالرسالة العربية، لا قائمة فارغة تُوهم بالهدوء` | `server/test/smoke.test.js:16099` |
+| `بعد نجاح سابق، سقوط المصدر يخدم آخر نسخة محفوظة بدل 502` | `server/test/smoke.test.js:16112` |
+| `رسالة ApiError المقصودة تمرّ في الإنتاج، ورسالة الخطأ الداخلي تُحجب` | `server/test/smoke.test.js:16127` |
+| `GET /api/prices عام بلا رمز — العيارات الثلاثة والعملات الست محسوبة من المصدرين` | `server/test/smoke.test.js:16229` |
+| `الطلب الثاني خلال الساعة لا ينادي المصدر إطلاقاً — والسعر المخزَّن هو المعروض` | `server/test/smoke.test.js:16268` |
+| `فشل المصدر بعد نجاح سابق ← 200 وstale: true وآخر نسخة محفوظة` | `server/test/smoke.test.js:16298` |
+| `فشل المصدر بلا نسخة سابقة ← 503 برسالة عربية، لا 500 ولا رسالة إنجليزية` | `server/test/smoke.test.js:16320` |
+| `ردّ ناقص (عملة غائبة) يُعامَل فشلاً لا قائمة ناقصة` | `server/test/smoke.test.js:16337` |
+| `GET /api/stats/ticker يحمل prices ولا يتأثّر بفشله` | `server/test/smoke.test.js:16350` |
+| `POST /api/events defaults visibility to public, and an unknown value is refused with an Arabic 400` | `server/test/smoke.test.js:16422` |
+| `A link_only event is approved silently: no «مناسبة جديدة» row and no digest for anyone` | `server/test/smoke.test.js:16447` |
+| `The duplicate guard still compares against a link_only event — hiding never blinds it (تذكرة #166)` | `server/test/smoke.test.js:16496` |
+| `The public twin IS still announced — the silencing is the visibility, not a broken notification path` | `server/test/smoke.test.js:16516` |
+| `A link_only event is absent from the feed, the map, search, related events and the sitemap — even with no X-App-Version` | `server/test/smoke.test.js:16541` |
+| `A link_only event opens by id in the API and at /e/:id, with noindex in the meta tag AND the header; a public one is unchanged` | `server/test/smoke.test.js:16591` |
+| `Editing visibility hides an approved event without sending it back to review, and setting it public brings it back` | `server/test/smoke.test.js:16616` |
+| `POST /api/check-collision (public, no auth) never names a link_only event, while the public twin of that day and town still shows` | `server/test/smoke.test.js:16649` |
+| `The daily «مناسبة جديدة» count is public events only — a link_only approval neither takes one of the three nor inflates the digest` | `server/test/smoke.test.js:16675` |
+| `Set up: عرس معتمد يملكه حساب عادي، وعزاء معتمد — كلاهما من الأزرار نفسها` | `server/test/smoke.test.js:16794` |
+| `«جاي» بعدد 3 يُنشئ الجواب و«ذكّرني» معاً، ويردّ بحالة المستخدم والعدّاد` | `server/test/smoke.test.js:16831` |
+| `الجواب الثاني من الحساب نفسه يُحدّث الصفّ ولا يُضيف ثانياً` | `server/test/smoke.test.js:16857` |
+| `«مش جاي» لا يمسّ «ذكّرني»، و`DELETE` يسحب الجواب ولا يحذفه` | `server/test/smoke.test.js:16875` |
+| `عدد الحاضرين خارج 1..RSVP_PARTY_SIZE_MAX يُرفض بـ400 عربية، والغياب يعني 1` | `server/test/smoke.test.js:16905` |
+| `rsvp_going_count = مجموع العدد من الحساب والضيف معاً، في القائمة والتفصيل` | `server/test/smoke.test.js:16927` |
+| `العزاء: 404 على المسار، ولا rsvp_going_count في أي ردّ` | `server/test/smoke.test.js:16964` |
+| `«مين جاي»: الأسماء والعدد والمصدر والمجاميع للمالك وللأدمن، و404 لغيرهما، وبلا هاتف في أي جسم` | `server/test/smoke.test.js:16992` |
+| `نوع rsvp_enabled مطفأ لا يخرج عدّاده ولو وُجدت أجوبة — لا في التفصيل ولا في القائمة` | `server/test/smoke.test.js:17057` |
+| `طلب بلا X-App-Version لا ينكسر بالحقول الجديدة` | `server/test/smoke.test.js:17095` |
+| `إيقاع النشر المجدول مستقلّ عن الجولة اليومية: start() يسلّح مؤقّتاً أقصر من يوم (#167)` | `server/test/smoke.test.js:17167` |
+| `دورة نشر بدأت قبل stop() لا تعيد تسليح مؤقّت بعد stop() ثم start() (#167)` | `server/test/smoke.test.js:17194` |
+| `مناسبة بموعد نشر مستقبلي غائبة عن كل قائمة عامة وحاضرة بالتفصيل وبالرابط، ثم تظهر ويصل إشعارها مرة واحدة` | `server/test/smoke.test.js:17237` |
+| `فشلٌ بعد كتابة الإعلان وقبل التزامه يتراجع كاملاً فتُعلنها المحاولة التالية — لا يُفقد الإعلان (#167)` | `server/test/smoke.test.js:17369` |
+| `مناسبة بموعد نشر مستقبلي لا يُعلنها المجدول قبل موعدها ولو شُغّل عشر مرّات` | `server/test/smoke.test.js:17430` |
+| `أهلية الإعلان تُقرأ تحت القفل: ${change} بين جلب الدفعة والحجز يمنع الإعلان حتى تعود الأهلية (#167)` | `server/test/smoke.test.js:17512` |
+| `اعتمادُ مناسبة بموعد مستقبلي لا يستهلك حصة اليوم: أوّل مناسبة منشورة فعلاً تصل فرديّة لا ملخّصاً (#167)` | `server/test/smoke.test.js:17598` |
+| `حصة «مناسبة جديدة» المشتركة لا تتجاوز ثلاث فرادى عند إعلان مناسبتين متزامنتين في المحافظة نفسها (#167)` | `server/test/smoke.test.js:17653` |
+| `شاهد عزل الحصة: اختبارا «مناسبة جديدة» لا يمسّان مناسبات القسم السابقة ولا ملخّصاته (#167)` | `server/test/smoke.test.js:17737` |
+| `publish_at في الماضي أو غير صالح يُرفض 400 عربية في النشر والتعديل، وإعادة الموعد المخزَّن لا تُرفض` | `server/test/smoke.test.js:17760` |
+| `شرط publish_at يأخذ ساعة القدس مُعامَلةً لا NOW() (ساعة الجلسة UTC في الإنتاج) وتُظهر المجدولة عند موعدها القدسي (#167)` | `server/test/smoke.test.js:17824` |
+| `نافذة البقاء: نجاح منتهٍ منذ ٣ أيام يظهر في «القادم» بـ«انتهت»، ومنذ ٨ لا يظهر، وعرس منتهٍ أمس لا يظهر، والخريطة لا تعرض المنتهي` | `server/test/smoke.test.js:17897` |
+| `صفّ بلا نوع لا يبقى في «القادم» أبداً: منتهٍ منذ ٣٠ يوماً يخرج، والمنتهي اليوم يظهر (#167)` | `server/test/smoke.test.js:17970` |
+| `feed_linger_days: افتراضه 0، والسوبر أدمن يضبطه من مسار الأنواع (0..30) ويُرفض ما خارجه` | `server/test/smoke.test.js:18018` |
+| `ترقية صيغة #167 الأولى بلا علَم والعمود موجود تحفظ اختيار السوبر أدمن صفراً، والتثبيت الجديد يزرع 7 (#167)` | `server/test/smoke.test.js:18055` |
+| `Set up: عرس معتمد قادم، وعرس معتمد انتهى، وعزاء معتمد` | `server/test/smoke.test.js:18143` |
+| `الصفحة تحمل النموذج ولا <script>، والـCSP تحمل form-action 'self' لهذه الصفحة وحدها` | `server/test/smoke.test.js:18184` |
+| `إرسال صحيح يعيد التوجيه بالشارة، ويُنشئ صفّاً بالهاتف المطبَّع` | `server/test/smoke.test.js:18211` |
+| `الإرسال الثاني بالهاتف نفسه يُحدّث الصفّ ولا يُضيف ثانياً` | `server/test/smoke.test.js:18246` |
+| `هاتف فارغ يعطي رسالة عربية بلا صفّ` | `server/test/smoke.test.js:18271` |
+| `عدد 21 يعطي رسالة عربية بلا صفّ` | `server/test/smoke.test.js:18289` |
+| `الهاتف لا يظهر في أي ردّ /api ولا في /e/` | `server/test/smoke.test.js:18309` |
+| `نوع مطفأ أو مناسبة منتهية: لا نموذج، والـPOST يعطي 404 الموحّدة` | `server/test/smoke.test.js:18334` |
+| `طلب الضيف يستهلك دلو /api المجهول المشترك، حتى لو أُرفق رمز صالح` | `server/test/smoke.test.js:18362` |
+| `الطلب الحادي عشر من IP واحد في الساعة يعطي 429 بصفحة عربية` | `server/test/smoke.test.js:18398` |
+| `نصّا الخصوصية وADR-0006 محدَّثان بجمع اسم الضيف وهاتفه والإشارة إلى ADR-0015` | `server/test/smoke.test.js:18452` |
+| `Set up: عرس معتمد قادم، وعرس معتمد انتهى، وعزاء معتمد — كلها لحساب واحد` | `server/test/smoke.test.js:18506` |
+| `إنشاء ثلاثة أسماء يعيد ثلاثة روابط مختلفة، توكين كلٍّ منها ٣٢ حرفاً hex` | `server/test/smoke.test.js:18539` |
+| `غير المالك وأدمن خارج البلدة: 404 للمسارات الثلاثة — وأدمن البلدة يقرأ` | `server/test/smoke.test.js:18577` |
+| `صفحة الدعوة 200: «أهلاً <الاسم>» والاسم مسبقاً والتوكِن مخفيّ، noindex، بلا <script>` | `server/test/smoke.test.js:18609` |
+| `الفتح الأول يكتب opened_at، والثاني لا يغيّره` | `server/test/smoke.test.js:18644` |
+| `الجواب من الدعوة يكتب invite_id ويعود إلى صفحة الدعوة، ويظهر في «مين جاي»` | `server/test/smoke.test.js:18679` |
+| `جواب عادي بلا دعوة يبقى invite_id = NULL ويبقى على صفحة المناسبة` | `server/test/smoke.test.js:18726` |
+| `رمز خاطئ أو غير موجود أو لا يخصّ المناسبة: 404 الموحّدة بلا كتابة` | `server/test/smoke.test.js:18747` |
+| `مناسبة انتهت أو نوع مطفأ: صفحة الدعوة 404 ولو كان رمزها صحيحاً` | `server/test/smoke.test.js:18783` |
+| `حذف الدعوة لا يحذف الجواب: invite_id يصير NULL والصفّ يبقى في «مين جاي»` | `server/test/smoke.test.js:18799` |
+| `قائمة أسماء فارغة أو زائدة أو اسم فارغ: 400 عربية بلا صفّ جديد` | `server/test/smoke.test.js:18837` |
+| `PATCH /api/admin/events/:id/featured يكتب featured_until، والمبرزة تتصدّر تغذية محافظتها بـis_featured منطقية` | `server/test/smoke.test.js:18954` |
+| `الرابعة النشِطة في المحافظة نفسها 409 عربية، والرابعة في محافظة أخرى تُقبل` | `server/test/smoke.test.js:18990` |
+| `إلغاء الإبراز بـnull يعيد الصفّ لمكانه ويُفرّغ مقعد السقف` | `server/test/smoke.test.js:19037` |
+| `تاريخ انتهى (أمس) لا يُبرز: is_featured false والصفّ لا يتصدّر` | `server/test/smoke.test.js:19066` |
+| `أدمن خارج نطاق المناسبة يُردّ 404 لا 403 ولا يُكتب شيء، وأدمن داخله يمرّ` | `server/test/smoke.test.js:19082` |
+| `تاريخ الإبراز يُتحقَّق في validate.js: صيغة خاطئة 400، وغياب المفتاح 400 لا إلغاء صامت` | `server/test/smoke.test.js:19112` |
+| `الترقيم لا ينكسر: COUNT(*) يعدّ الصفوف نفسها، والمبرزة تظهر مرة واحدة عبر الصفحات` | `server/test/smoke.test.js:19133` |
+| `السقف يحرس الانتقال إلى نشِط وحده: تاريخ مستقبلي لصفّ غير مبرز 409، وتاريخ منقضٍ له 200` | `server/test/smoke.test.js:19162` |
+| `طلبان متزامنان لإبراز مناسبتين مختلفتين بمقعد حرّ واحد: أحدهما 200 والآخر 409، والنشِطة لا تتجاوز السقف` | `server/test/smoke.test.js:19200` |
+| `GET /api/stats/ticker عام — كل صفّ { region_id, name, upcoming_count }، وtotal مجموع الصفوف، وupdated_at لحظة` | `server/test/smoke.test.js:19318` |
+| `عدّ المحافظة يطابق القائمة العامة نفسها — المعلّقة والمجدولة لا تُعدّان` | `server/test/smoke.test.js:19349` |
+| `مناسبة «بالرابط فقط» معتمدة وقادمة لا تُعدّ في الشريط` | `server/test/smoke.test.js:19390` |
+| `مناسبة انتهى امتدادها لا تُعدّ «قادمة» — وهي معتمدة ويجدها زائر في الأرشيف` | `server/test/smoke.test.js:19406` |
+| `الطلب الثاني خلال الكاش لا يستعلم شيئاً، وupdated_at لحظة التعبئة نفسها` | `server/test/smoke.test.js:19428` |
+| `الكاش هو ما يجمّد الرقم: مناسبة قادمة ثالثة لا تُحتسب حتى تنتهي مدّته، ثم تُحتسب` | `server/test/smoke.test.js:19466` |
+| `Set up: مناسبة عرس ومناسبة عزاء معتمدتان لصاحب البطاقة` | `server/test/smoke.test.js:19622` |
+| `GET /api/card-templates عام: ١٢ قالباً وأربعة مقاسات وخمس عائلات خطوط` | `server/test/smoke.test.js:19666` |
+| `المعاينة تعيد image/png بالمقاس المصغّر الصحيح للمقاسات الأربعة` | `server/test/smoke.test.js:19694` |
+| `الحفظ يعيد رابطاً بالمقاس الكامل لكل مقاس، وكل بطاقة أساسية وحدها` | `server/test/smoke.test.js:19717` |
+| `download.png يفضّل البطاقة الأساسية على الملصق: مقاس الناتج = مقاس البطاقة المحفوظة + الشريط (#182)` | `server/test/smoke.test.js:19754` |
+| `غير المالك يُردّ بـ404 في القائمة والحفظ والمعاينة` | `server/test/smoke.test.js:19767` |
+| `اختيار بلا لون أو قالب أو مقاس يُردّ 400 عربية لا 500` | `server/test/smoke.test.js:19809` |
+| `طلب مرفوض بملف لا يترك صورة يتيمة في uploads` | `server/test/smoke.test.js:19830` |
+| `العزاء لا يرى إلا قوالب النبرة الهادئة — ولو أُرسل قالب فرح رُدّ 400` | `server/test/smoke.test.js:19871` |
+| `البطاقة الأساسية تصير og:image، وحذفها يعيد البطاقة المولَّدة` | `server/test/smoke.test.js:19908` |
+| `PATCH يجعل البطاقة المطلوبة أساسية وحدها` | `server/test/smoke.test.js:19948` |
+| `photo_source: upload يحفظ صورة المصدر ويُبقي photo_url حيّة` | `server/test/smoke.test.js:19970` |
+| `معاينة متكررة تتجاوز الحدّ ⇒ 429 برسالة عربية` | `server/test/smoke.test.js:20013` |
 | `web/index.html + config.js + api.js + app.js load together in a jsdom document with no source change` | `server/test/web-dom.test.js:1007` |
 | `switchTab('tabAdd') actually builds the publish form — dynamicFormFields stops being empty` | `server/test/web-dom.test.js:1039` |
 | `the publish form carries a «سهرة الشباب» field for a type that defines one` | `server/test/web-dom.test.js:1059` |
@@ -1219,112 +1225,116 @@
 | `the Hijri calculator matches four Umm al-Qura reference dates exactly and shows the ±1 day note` | `server/test/web-dom.test.js:14536` |
 | `no calculator reaches /api — every one of the five computes on the device` | `server/test/web-dom.test.js:14572` |
 | `the add-service window names its purpose, and no outside button borrows that wording` | `server/test/web-dom.test.js:14629` |
-| `«آخر الأخبار» renders /api/news cards (breaking, category, relative time), then closes with Escape` | `server/test/web-dom.test.js:14653` |
-| `the empty governorate offers «أخبار محلية عامة», and choosing it refetches with general=1 and shows the «عامة» tag` | `server/test/web-dom.test.js:14733` |
-| `tapping a news card opens its detail inside the layer — body paragraphs, source line, «افتح على كترا» — and back restores the list` | `server/test/web-dom.test.js:14785` |
-| `a failing /api/news shows the Arabic error with «إعادة المحاولة», and the retry refetches` | `server/test/web-dom.test.js:14866` |
-| `resumePendingIntent with { type: 'remind' } POSTs /api/events/:id/remind after sign-in` | `server/test/web-dom.test.js:14910` |
-| `«نظّف المنتهية» confirms first, then DELETEs /api/my-reminders?scope=ended with the token` | `server/test/web-dom.test.js:14943` |
-| `removing an event from «قائمتي» clears is_reminded on the feed entry, so its card offers adding it again` | `server/test/web-dom.test.js:14976` |
-| `clearEndedMyList: a refused clear toasts nothing and moves nothing; a successful one un-saves the cleared feed event` | `server/test/web-dom.test.js:15038` |
-| `the «تراجع» undo of a failed re-add alerts and still reloads the list` | `server/test/web-dom.test.js:15120` |
-| `the event page offers no save button for an event that is not approved` | `server/test/web-dom.test.js:15178` |
-| `account avatar: a stored avatar_url shows the photo and hides the icon fallback` | `server/test/web-dom.test.js:15240` |
-| `account avatar: avatar_url = null hides the photo and brings the icon back` | `server/test/web-dom.test.js:15255` |
-| `account profile: save sends full_name + clan_town and adopts the server answer` | `server/test/web-dom.test.js:15269` |
-| `account phone: save sends the number with the PIN and keeps only the fresh token` | `server/test/web-dom.test.js:15311` |
-| `account phone: a 400 wrong PIN keeps the session and the open form, and shows the server message` | `server/test/web-dom.test.js:15352` |
-| `account avatar upload: multipart body with the `image` field and no Content-Type header` | `server/test/web-dom.test.js:15382` |
-| `«أنا في الصورة»: an account without a photo opens the sheet, keeps sending disabled and posts nothing` | `server/test/web-dom.test.js:15435` |
-| `«أنا في الصورة»: photo + confirmed number send both descriptions with confirm_phone` | `server/test/web-dom.test.js:15473` |
-| `«أنا في الصورة»: a 400 shows its server message inside the sheet and leaves it open` | `server/test/web-dom.test.js:15521` |
-| `طابور الوسوم: three tabs carry the server counts and switch the queue status` | `server/test/web-dom.test.js:15550` |
-| `apiFetch sends X-Region only for a numeric negev_region — no saved value means no header at all` | `server/test/web-dom.test.js:15605` |
-| `adminFetch never sends X-Region, even when the browser has one saved` | `server/test/web-dom.test.js:15627` |
-| `the region picker is drawn above the feed chips from GET /api/towns (regions), with each region's state` | `server/test/web-dom.test.js:15645` |
-| `a saved region is selected again when the page opens, and the drawer copy shows the same state` | `server/test/web-dom.test.js:15672` |
-| `choosing another region saves it, empties the previous list, and refetches page 1 with the new X-Region` | `server/test/web-dom.test.js:15695` |
-| `publishing under «القرى والتجمعات» requires a region and sends region_id` | `server/test/web-dom.test.js:15738` |
-| `the edit modal shows the event's region and sends region_id only when the user changes it` | `server/test/web-dom.test.js:15787` |
-| `the very first feed request carries X-Region of the saved region, not the first one` | `server/test/web-dom.test.js:15827` |
-| `اختيار محافظة بعد «وسّع إلى كل المحافظات» يُلغي all_regions من الطلب التالي (#161)` | `server/test/web-dom.test.js:15851` |
-| `a signed-in visitor with no stored choice is shown the account region the server actually uses` | `server/test/web-dom.test.js:15905` |
-| `clicking the drawn default region stores it explicitly and refetches` | `server/test/web-dom.test.js:15934` |
-| `the place filter offers only the active region's towns, and an open sheet is rebuilt on a region change` | `server/test/web-dom.test.js:15957` |
-| `editing still saves when GET /api/towns returned no regions — the region is only required when a list exists` | `server/test/web-dom.test.js:15976` |
-| `the map opens on the active region's centre and re-centres when the region changes` | `server/test/web-dom.test.js:16014` |
-| `a slow answer from the previous region cannot land on the new region's feed` | `server/test/web-dom.test.js:16052` |
-| `«أهلاً، الاسم» للمسجَّل وحده، والزائر لا يراه (#174)` | `server/test/web-dom.test.js:16128` |
-| `negev_user بلا negev_token لا يحيّي في موضعي الترويسة، والجلسة المكتملة تحيّي فيهما (#174)` | `server/test/web-dom.test.js:16147` |
-| `كبسولة المحافظة تحمل اسمها من الخادم وتفتح ورقة المحافظة، والاختيار فيها يمشي في selectRegion القائم` | `server/test/web-dom.test.js:16167` |
-| `بلا محافظات من الخادم: الكبسولة تقول «منطقتك» والورقة تشرح الفراغ بدل بطاقة فارغة` | `server/test/web-dom.test.js:16203` |
-| `القلب يفتح «قائمتي» وزرّ الأجندة يفتح الأجندة القائمة، والشريط السفلي يبقى ثلاث وجهات` | `server/test/web-dom.test.js:16222` |
-| `قاعدة CSS تُخفي التحية عن الزائر صراحةً، والكبسولة تقصّ الاسم الطويل` | `server/test/web-dom.test.js:16263` |
-| `الهاتف وPWA المثبَّت: الصفّ الغني له موضعٌ ثانٍ داخل الشريط العائم الظاهر هناك` | `server/test/web-dom.test.js:16286` |
-| `حجز بطاقة التغذية يساوي علوّ الشريط العائم المعلن في كل عتبة (#174)` | `server/test/web-dom.test.js:16352` |
-| `التحية والكبسولة تُكتبان في موضعَي الصفّ الغني معاً، واختيار كبسولة الهاتف يمشي في selectRegion نفسه` | `server/test/web-dom.test.js:16419` |
-| `المحافظة الأصلية (النقب) بلا شريط: الشريط خبر توسّع لا تحيّة، ولا ورقة قديمة ولا مفتاحها` | `server/test/web-dom.test.js:16522` |
-| `التبديل إلى محافظة طولكرم: شريط داخل الصفحة بنصّ الخادم وعدد بلداتها — لا طبقة ولا حوار` | `server/test/web-dom.test.js:16539` |
-| `تبديل ثانٍ إلى اللد والرملة ويافا: الشريط يتبع كل تبديل بنصّ المحافظة الجديدة وعدد بلداتها (٣)` | `server/test/web-dom.test.js:16582` |
-| `محافظة بصفر مناسبات: عدد البلدات وسطر «كن أول»، ولا «0 مناسبة» في أي نصّ` | `server/test/web-dom.test.js:16606` |
-| `محافظة فيها مناسبة معتمدة: رقم المناسبات لا عدد البلدات` | `server/test/web-dom.test.js:16625` |
-| `صيغ العدد العربية: بلدة، بلدتان، بلدات، بلدة — وكذلك المناسبات` | `server/test/web-dom.test.js:16641` |
-| `× يُخفي الشريط ويسجّل الإخفاء لهذه المحافظة وحدها — ويبقى بعد إعادة التحميل` | `server/test/web-dom.test.js:16659` |
-| `اسم المحافظة يمرّ عبر escapeHtml — لا HTML من الخادم في العنوان أو السطر` | `server/test/web-dom.test.js:16698` |
-| `تبديل المحافظة لا يطلب /api/towns مرة أخرى — الأرقام من استجابة الإقلاع نفسها` | `server/test/web-dom.test.js:16716` |
-| `الموقوفة لا تُختار ولا شريط لها، ومحافظة بلا عدّادين من الخادم لا شريط لها` | `server/test/web-dom.test.js:16737` |
-| `ناشر النقب يرى في نموذج النشر بلدات النقب وحدها ثم «النقب — بلا بلدة محدّدة»` | `server/test/web-dom.test.js:16833` |
-| `ناشر طولكرم يرى «القرى والتجمعات» في آخر بلداته — ولا بلدة نقبية واحدة` | `server/test/web-dom.test.js:16849` |
-| `تبديل حبة المحافظة يعيد بناء بلدات نموذج النشر المفتوح على المحافظة الجديدة` | `server/test/web-dom.test.js:16896` |
-| `نافذة التعديل تعرض بلدات محافظة المناسبة وتُبقي بلدةً خارجها مختارة` | `server/test/web-dom.test.js:16912` |
-| `النشر المباشر: محافظة الأدمن افتراضاً، وتبديل المحافظة يعيد بناء بلداتها وحدها` | `server/test/web-dom.test.js:16938` |
-| `لوحة التعديل: منتقي البلدة يُبنى من محافظة المناسبة ويُبقي بلدة خارجها مختارة` | `server/test/web-dom.test.js:16979` |
-| `نموذج تعديل مناسبة قروية في طولكرم يعرض قرى طولكرم وحدها في منتقي القرية` | `server/test/web-dom.test.js:17036` |
-| `تبديل محافظة نموذج التعديل إلى النقب يعيد بناء قرى منتقي القرية من النقب` | `server/test/web-dom.test.js:17053` |
-| `صفوف قرى بلا region_id (خادم أقدم أو قائمة احتياطية) تُعرض كاملة في منتقي التعديل` | `server/test/web-dom.test.js:17078` |
-| `قرية المناسبة الحالية خارج قرى محافظتها تبقى خياراً مختاراً في منتقي التعديل` | `server/test/web-dom.test.js:17092` |
-| `مسودّة النشر المباشر: محافظة لم تبق نشطة تعود إلى الافتراضية ولا تترك منتقي البلدة فارغاً` | `server/test/web-dom.test.js:17106` |
-| `web/index.html keeps pinch-zoom enabled (no maximum-scale, no user-scalable) and keeps viewport-fit=cover` | `server/test/web-dom.test.js:17134` |
-| `Chart.js is pinned to one explicit version, the same in index.html and admin.html` | `server/test/web-dom.test.js:17152` |
-| `styles.css: one general :focus-visible rule, and a 44px button base no button rule lowers` | `server/test/web-dom.test.js:17177` |
-| `admin.css carries the same 44px button base and general :focus-visible — the panel loads no other stylesheet` | `server/test/web-dom.test.js:17257` |
-| `sw.js precaches the shell files only — never an /api endpoint, never admin.html, never a CDN URL` | `server/test/web-dom.test.js:17298` |
-| `sw.js covers every local script index.html loads — in the precache list AND the runtime pattern` | `server/test/web-dom.test.js:17339` |
-| `sw.js leaves /api responses, non-GET requests and cross-origin requests completely alone` | `server/test/web-dom.test.js:17367` |
-| `sw.js serves shell files from the cache and still opens the shell offline` | `server/test/web-dom.test.js:17387` |
-| `sw.js activate drops every previous shell cache (the version bump) and leaves other caches alone` | `server/test/web-dom.test.js:17415` |
-| `sw.js fails install when an essential shell file cannot be downloaded — the previous cache survives whole` | `server/test/web-dom.test.js:17442` |
-| `sw.js keeps install alive when only an icon fails to download — and the icon is filled in at runtime` | `server/test/web-dom.test.js:17508` |
-| `صفحة المناسبة تعرض «جاي» و«مش جاي» والعدد 1..20 والعدّاد وحالة الجواب` | `server/test/web-dom.test.js:17574` |
-| `لا أزرار حضور ولا عدّاد: لنوع solemn، ولا لنوع rsvp_enabled مطفأ، ولا حين يخفي النوع العدّاد` | `server/test/web-dom.test.js:17604` |
-| `«جاي» يرسل PUT /api/events/:id/rsvp بإجمالي الحاضرين المختار، ويحدّث الحالة والعدّاد من ردّ الخادم` | `server/test/web-dom.test.js:17632` |
-| `«مش جاي» يُرسل party_size = 1، و«سحب جوابي» يستعمل DELETE على المسار نفسه` | `server/test/web-dom.test.js:17696` |
-| `«مين جاي» يرسم الأسماء والعدد والجواب والمصدر والمجاميع` | `server/test/web-dom.test.js:17752` |
-| `زرّ «مين جاي» يرسمه «مناسباتي» لمناسبة نوعها مفتوح، ويغيب عن غيرها` | `server/test/web-dom.test.js:17776` |
-| `فتح «مين جاي» يقرأ GET /api/events/:id/rsvps بالرمز، ويُظهر رسالة الخادم عند الرفض` | `server/test/web-dom.test.js:17793` |
-| `فتح «الدعوات» يقرأ GET /api/events/:id/invites بالرمز ويرسم الاسم والرابط وحالة الفتح والجواب` | `server/test/web-dom.test.js:17849` |
-| `«أنشئ الدعوات» يرسل POST بأسماء السطور غير الفارغة، و«حذف» يرسل DELETE على المسار نفسه` | `server/test/web-dom.test.js:17907` |
-| `«مين جاي» يعرض سطر الدعوة لصفّها وحده: الاسم و«فُتحت»/«لم تُفتح»` | `server/test/web-dom.test.js:17954` |
-| `زرّ «الدعوات» يُرسم بجانب «مين جاي» بنفس شرط النوع` | `server/test/web-dom.test.js:17992` |
-| `كرت العرس يحمل الأفعال الثلاثة، والعزاء «عزّي» وحده بلا عدّاد، ونوع بلا rsvp_enabled بلا «جاي»` | `server/test/web-dom.test.js:18047` |
-| `«جاي» من الكرت يسجّل الجواب بعدد 1 ويُفعّل «ذكّرني» ظاهراً` | `server/test/web-dom.test.js:18088` |
-| `«بارك» يفتح ورقة «اختر رسالة» برسائل النوع، واختيار رسالة يفتح التبريك بنصّها قابلاً للتعديل` | `server/test/web-dom.test.js:18140` |
-| `إغلاق ورقة الرسائل أثناء جلب الأنواع لا يرمي ولا يكتب إلى الورقة المغلقة` | `server/test/web-dom.test.js:18208` |
-| `ردّ ورقة رسائل قديمة لا يستبدل حالة ورقة جديدة أو محتواها` | `server/test/web-dom.test.js:18233` |
-| `ورقة الرسائل لا تُكتب من الكود: نوع بلا رسائل نشِطة يفتح باب الكتابة وحده` | `server/test/web-dom.test.js:18263` |
-| `عدّادات صفحة المناسبة: مهتمين وتبريكات حين يرسلهما الخادم، ويغيبان حين يطفئهما النوع أو تكون النغمة وقورة` | `server/test/web-dom.test.js:18291` |
-| `بلا اختيار محفوظ وجهاز داكن: لا data-theme على <html> والأيقونة شمس` | `server/test/web-dom.test.js:18325` |
-| `اختيار محفوظ dark يُطبَّق على <html> لحظة تحميل السكربت — قبل أول رسم` | `server/test/web-dom.test.js:18342` |
-| `toggleTheme يقلب المظهر ويكتبه في localStorage ويحدّث الأيقونة` | `server/test/web-dom.test.js:18356` |
-| `قيمة محفوظة فاسدة تُتجاهَل: لا data-theme، والنظام يحكم` | `server/test/web-dom.test.js:18377` |
-| `theme-color يتبع المظهر الظاهر، وقيمتاه هما --ground في styles.css` | `server/test/web-dom.test.js:18402` |
-| `الصفحات الخمس تحمّل theme-boot.js في <head> قبل أول نمط` | `server/test/web-dom.test.js:18418` |
-| `لوحة الإدارة تحترم الاختيار المحفوظ عبر theme-boot نفسه` | `server/test/web-dom.test.js:18436` |
-| `لا متغيّر CSS مستعمل وغير معرَّف في styles.css ولا admin.css` | `server/test/web-dom.test.js:18453` |
-| `«مناسبتي» وصفحة المناسبة تحملان «صمّم بطاقة» و«ارفع بطاقتك الجاهزة» لصاحبها` | `server/test/web-dom.test.js:18579` |
-| `فتح الستوديو يجلب الكتالوج ويعرض قوالب النبرة الاحتفالية وحدها` | `server/test/web-dom.test.js:18609` |
-| `مناسبة العزاء ترى قالب العزاء وحده (#180)` | `server/test/web-dom.test.js:18633` |
-| `«معاينة» ترسل القالب والمقاس المختارين وتعرض الـblob العائد` | `server/test/web-dom.test.js:18648` |
-| `«حفظ البطاقة» يرسل POST ويعرض رابط المقاس الكامل` | `server/test/web-dom.test.js:18685` |
-| `فشل الشبكة في المعاينة يظهر رسالة عربية بلا انهيار` | `server/test/web-dom.test.js:18711` |
-| `429 في المعاينة والحفظ: «حاول بعد قليل» (#180)` | `server/test/web-dom.test.js:18732` |
+| `«أسعار الذهب» — الحاسبة تضرب الوزن في سعر العيار من /api/prices وتُظهر تاريخ المصدر` | `server/test/web-dom.test.js:14678` |
+| `«محوّل العملات» — يحوّل في الاتجاهين بسعر ils_per_unit ويعرض تاريخ الصرف` | `server/test/web-dom.test.js:14753` |
+| `حين لا تصل الأسعار يُخفى جسم الأداة وتاريخها ويبقى سطر عربي واحد` | `server/test/web-dom.test.js:14798` |
+| `الرابط العميق ?tab=ourServices يفتح الوجهة بأداتي الأسعار، وبلا نداء أسعار قبل فتح أداة` | `server/test/web-dom.test.js:14832` |
+| `«آخر الأخبار» renders /api/news cards (breaking, category, relative time), then closes with Escape` | `server/test/web-dom.test.js:14861` |
+| `the empty governorate offers «أخبار محلية عامة», and choosing it refetches with general=1 and shows the «عامة» tag` | `server/test/web-dom.test.js:14941` |
+| `tapping a news card opens its detail inside the layer — body paragraphs, source line, «افتح على كترا» — and back restores the list` | `server/test/web-dom.test.js:14993` |
+| `a failing /api/news shows the Arabic error with «إعادة المحاولة», and the retry refetches` | `server/test/web-dom.test.js:15074` |
+| `resumePendingIntent with { type: 'remind' } POSTs /api/events/:id/remind after sign-in` | `server/test/web-dom.test.js:15118` |
+| `«نظّف المنتهية» confirms first, then DELETEs /api/my-reminders?scope=ended with the token` | `server/test/web-dom.test.js:15151` |
+| `removing an event from «قائمتي» clears is_reminded on the feed entry, so its card offers adding it again` | `server/test/web-dom.test.js:15184` |
+| `clearEndedMyList: a refused clear toasts nothing and moves nothing; a successful one un-saves the cleared feed event` | `server/test/web-dom.test.js:15246` |
+| `the «تراجع» undo of a failed re-add alerts and still reloads the list` | `server/test/web-dom.test.js:15328` |
+| `the event page offers no save button for an event that is not approved` | `server/test/web-dom.test.js:15386` |
+| `account avatar: a stored avatar_url shows the photo and hides the icon fallback` | `server/test/web-dom.test.js:15448` |
+| `account avatar: avatar_url = null hides the photo and brings the icon back` | `server/test/web-dom.test.js:15463` |
+| `account profile: save sends full_name + clan_town and adopts the server answer` | `server/test/web-dom.test.js:15477` |
+| `account phone: save sends the number with the PIN and keeps only the fresh token` | `server/test/web-dom.test.js:15519` |
+| `account phone: a 400 wrong PIN keeps the session and the open form, and shows the server message` | `server/test/web-dom.test.js:15560` |
+| `account avatar upload: multipart body with the `image` field and no Content-Type header` | `server/test/web-dom.test.js:15590` |
+| `«أنا في الصورة»: an account without a photo opens the sheet, keeps sending disabled and posts nothing` | `server/test/web-dom.test.js:15643` |
+| `«أنا في الصورة»: photo + confirmed number send both descriptions with confirm_phone` | `server/test/web-dom.test.js:15681` |
+| `«أنا في الصورة»: a 400 shows its server message inside the sheet and leaves it open` | `server/test/web-dom.test.js:15729` |
+| `طابور الوسوم: three tabs carry the server counts and switch the queue status` | `server/test/web-dom.test.js:15758` |
+| `apiFetch sends X-Region only for a numeric negev_region — no saved value means no header at all` | `server/test/web-dom.test.js:15813` |
+| `adminFetch never sends X-Region, even when the browser has one saved` | `server/test/web-dom.test.js:15835` |
+| `the region picker is drawn above the feed chips from GET /api/towns (regions), with each region's state` | `server/test/web-dom.test.js:15853` |
+| `a saved region is selected again when the page opens, and the drawer copy shows the same state` | `server/test/web-dom.test.js:15880` |
+| `choosing another region saves it, empties the previous list, and refetches page 1 with the new X-Region` | `server/test/web-dom.test.js:15903` |
+| `publishing under «القرى والتجمعات» requires a region and sends region_id` | `server/test/web-dom.test.js:15946` |
+| `the edit modal shows the event's region and sends region_id only when the user changes it` | `server/test/web-dom.test.js:15995` |
+| `the very first feed request carries X-Region of the saved region, not the first one` | `server/test/web-dom.test.js:16035` |
+| `اختيار محافظة بعد «وسّع إلى كل المحافظات» يُلغي all_regions من الطلب التالي (#161)` | `server/test/web-dom.test.js:16059` |
+| `a signed-in visitor with no stored choice is shown the account region the server actually uses` | `server/test/web-dom.test.js:16113` |
+| `clicking the drawn default region stores it explicitly and refetches` | `server/test/web-dom.test.js:16142` |
+| `the place filter offers only the active region's towns, and an open sheet is rebuilt on a region change` | `server/test/web-dom.test.js:16165` |
+| `editing still saves when GET /api/towns returned no regions — the region is only required when a list exists` | `server/test/web-dom.test.js:16184` |
+| `the map opens on the active region's centre and re-centres when the region changes` | `server/test/web-dom.test.js:16222` |
+| `a slow answer from the previous region cannot land on the new region's feed` | `server/test/web-dom.test.js:16260` |
+| `«أهلاً، الاسم» للمسجَّل وحده، والزائر لا يراه (#174)` | `server/test/web-dom.test.js:16336` |
+| `negev_user بلا negev_token لا يحيّي في موضعي الترويسة، والجلسة المكتملة تحيّي فيهما (#174)` | `server/test/web-dom.test.js:16355` |
+| `كبسولة المحافظة تحمل اسمها من الخادم وتفتح ورقة المحافظة، والاختيار فيها يمشي في selectRegion القائم` | `server/test/web-dom.test.js:16375` |
+| `بلا محافظات من الخادم: الكبسولة تقول «منطقتك» والورقة تشرح الفراغ بدل بطاقة فارغة` | `server/test/web-dom.test.js:16411` |
+| `القلب يفتح «قائمتي» وزرّ الأجندة يفتح الأجندة القائمة، والشريط السفلي يبقى ثلاث وجهات` | `server/test/web-dom.test.js:16430` |
+| `قاعدة CSS تُخفي التحية عن الزائر صراحةً، والكبسولة تقصّ الاسم الطويل` | `server/test/web-dom.test.js:16471` |
+| `الهاتف وPWA المثبَّت: الصفّ الغني له موضعٌ ثانٍ داخل الشريط العائم الظاهر هناك` | `server/test/web-dom.test.js:16494` |
+| `حجز بطاقة التغذية يساوي علوّ الشريط العائم المعلن في كل عتبة (#174)` | `server/test/web-dom.test.js:16560` |
+| `التحية والكبسولة تُكتبان في موضعَي الصفّ الغني معاً، واختيار كبسولة الهاتف يمشي في selectRegion نفسه` | `server/test/web-dom.test.js:16627` |
+| `المحافظة الأصلية (النقب) بلا شريط: الشريط خبر توسّع لا تحيّة، ولا ورقة قديمة ولا مفتاحها` | `server/test/web-dom.test.js:16730` |
+| `التبديل إلى محافظة طولكرم: شريط داخل الصفحة بنصّ الخادم وعدد بلداتها — لا طبقة ولا حوار` | `server/test/web-dom.test.js:16747` |
+| `تبديل ثانٍ إلى اللد والرملة ويافا: الشريط يتبع كل تبديل بنصّ المحافظة الجديدة وعدد بلداتها (٣)` | `server/test/web-dom.test.js:16790` |
+| `محافظة بصفر مناسبات: عدد البلدات وسطر «كن أول»، ولا «0 مناسبة» في أي نصّ` | `server/test/web-dom.test.js:16814` |
+| `محافظة فيها مناسبة معتمدة: رقم المناسبات لا عدد البلدات` | `server/test/web-dom.test.js:16833` |
+| `صيغ العدد العربية: بلدة، بلدتان، بلدات، بلدة — وكذلك المناسبات` | `server/test/web-dom.test.js:16849` |
+| `× يُخفي الشريط ويسجّل الإخفاء لهذه المحافظة وحدها — ويبقى بعد إعادة التحميل` | `server/test/web-dom.test.js:16867` |
+| `اسم المحافظة يمرّ عبر escapeHtml — لا HTML من الخادم في العنوان أو السطر` | `server/test/web-dom.test.js:16906` |
+| `تبديل المحافظة لا يطلب /api/towns مرة أخرى — الأرقام من استجابة الإقلاع نفسها` | `server/test/web-dom.test.js:16924` |
+| `الموقوفة لا تُختار ولا شريط لها، ومحافظة بلا عدّادين من الخادم لا شريط لها` | `server/test/web-dom.test.js:16945` |
+| `ناشر النقب يرى في نموذج النشر بلدات النقب وحدها ثم «النقب — بلا بلدة محدّدة»` | `server/test/web-dom.test.js:17041` |
+| `ناشر طولكرم يرى «القرى والتجمعات» في آخر بلداته — ولا بلدة نقبية واحدة` | `server/test/web-dom.test.js:17057` |
+| `تبديل حبة المحافظة يعيد بناء بلدات نموذج النشر المفتوح على المحافظة الجديدة` | `server/test/web-dom.test.js:17104` |
+| `نافذة التعديل تعرض بلدات محافظة المناسبة وتُبقي بلدةً خارجها مختارة` | `server/test/web-dom.test.js:17120` |
+| `النشر المباشر: محافظة الأدمن افتراضاً، وتبديل المحافظة يعيد بناء بلداتها وحدها` | `server/test/web-dom.test.js:17146` |
+| `لوحة التعديل: منتقي البلدة يُبنى من محافظة المناسبة ويُبقي بلدة خارجها مختارة` | `server/test/web-dom.test.js:17187` |
+| `نموذج تعديل مناسبة قروية في طولكرم يعرض قرى طولكرم وحدها في منتقي القرية` | `server/test/web-dom.test.js:17244` |
+| `تبديل محافظة نموذج التعديل إلى النقب يعيد بناء قرى منتقي القرية من النقب` | `server/test/web-dom.test.js:17261` |
+| `صفوف قرى بلا region_id (خادم أقدم أو قائمة احتياطية) تُعرض كاملة في منتقي التعديل` | `server/test/web-dom.test.js:17286` |
+| `قرية المناسبة الحالية خارج قرى محافظتها تبقى خياراً مختاراً في منتقي التعديل` | `server/test/web-dom.test.js:17300` |
+| `مسودّة النشر المباشر: محافظة لم تبق نشطة تعود إلى الافتراضية ولا تترك منتقي البلدة فارغاً` | `server/test/web-dom.test.js:17314` |
+| `web/index.html keeps pinch-zoom enabled (no maximum-scale, no user-scalable) and keeps viewport-fit=cover` | `server/test/web-dom.test.js:17342` |
+| `Chart.js is pinned to one explicit version, the same in index.html and admin.html` | `server/test/web-dom.test.js:17360` |
+| `styles.css: one general :focus-visible rule, and a 44px button base no button rule lowers` | `server/test/web-dom.test.js:17385` |
+| `admin.css carries the same 44px button base and general :focus-visible — the panel loads no other stylesheet` | `server/test/web-dom.test.js:17465` |
+| `sw.js precaches the shell files only — never an /api endpoint, never admin.html, never a CDN URL` | `server/test/web-dom.test.js:17506` |
+| `sw.js covers every local script index.html loads — in the precache list AND the runtime pattern` | `server/test/web-dom.test.js:17547` |
+| `sw.js leaves /api responses, non-GET requests and cross-origin requests completely alone` | `server/test/web-dom.test.js:17575` |
+| `sw.js serves shell files from the cache and still opens the shell offline` | `server/test/web-dom.test.js:17595` |
+| `sw.js activate drops every previous shell cache (the version bump) and leaves other caches alone` | `server/test/web-dom.test.js:17623` |
+| `sw.js fails install when an essential shell file cannot be downloaded — the previous cache survives whole` | `server/test/web-dom.test.js:17650` |
+| `sw.js keeps install alive when only an icon fails to download — and the icon is filled in at runtime` | `server/test/web-dom.test.js:17716` |
+| `صفحة المناسبة تعرض «جاي» و«مش جاي» والعدد 1..20 والعدّاد وحالة الجواب` | `server/test/web-dom.test.js:17782` |
+| `لا أزرار حضور ولا عدّاد: لنوع solemn، ولا لنوع rsvp_enabled مطفأ، ولا حين يخفي النوع العدّاد` | `server/test/web-dom.test.js:17812` |
+| `«جاي» يرسل PUT /api/events/:id/rsvp بإجمالي الحاضرين المختار، ويحدّث الحالة والعدّاد من ردّ الخادم` | `server/test/web-dom.test.js:17840` |
+| `«مش جاي» يُرسل party_size = 1، و«سحب جوابي» يستعمل DELETE على المسار نفسه` | `server/test/web-dom.test.js:17904` |
+| `«مين جاي» يرسم الأسماء والعدد والجواب والمصدر والمجاميع` | `server/test/web-dom.test.js:17960` |
+| `زرّ «مين جاي» يرسمه «مناسباتي» لمناسبة نوعها مفتوح، ويغيب عن غيرها` | `server/test/web-dom.test.js:17984` |
+| `فتح «مين جاي» يقرأ GET /api/events/:id/rsvps بالرمز، ويُظهر رسالة الخادم عند الرفض` | `server/test/web-dom.test.js:18001` |
+| `فتح «الدعوات» يقرأ GET /api/events/:id/invites بالرمز ويرسم الاسم والرابط وحالة الفتح والجواب` | `server/test/web-dom.test.js:18057` |
+| `«أنشئ الدعوات» يرسل POST بأسماء السطور غير الفارغة، و«حذف» يرسل DELETE على المسار نفسه` | `server/test/web-dom.test.js:18115` |
+| `«مين جاي» يعرض سطر الدعوة لصفّها وحده: الاسم و«فُتحت»/«لم تُفتح»` | `server/test/web-dom.test.js:18162` |
+| `زرّ «الدعوات» يُرسم بجانب «مين جاي» بنفس شرط النوع` | `server/test/web-dom.test.js:18200` |
+| `كرت العرس يحمل الأفعال الثلاثة، والعزاء «عزّي» وحده بلا عدّاد، ونوع بلا rsvp_enabled بلا «جاي»` | `server/test/web-dom.test.js:18255` |
+| `«جاي» من الكرت يسجّل الجواب بعدد 1 ويُفعّل «ذكّرني» ظاهراً` | `server/test/web-dom.test.js:18296` |
+| `«بارك» يفتح ورقة «اختر رسالة» برسائل النوع، واختيار رسالة يفتح التبريك بنصّها قابلاً للتعديل` | `server/test/web-dom.test.js:18348` |
+| `إغلاق ورقة الرسائل أثناء جلب الأنواع لا يرمي ولا يكتب إلى الورقة المغلقة` | `server/test/web-dom.test.js:18416` |
+| `ردّ ورقة رسائل قديمة لا يستبدل حالة ورقة جديدة أو محتواها` | `server/test/web-dom.test.js:18441` |
+| `ورقة الرسائل لا تُكتب من الكود: نوع بلا رسائل نشِطة يفتح باب الكتابة وحده` | `server/test/web-dom.test.js:18471` |
+| `عدّادات صفحة المناسبة: مهتمين وتبريكات حين يرسلهما الخادم، ويغيبان حين يطفئهما النوع أو تكون النغمة وقورة` | `server/test/web-dom.test.js:18499` |
+| `بلا اختيار محفوظ وجهاز داكن: لا data-theme على <html> والأيقونة شمس` | `server/test/web-dom.test.js:18533` |
+| `اختيار محفوظ dark يُطبَّق على <html> لحظة تحميل السكربت — قبل أول رسم` | `server/test/web-dom.test.js:18550` |
+| `toggleTheme يقلب المظهر ويكتبه في localStorage ويحدّث الأيقونة` | `server/test/web-dom.test.js:18564` |
+| `قيمة محفوظة فاسدة تُتجاهَل: لا data-theme، والنظام يحكم` | `server/test/web-dom.test.js:18585` |
+| `theme-color يتبع المظهر الظاهر، وقيمتاه هما --ground في styles.css` | `server/test/web-dom.test.js:18610` |
+| `الصفحات الخمس تحمّل theme-boot.js في <head> قبل أول نمط` | `server/test/web-dom.test.js:18626` |
+| `لوحة الإدارة تحترم الاختيار المحفوظ عبر theme-boot نفسه` | `server/test/web-dom.test.js:18644` |
+| `لا متغيّر CSS مستعمل وغير معرَّف في styles.css ولا admin.css` | `server/test/web-dom.test.js:18661` |
+| `«مناسبتي» وصفحة المناسبة تحملان «صمّم بطاقة» و«ارفع بطاقتك الجاهزة» لصاحبها` | `server/test/web-dom.test.js:18787` |
+| `فتح الستوديو يجلب الكتالوج ويعرض قوالب النبرة الاحتفالية وحدها` | `server/test/web-dom.test.js:18817` |
+| `مناسبة العزاء ترى قالب العزاء وحده (#180)` | `server/test/web-dom.test.js:18841` |
+| `«معاينة» ترسل القالب والمقاس المختارين وتعرض الـblob العائد` | `server/test/web-dom.test.js:18856` |
+| `«حفظ البطاقة» يرسل POST ويعرض رابط المقاس الكامل` | `server/test/web-dom.test.js:18893` |
+| `فشل الشبكة في المعاينة يظهر رسالة عربية بلا انهيار` | `server/test/web-dom.test.js:18919` |
+| `429 في المعاينة والحفظ: «حاول بعد قليل» (#180)` | `server/test/web-dom.test.js:18940` |

@@ -53,6 +53,7 @@ const logger = require('../src/utils/logger');
 const realtime = require('../src/realtime');
 const shareCard = require('../src/services/shareCard.service');
 const newsService = require('../src/services/news.service');
+const pricesService = require('../src/services/prices.service');
 const statsService = require('../src/services/stats.service');
 const { PALETTES } = require('../src/utils/shareTheme');
 
@@ -16155,6 +16156,235 @@ async function run() {
   delete process.env.KATRA_NEWS_CACHE_TTL_MS;
   newsService.clearCache();
   await new Promise(resolve => katraServer.close(resolve));
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // أسعار الذهب والعملات (تذكرة #189) — مصدران خارجيان وخادم HTTP وهمي واحد.
+  //
+  // نفس نمط قسم «آخر خبر» أعلاه حرفياً: العقد يُختبَر على شبكة حقيقية داخل
+  // العملية، بلا اعتماد على طرف ثالث. و`PRICES_CACHE_TTL_MS=0` يجعل كل طلب
+  // يمرّ إلى المصدر كي يُثبت «آخر نسخة تُخدَم عند السقوط» بدل مهلة كاش غير
+  // مرئية — ثم يُرفع في اختبار الكاش وحده ليُثبت أن الطلب الثاني لا يمرّ أصلاً.
+  // ────────────────────────────────────────────────────────────────────────────
+  console.log('\nأسعار الذهب والعملات: المصدران والحساب والكاش (تذكرة #189)');
+
+  /**
+   * عقد Frankfurter v2 كما تحقّق حيّاً: مصفوفة صفوف `{ date, base, quote, rate }`
+   * و`rate` عدد وحدات العملة الأجنبية لكل شيكل واحد. القيم مختارة صحيحة
+   * النسبة (٤، ٥، ٨، ٢، ٠٫٠٤، ٠٫٠٦٢٥ شيكل للوحدة) كي يكون الحساب المتوقّع
+   * مقروءاً في التأكيد لا مجرّد رقم يطابق نفسه.
+   */
+  const PRICES_FX_RATES = [
+    { date: '2026-11-09', base: 'ILS', quote: 'USD', rate: 0.25 },
+    { date: '2026-11-09', base: 'ILS', quote: 'EUR', rate: 0.2 },
+    { date: '2026-11-09', base: 'ILS', quote: 'GBP', rate: 0.125 },
+    { date: '2026-11-09', base: 'ILS', quote: 'JOD', rate: 0.5 },
+    { date: '2026-11-09', base: 'ILS', quote: 'EGP', rate: 25 },
+    { date: '2026-11-09', base: 'ILS', quote: 'TRY', rate: 16 }
+  ];
+  const PRICES_FX_DATE = '2026-11-09';
+  const PRICES_GOLD_SOURCE_TIME = '2026-11-09T10:31:54Z';
+  /** دولاراً للأونصة — يتغيّر في اختبار الكاش ليُثبت أن السعر المخزَّن هو المعروض. */
+  let pricesGoldOunces = 4000;
+
+  /** كل نداء وصل إلى المصدر الوهمي — منه تُقاس «لا نداء ثانياً» وطريقة النداء. */
+  const pricesRequests = [];
+  let pricesFailing = false;
+  let pricesFxBody = null; // ردّ خاصّ لاختبار «عقد ناقص»، أو null للعقد السليم
+
+  const pricesServer = http.createServer((req, res) => {
+    const requestUrl = new URL(req.url, 'http://127.0.0.1');
+    if (pricesFailing) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'down' }));
+      return;
+    }
+    res.setHeader('Content-Type', 'application/json');
+
+    if (requestUrl.pathname === '/prices/fx') {
+      pricesRequests.push({ source: 'fx', search: requestUrl.searchParams });
+      res.end(JSON.stringify(pricesFxBody || PRICES_FX_RATES));
+      return;
+    }
+    if (requestUrl.pathname === '/prices/gold') {
+      pricesRequests.push({ source: 'gold', search: requestUrl.searchParams });
+      res.end(JSON.stringify({
+        symbol: 'XAU',
+        name: 'Gold',
+        price: pricesGoldOunces,
+        updatedAt: PRICES_GOLD_SOURCE_TIME
+      }));
+      return;
+    }
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'not_found' }));
+  });
+  await new Promise(resolve => pricesServer.listen(0, '127.0.0.1', resolve));
+  process.env.PRICES_FX_URL = `http://127.0.0.1:${pricesServer.address().port}/prices/fx`;
+  process.env.PRICES_GOLD_URL = `http://127.0.0.1:${pricesServer.address().port}/prices/gold`;
+  process.env.PRICES_CACHE_TTL_MS = '0';
+  pricesService.clearCache();
+
+  const pricesCalls = source => pricesRequests.filter(request => request.source === source).length;
+
+  await test('GET /api/prices عام بلا رمز — العيارات الثلاثة والعملات الست محسوبة من المصدرين', async () => {
+    pricesFailing = false;
+    pricesFxBody = null;
+    pricesGoldOunces = 4000;
+    pricesService.clearCache();
+    pricesRequests.length = 0;
+
+    const { status, body } = await api('GET', '/api/prices');
+
+    assert.strictEqual(status, 200, JSON.stringify(body));
+    assert.strictEqual(body.success, true);
+    assert.strictEqual(body.stale, false);
+    assert.strictEqual(body.fx_date, PRICES_FX_DATE, 'تاريخ فرانكفورت كما أرسله المصدر');
+
+    // ٢٤ = 4000 دولار × 4 شيكل ÷ 31.1034768 غراماً، و٢١ = ×0.875، و١٨ = ×0.75.
+    assert.strictEqual(body.gold.currency, 'ILS');
+    assert.strictEqual(body.gold.k24, 514.41);
+    assert.strictEqual(body.gold.k21, 450.11);
+    assert.strictEqual(body.gold.k18, 385.81);
+    assert.strictEqual(body.gold.source_time, '2026-11-09T10:31:54.000Z',
+      'source_time من المصدر نفسه لا لحظة الجلب');
+
+    assert.deepStrictEqual(body.currencies, [
+      { code: 'USD', name_ar: 'دولار أمريكي', ils_per_unit: 4 },
+      { code: 'EUR', name_ar: 'يورو', ils_per_unit: 5 },
+      { code: 'GBP', name_ar: 'جنيه إسترليني', ils_per_unit: 8 },
+      { code: 'JOD', name_ar: 'دينار أردني', ils_per_unit: 2 },
+      { code: 'EGP', name_ar: 'جنيه مصري', ils_per_unit: 0.04 },
+      { code: 'TRY', name_ar: 'ليرة تركية', ils_per_unit: 0.0625 }
+    ]);
+
+    // النداء نفسه بالعقد: base=ILS وquotes القائمة الست كاملة، والذهب مسار مستقل.
+    const fxCall = pricesRequests.find(request => request.source === 'fx');
+    assert.ok(fxCall, 'مصدر العملات لم يُنادَ إطلاقاً');
+    assert.strictEqual(fxCall.search.get('base'), 'ILS');
+    assert.strictEqual(fxCall.search.get('quotes'), 'USD,EUR,GBP,JOD,EGP,TRY');
+    assert.strictEqual(pricesCalls('gold'), 1, 'مصدر الذهب يُنادَى مرّة في كل جلب');
+  });
+
+  await test('الطلب الثاني خلال الساعة لا ينادي المصدر إطلاقاً — والسعر المخزَّن هو المعروض', async () => {
+    process.env.PRICES_CACHE_TTL_MS = String(60 * 60 * 1000);
+    pricesService.clearCache();
+    pricesRequests.length = 0;
+    pricesGoldOunces = 4000;
+
+    const first = await api('GET', '/api/prices');
+    assert.strictEqual(first.status, 200, first.body.message);
+    assert.deepStrictEqual(
+      { fx: pricesCalls('fx'), gold: pricesCalls('gold') },
+      { fx: 1, gold: 1 },
+      'الجلب الأول يمرّ إلى المصدرين مرّة لكلٍّ'
+    );
+
+    // سعر مختلف عند المصدر: لو وصل الطلب الثاني لظهرت قيمته بدل المخزَّنة.
+    pricesGoldOunces = 5000;
+    const second = await api('GET', '/api/prices');
+    assert.strictEqual(second.status, 200, second.body.message);
+    assert.deepStrictEqual(
+      { fx: pricesCalls('fx'), gold: pricesCalls('gold') },
+      { fx: 1, gold: 1 },
+      'الطلب داخل الساعة لم يلمس المصدر: الكاش نطاقه العملية لا الطلب'
+    );
+    assert.strictEqual(second.body.gold.k24, first.body.gold.k24,
+      'النسخة المحفوظة هي ما يُخدَم، لا قراءة جديدة');
+    assert.strictEqual(second.body.stale, false);
+
+    pricesGoldOunces = 4000;
+  });
+
+  await test('فشل المصدر بعد نجاح سابق ← 200 وstale: true وآخر نسخة محفوظة', async () => {
+    process.env.PRICES_CACHE_TTL_MS = '0';
+    pricesService.clearCache();
+    pricesFailing = false;
+
+    const healthy = await api('GET', '/api/prices');
+    assert.strictEqual(healthy.status, 200, healthy.body.message);
+    assert.strictEqual(healthy.body.stale, false);
+
+    pricesFailing = true;
+    const degraded = await api('GET', '/api/prices');
+
+    assert.strictEqual(degraded.status, 200, 'تعطّل مصدر الأسعار لا يفرغ الأداة');
+    assert.strictEqual(degraded.body.success, true);
+    assert.strictEqual(degraded.body.stale, true, 'النسخة القديمة تُعلن نفسها');
+    assert.deepStrictEqual(degraded.body.gold, healthy.body.gold, 'ونفس سعر الذهب المحفوظ');
+    assert.deepStrictEqual(degraded.body.currencies, healthy.body.currencies);
+    assert.strictEqual(degraded.body.fx_date, healthy.body.fx_date, 'وتاريخ المصدر نفسه، لا تاريخ الجلب');
+
+    pricesFailing = false;
+  });
+
+  await test('فشل المصدر بلا نسخة سابقة ← 503 برسالة عربية، لا 500 ولا رسالة إنجليزية', async () => {
+    process.env.PRICES_CACHE_TTL_MS = '0';
+    pricesService.clearCache();
+    pricesFailing = true;
+
+    const { status, body } = await api('GET', '/api/prices');
+
+    assert.notStrictEqual(status, 500, 'خلل الطرف الخارجي ليس خطأ خادمنا');
+    assert.strictEqual(status, 503);
+    assert.strictEqual(body.success, false);
+    assert.strictEqual(body.message, pricesService.PRICES_UNAVAILABLE_MESSAGE);
+    assert.ok(/[\u0600-\u06FF]/.test(body.message), 'الرسالة عربية');
+    assert.ok(!/[A-Za-z]/.test(body.message), 'ولا لاتيني فيها');
+
+    pricesFailing = false;
+  });
+
+  await test('ردّ ناقص (عملة غائبة) يُعامَل فشلاً لا قائمة ناقصة', async () => {
+    pricesService.clearCache();
+    pricesFailing = false;
+    pricesFxBody = PRICES_FX_RATES.filter(row => row.quote !== 'TRY');
+
+    const { status, body } = await api('GET', '/api/prices');
+    assert.notStrictEqual(status, 500);
+    assert.strictEqual(status, 503, 'خمس عملات ليست العقد: الحاسبة الست لا تعرض خمساً وتصمت');
+    assert.strictEqual(body.message, pricesService.PRICES_UNAVAILABLE_MESSAGE);
+
+    pricesFxBody = null;
+  });
+
+  await test('GET /api/stats/ticker يحمل prices ولا يتأثّر بفشله', async () => {
+    pricesService.clearCache();
+    pricesFailing = false;
+
+    const healthy = await api('GET', '/api/stats/ticker');
+    assert.strictEqual(healthy.status, 200, healthy.body.message);
+    assert.ok(Array.isArray(healthy.body.regions), 'الشريط باقٍ بنفس شكله');
+    assert.strictEqual(typeof healthy.body.total, 'number');
+    assert.ok(!Number.isNaN(Date.parse(healthy.body.updated_at)));
+    assert.ok(healthy.body.prices, 'الشريط يحمل الأسعار');
+    assert.strictEqual(healthy.body.prices.gold.k24, 514.41);
+    assert.strictEqual(healthy.body.prices.currencies.length, 6);
+    assert.strictEqual(healthy.body.prices.stale, false);
+
+    // وبفشل الأسعار وغياب نسخة محفوظة: الشريط 200 و`prices` وحده null.
+    pricesService.clearCache();
+    pricesFailing = true;
+    const degraded = await api('GET', '/api/stats/ticker');
+    assert.strictEqual(degraded.status, 200, 'فشل الأسعار لا يُسقط الشريط');
+    assert.ok(Array.isArray(degraded.body.regions));
+    assert.strictEqual(degraded.body.prices, null);
+
+    pricesFailing = false;
+  });
+
+  // استعادة الحالة: خادم الأسعار الوهمي يُغلق، ومتغيّرا العنوان يُمسحان — ونملأ
+  // الكاش بنسخة ناجحة قبل المسح بصلاحية طويلة، فلا تحاول أقسام لاحقة
+  // (`/api/stats/ticker`) الوصول إلى طرف ثالث حقيقي ولا تنتظر مهلته.
+  process.env.PRICES_CACHE_TTL_MS = String(24 * 60 * 60 * 1000);
+  pricesService.clearCache();
+  pricesFailing = false;
+  pricesFxBody = null;
+  pricesGoldOunces = 4000;
+  const pricesWarmup = await api('GET', '/api/prices');
+  assert.strictEqual(pricesWarmup.status, 200, 'نسخة الكاش الأخيرة تُملأ قبل إغلاق المصدر');
+  delete process.env.PRICES_FX_URL;
+  delete process.env.PRICES_GOLD_URL;
+  await new Promise(resolve => pricesServer.close(resolve));
 
   const leftoverAvatar = await db.queryOne('SELECT avatar_url FROM users WHERE id = ?', [avatarUser.id]);
   if (leftoverAvatar && leftoverAvatar.avatar_url && leftoverAvatar.avatar_url.startsWith('/uploads/')) {

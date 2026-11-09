@@ -3,16 +3,23 @@
 /**
  * «آخر خبر» — قارئ أخبار المحافظة من منصة كترا الإخبارية (تذكرة وجهة «خدماتنا»).
  *
- * مساران عامّان بلا مصادقة: القائمة والتفصيل. `optionalAuthenticate` ليس
+ * مسارا الأخبار عامّان بلا مصادقة: القائمة والتفصيل. `optionalAuthenticate` ليس
  * مصادقة بل ما يجعل `regionIdForRequest` ترى محافظة **حساب** القارئ حين لا
  * ترويسة `X-Region` — نفس عقد `/api/services/providers` حرفياً. لا رمز يُرفق
  * من الويب أصلاً (`apiFetch` بلا `auth`).
+ *
+ * **و`GET /api/prices` (تذكرة #189) هنا لا في `stats.routes.js`، وعمداً:** هو
+ * الوجه الثاني لطرف خارجي يُقرأ ويُطبَّع ويُكاش في الذاكرة بلا SQL — أي نمط هذا
+ * الملف نفسه حرفياً؛ و`stats.routes.js` يخدم حساباً من **قاعدتنا** وحدها. أما
+ * إلحاق `prices` بشريط الإحصائيات فمكانه هناك لأنه تعديل عقد الشريط نفسه،
+ * والخدمة واحدة (`prices.service.js`) في الحالين.
  */
 
 const express = require('express');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const news = require('../services/news.service');
+const prices = require('../services/prices.service');
 const townsService = require('../services/towns.service');
 const { optionalAuthenticate } = require('../middleware/auth');
 const { regionIdForRequest } = require('../middleware/region');
@@ -66,6 +73,15 @@ router.get('/news/:id', asyncHandler(async (req, res) => {
   // خبر مخفيّ أو محذوف عند المصدر يصل هنا `null` — لا نُفصح عن أكثر من ذلك.
   if (!item) throw ApiError.notFound('الخبر غير موجود');
   res.json({ success: true, item });
+}));
+
+/**
+ * أسعار الذهب والعملات (تذكرة #189) — عام بلا مصادقة ولا محافظة: سعر السوق
+ * واحد لكل زائر، ولا شيء فيه يخصّ صاحبه. الكاش والتطبيع في الخدمة وحدها،
+ * وفشل المصدرين بلا نسخة محفوظة يخرج 503 برسالة عربية من الخدمة نفسها.
+ */
+router.get('/prices', asyncHandler(async (req, res) => {
+  res.json({ success: true, ...(await prices.getPrices()) });
 }));
 
 module.exports = router;

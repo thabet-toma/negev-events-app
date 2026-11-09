@@ -12,25 +12,25 @@
 
 | الوحدة | الملفات | الأسطر |
 |---|---|---|
-| `server/src` | 82 | 27161 |
-| `web` | 8 | 20636 |
-| `mobile/lib` | 67 | 31831 |
+| `server/src` | 83 | 27441 |
+| `web` | 8 | 20949 |
+| `mobile/lib` | 69 | 32626 |
 
 ### توزيع `server/src`
 
 | المجلد/الملف | الملفات | الأسطر |
 |---|---|---|
 | `app.js` | 1 | 136 |
-| `config/` | 1 | 143 |
+| `config/` | 1 | 156 |
 | `constants.js` | 1 | 378 |
 | `db/` | 4 | 2852 |
 | `jobs/` | 1 | 351 |
 | `middleware/` | 6 | 799 |
 | `privacyNotice.js` | 1 | 115 |
 | `realtime/` | 2 | 85 |
-| `routes/` | 25 | 6549 |
-| `services/` | 28 | 14883 |
-| `utils/` | 12 | 870 |
+| `routes/` | 25 | 6573 |
+| `services/` | 29 | 15118 |
+| `utils/` | 12 | 878 |
 
 ### ملفات `web/*.js`
 
@@ -38,7 +38,7 @@
 |---|---|
 | `admin.js` | 8122 |
 | `api.js` | 137 |
-| `app.js` | 11508 |
+| `app.js` | 11821 |
 | `config.js` | 32 |
 | `occasionForm.js` | 361 |
 | `serve.js` | 149 |
@@ -51,11 +51,11 @@
 
 | المجلد/الملف | الملفات | الأسطر |
 |---|---|---|
-| `api/` | 2 | 2330 |
+| `api/` | 2 | 2338 |
 | `config.dart` | 1 | 69 |
 | `main.dart` | 1 | 273 |
-| `models/` | 11 | 2603 |
-| `screens/` | 20 | 20774 |
+| `models/` | 12 | 2714 |
+| `screens/` | 21 | 21450 |
 | `state/` | 18 | 1859 |
 | `theme.dart` | 1 | 296 |
 | `widgets/` | 13 | 3627 |
@@ -69,12 +69,12 @@
 | رفع صورة أو وسيط | `server/src/middleware/upload.js:152` · `server/src/services/cloudinary.service.js:194` |
 | الصلاحيات والمصادقة | `server/src/middleware/auth.js:47` · `server/src/routes/admin.routes.js:25` |
 | بثّ لحظي (Socket.IO) | `server/src/realtime/index.js:27` · `server/src/routes/admin.routes.js:128` |
-| واجهة الويب | `web/app.js:339` · `web/admin.js` · `web/api.js:60` |
-| تطبيق الموبايل | `mobile/lib/api/negev_api.dart:22` · `mobile/lib/screens/` · `mobile/lib/models/` |
+| واجهة الويب | `web/app.js:349` · `web/admin.js` · `web/api.js:60` |
+| تطبيق الموبايل | `mobile/lib/api/negev_api.dart:23` · `mobile/lib/screens/` · `mobile/lib/models/` |
 
 قاعدة الطبقات: المسار يتحقق والخدمة تستعلم — لا SQL خارج `server/src/services/`، ولا `req`/`res` داخلها.
 
-## ٣. نقاط API — 217
+## ٣. نقاط API — 218
 
 المسار الكامل = جذر التركيب في `server/src/app.js` + تركيب الراوتر في `server/src/routes/index.js` + المسار داخل الملف.
 راوترات `share.routes.js` تُركَّب على الجذور `/e` `/p` `/a` `/person` `/live` `/v` مباشرةً في `server/src/app.js`، لا تحت `/api`.
@@ -237,8 +237,8 @@
 | GET | `/api/my-photos` | `authenticate` | `server/src/routes/albums.routes.js:136` |
 | DELETE | `/api/my-reminders` | `authenticate` | `server/src/routes/events.routes.js:1088` |
 | GET | `/api/my-reminders` | `authenticate` | `server/src/routes/events.routes.js:954` |
-| GET | `/api/news` | `optionalAuthenticate` | `server/src/routes/news.routes.js:43` |
-| GET | `/api/news/:id` | — | `server/src/routes/news.routes.js:63` |
+| GET | `/api/news` | `optionalAuthenticate` | `server/src/routes/news.routes.js:50` |
+| GET | `/api/news/:id` | — | `server/src/routes/news.routes.js:70` |
 | GET | `/api/nokoot` | `authenticate` | `server/src/routes/nokoot.routes.js:16` |
 | POST | `/api/nokoot` | `authenticate` | `server/src/routes/nokoot.routes.js:21` |
 | DELETE | `/api/nokoot/:id` | `authenticate` | `server/src/routes/nokoot.routes.js:37` |
@@ -259,6 +259,7 @@
 | POST | `/api/photos/:id/reports` | `authenticate` | `server/src/routes/albums.routes.js:167` |
 | POST | `/api/photos/:id/tags` | `authenticate` | `server/src/routes/albums.routes.js:146` |
 | DELETE | `/api/photos/:id/tags/me` | `authenticate` | `server/src/routes/albums.routes.js:161` |
+| GET | `/api/prices` | — | `server/src/routes/news.routes.js:83` |
 | POST | `/api/privacy/analytics-erasure` | `authenticate` | `server/src/routes/privacy.routes.js:46` |
 | POST | `/api/privacy/deletion-request` | — | `server/src/routes/privacy.routes.js:86` |
 | GET | `/api/privacy/notice` | — | `server/src/routes/privacy.routes.js:37` |
@@ -271,7 +272,7 @@
 | POST | `/api/services/providers` | `authenticate` | `server/src/routes/services.routes.js:96` |
 | GET | `/api/services/providers/:id` | — | `server/src/routes/services.routes.js:89` |
 | GET | `/api/settings/public` | — | `server/src/routes/settings.routes.js:268` |
-| GET | `/api/stats/ticker` | — | `server/src/routes/stats.routes.js:29` |
+| GET | `/api/stats/ticker` | — | `server/src/routes/stats.routes.js:34` |
 | GET | `/api/stories` | `optionalAuthenticate` | `server/src/routes/stories.routes.js:48` |
 | POST | `/api/stories/:id/click` | `optionalAuthenticate` | `server/src/routes/stories.routes.js:87` |
 | POST | `/api/stories/:id/report` | `authenticate` | `server/src/routes/stories.routes.js:96` |

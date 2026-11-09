@@ -10,12 +10,40 @@ import 'package:negev_events/main.dart';
 import 'package:negev_events/screens/news_screen.dart';
 import 'package:negev_events/screens/services_calculators_screen.dart';
 import 'package:negev_events/screens/services_hub_screen.dart';
+import 'package:negev_events/screens/services_prices_screen.dart';
 import 'package:negev_events/state/auth_store.dart';
 import 'package:negev_events/state/realtime.dart';
 import 'package:negev_events/theme.dart';
 
+/// ردّ `/api/prices` كما يعيده الخادم (تذكرة #189): أسعار مزيّفة صحيحة الأرقام،
+/// والغرام ٢٤ = ٥٠٠ شيكل فتصير ٢١ = ٤٣٧٫٥ و١٨ = ٣٧٥ (والخادم هو من يقرّب).
+/// `source_time` و`fx_date` فيه كي يُختبر عرض التاريخ لا مجرّد الحساب — ووقت
+/// المصدر ٢٢:٣٠Z عمداً: تاريخه **المحلي** في القدس «١٠ نوفمبر»، فلو عُرض بتوقيت
+/// الجهاز لسقط تأكيد «٩ نوفمبر»؛ المعروض تقويم المصدر (UTC).
+const Map<String, dynamic> pricesFixture = {
+  'success': true,
+  'gold': {
+    'k24': 500.0,
+    'k21': 437.5,
+    'k18': 375.0,
+    'currency': 'ILS',
+    'source_time': '2026-11-09T22:30:00Z',
+  },
+  'currencies': [
+    {'code': 'USD', 'name_ar': 'دولار أمريكي', 'ils_per_unit': 4.0},
+    {'code': 'EUR', 'name_ar': 'يورو', 'ils_per_unit': 5.0},
+    {'code': 'GBP', 'name_ar': 'جنيه إسترليني', 'ils_per_unit': 8.0},
+    {'code': 'JOD', 'name_ar': 'دينار أردني', 'ils_per_unit': 2.0},
+    {'code': 'EGP', 'name_ar': 'جنيه مصري', 'ils_per_unit': 0.04},
+    {'code': 'TRY', 'name_ar': 'ليرة تركية', 'ils_per_unit': 0.0625},
+  ],
+  'fx_date': '2026-11-09',
+  'stale': false,
+};
+
 /// عميل وهمي لشاشة «خدماتنا»: `/api/news` يعيد تغذية فارغة (الشاشة المدفوعة
-/// تجلبها عند فتحها)، وما عداها ردّ ناجح بلا جسم. لا يُفتح أي رابط خارجي هنا.
+/// تجلبها عند فتحها)، و`/api/prices` ردّ الأسعار المزيّف أعلاه، وما عداها ردّ
+/// ناجح بلا جسم. لا يُفتح أي رابط خارجي هنا.
 NegevApi hubApi() {
   final client = MockClient((request) async {
     if (request.url.path.endsWith('/api/news')) {
@@ -30,6 +58,36 @@ NegevApi hubApi() {
           'has_more': false,
         }),
         200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
+    }
+    if (request.url.path.endsWith('/api/prices')) {
+      return http.Response(
+        jsonEncode(pricesFixture),
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
+    }
+    return http.Response(
+      jsonEncode({'success': true}),
+      200,
+      headers: {'content-type': 'application/json; charset=utf-8'},
+    );
+  });
+  return NegevApi(ApiClient(client: client));
+}
+
+/// عميل وهمي يفشل في `/api/prices` وحده (503 عربية كما يفعل الخادم) — لحالة
+/// «لا تصل الأسعار»: الأداتان وتاريخهما يختفيان، والسطر العربي يبقى.
+NegevApi failingPricesApi() {
+  final client = MockClient((request) async {
+    if (request.url.path.endsWith('/api/prices')) {
+      return http.Response(
+        jsonEncode({
+          'success': false,
+          'message': 'تعذّر جلب أسعار الذهب والعملات الآن',
+        }),
+        503,
         headers: {'content-type': 'application/json; charset=utf-8'},
       );
     }
@@ -240,6 +298,139 @@ void main() {
         find.byType(ServicesHubScreen, skipOffstage: false),
         findsOneWidget,
       );
+    });
+  });
+
+  group('أداتا الأسعار — حاسبة الذهب ومحوّل العملات (#189)', () {
+    testWidgets('بطاقتاهما تحت الحاسبات وتفتحان شاشة الأسعار على أداتها', (
+      tester,
+    ) async {
+      await pumpHub(tester, hubApi());
+
+      expect(find.text('أسعار الذهب والعملات'), findsOneWidget);
+      expect(
+        find.textContaining('وحاسبتان تعملان بالسعر الواصل وتُظهران تاريخه'),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('hub_prices_gold')), findsOneWidget);
+      expect(find.byKey(const Key('hub_prices_fx')), findsOneWidget);
+
+      // البطاقتان بعد الحاسبات المحلية في الترتيب نفسه (الذهب ثم العملات).
+      final lastCalcRect = tester.getRect(
+        find.byKey(const Key('hub_calc_hijri')),
+      );
+      final goldRect = tester.getRect(find.byKey(const Key('hub_prices_gold')));
+      final fxRect = tester.getRect(find.byKey(const Key('hub_prices_fx')));
+      expect(goldRect.top, greaterThan(lastCalcRect.top));
+      expect(fxRect.top, greaterThan(goldRect.top));
+
+      await tester.tap(find.byKey(const Key('hub_prices_gold')));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ServicesPricesScreen), findsOneWidget);
+      expect(
+        find.byType(ServicesHubScreen, skipOffstage: false),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('حاسبة الذهب تضرب الوزن في سعر العيار وتُظهر تاريخ المصدر', (
+      tester,
+    ) async {
+      await pumpHub(tester, hubApi());
+
+      await tester.tap(find.byKey(const Key('hub_prices_gold')));
+      await tester.pumpAndSettle();
+
+      // تاريخ المصدر ظاهر قبل أي حساب — تاريخ gold-api لا لحظة الجلب.
+      expect(
+        find.text('تاريخ سعر الذهب: ٩ نوفمبر ٢٠٢٦ — المصدر: gold-api.'),
+        findsOneWidget,
+      );
+
+      await tester.enterText(
+        find.byKey(const Key('prices_gold_weight')),
+        '10',
+      );
+      await tester.tap(find.byKey(const Key('prices_gold_karat_21')));
+      await tester.tap(find.byKey(const Key('prices_gold_run')));
+      await tester.pump();
+
+      // ١٠ غرام × ٤٣٧٫٥٠ = ٤٬٣٧٥٫٠٠ — بلا مصنعية، والعبارة نفسها في النتيجة.
+      expect(
+        find.text(
+          'قيمة المعدن بلا مصنعية: ٤٬٣٧٥ ₪ — '
+          'سعر غرام عيار ٢١ نحو ٤٣٧٫٥٠ ₪.',
+        ),
+        findsOneWidget,
+      );
+
+      // عيار آخر يعيد الحساب من سعره هو (٥٠٠ للغرام): ١٠ × ٥٠٠ = ٥٬٠٠٠.
+      await tester.tap(find.byKey(const Key('prices_gold_karat_24')));
+      await tester.tap(find.byKey(const Key('prices_gold_run')));
+      await tester.pump();
+      expect(
+        find.textContaining('قيمة المعدن بلا مصنعية: ٥٬٠٠٠ ₪'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('محوّل العملات يحوّل في الاتجاهين بسعر ils_per_unit ويعرض التاريخ', (
+      tester,
+    ) async {
+      await pumpHub(tester, hubApi());
+
+      await tester.tap(find.byKey(const Key('hub_prices_fx')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('تاريخ سعر الصرف: ٩ نوفمبر ٢٠٢٦ — المصدر: Frankfurter.'),
+        findsOneWidget,
+      );
+
+      await tester.enterText(find.byKey(const Key('prices_fx_amount')), '400');
+      await tester.tap(find.byKey(const Key('prices_fx_currency_USD')));
+      await tester.tap(find.byKey(const Key('prices_fx_run')));
+      await tester.pump();
+      expect(
+        find.text(
+          '٤٠٠ ₪ = ١٠٠٫٠٠ دولار أمريكي بسعر ٤٫٠٠٠٠ ₪ للوحدة الواحدة.',
+        ),
+        findsOneWidget,
+      );
+
+      // الاتجاه المعاكس: ٤٠٠ دولار × ٤ = ١٬٦٠٠ شيكل.
+      await tester.tap(find.byKey(const Key('prices_fx_to_ils')));
+      await tester.tap(find.byKey(const Key('prices_fx_run')));
+      await tester.pump();
+      expect(
+        find.text(
+          '٤٠٠٫٠٠ دولار أمريكي = ١٬٦٠٠ ₪ بسعر ٤٫٠٠٠٠ ₪ للوحدة الواحدة.',
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('حين لا تصل الأسعار تُخفى الأداة وتاريخها ويبقى سطر عربي واحد', (
+      tester,
+    ) async {
+      await pumpHub(tester, failingPricesApi());
+
+      await tester.tap(find.byKey(const Key('hub_prices_gold')));
+      await tester.pumpAndSettle();
+
+      expect(find.text(pricesUnavailableMessage), findsOneWidget);
+      expect(
+        find.byKey(const Key('prices_gold_weight')),
+        findsNothing,
+        reason: 'لا حاسبة بسعر مخترع',
+      );
+      expect(
+        find.byKey(const Key('prices_gold_source')),
+        findsNothing,
+        reason: 'ولا تاريخ وهمي',
+      );
+      expect(find.byKey(const Key('prices_retry')), findsOneWidget);
     });
   });
 }

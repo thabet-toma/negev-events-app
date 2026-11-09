@@ -137,6 +137,20 @@ const config = {
   katraNewsCacheTtlMs: toInt(process.env.KATRA_NEWS_CACHE_TTL_MS, 300000),
   katraNewsTimeoutMs: toInt(process.env.KATRA_NEWS_TIMEOUT_MS, 5000),
 
+  // أسعار الذهب والعملات (وجهة «خدماتنا» ← الحاسبتان، تذكرة #189) — مصدران
+  // خارجيان وحدهما، بلا جدول عندنا. بلا هذين العنوانين يعمل كل شيء آخر كما هو،
+  // ومسار `/api/prices` يردّ 503 عربياً حين يتعذّر الوصول إليهما (والشريط يبقى
+  // بلا أسعار). الخدمة تقرأ البيئة عند كل استدعاء أيضاً، انظر
+  // prices.service.js — كما في katraNewsBaseUrl أعلاه.
+  prices: {
+    fxUrl: process.env.PRICES_FX_URL || 'https://api.frankfurter.dev/v2/rates',
+    goldUrl: process.env.PRICES_GOLD_URL || 'https://api.gold-api.com/price/XAU',
+    // ساعة كاملة: سعران لا يتحرّكان كل ثانية، وكل طلب يمرّ إلى طرفين خارجيين
+    // يجعل بطأهما عطلاً لنا.
+    cacheTtlMs: toInt(process.env.PRICES_CACHE_TTL_MS, 60 * 60 * 1000),
+    timeoutMs: toInt(process.env.PRICES_TIMEOUT_MS, 5000)
+  },
+
   // Facebook Page Integration (auto-publishing approved events)
   facebook: {
     pageId: process.env.FACEBOOK_PAGE_ID || null,
