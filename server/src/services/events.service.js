@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
 const occasionTypes = require('./occasionTypes.service');
@@ -609,6 +610,10 @@ async function removeRsvp(eventId, userId) {
  *
  * Over the two faces (account and share_page) the totals count both, so
  * the owner's number is the same number the public counter shows.
+ *
+ * كل صفّ يحمل `invite` (تذكرة #183): `{ id, name, opened_at }` للجواب الذي جاء
+ * من دعوة شخصية، و`null` لغيره — «مين جاي» ترسم منه «دعوة: فلان — فُتحت/لم
+ * تُفتح». والهاتف يبقى خارج كل استعلام في هذا الملف.
  */
 async function listEventRsvps(eventId, user) {
   const { clause, params } = await adminScope.ownerOrTownScopeClause(user, 'e');
@@ -624,10 +629,12 @@ async function listEventRsvps(eventId, user) {
     `SELECT er.id,
             COALESCE(u.full_name, er.guest_name) AS name,
             er.response, er.party_size, er.source,
-            er.created_at, er.updated_at
+            er.created_at, er.updated_at,
+            ei.id AS invite_id, ei.name AS invite_name, ei.opened_at AS invite_opened_at
        FROM event_rsvps er
        JOIN events e ON e.id = er.event_id
        LEFT JOIN users u ON u.id = er.user_id
+       LEFT JOIN event_invites ei ON ei.id = er.invite_id
       WHERE er.event_id = ?${clause}
       ORDER BY er.response DESC, er.created_at ASC, er.id ASC`,
     [eventId, ...params]
@@ -640,7 +647,12 @@ async function listEventRsvps(eventId, user) {
     party_size: Number(row.party_size),
     source: row.source,
     created_at: row.created_at,
-    updated_at: row.updated_at
+    updated_at: row.updated_at,
+    // الدعوة الشخصية التي جاء منها الجواب (تذكرة #183): `null` لجواب عادي.
+    // `opened_at` يُقرأ من صفّ الدعوة نفسه، فلا عمود ثانٍ ولا حساب في العميل.
+    invite: row.invite_id === null
+      ? null
+      : { id: row.invite_id, name: row.invite_name || '', opened_at: row.invite_opened_at }
   }));
 
   const goingRows = rsvps.filter(rsvp => rsvp.response === 'yes');
@@ -697,20 +709,188 @@ async function guestRsvpContext(eventId) {
  *
  * **`guest_phone` لا يغادر هذا الملف:** الصفّ يُكتب، والقيمة المُعادة عدّاداتٌ
  * وحدها (`rsvpCountersForEvent`) — لا هاتف ولا اسم.
+ *
+ * **`inviteId` (تذكرة #183):** يُمرَّر حين جاء الجواب من صفحة دعوة شخصية
+ * (`/e/:id/i/:token`)، فيُكتب في الصفّ **وفي `ON DUPLICATE KEY UPDATE`** معاً —
+ * إعادة الجواب بالهاتف نفسه تحدّث الاسم والعدد **والإشارة إلى الدعوة**، فلا يبقى
+ * الصفّ مربوطاً بدعوة اختار صاحبها جواباً من صفحة المناسبة العامة بعدها. والجواب
+ * العادي (بلا دعوة) يمرّره `null` صراحةً.
  */
-async function setGuestRsvp(eventId, { name, phone, response, partySize }) {
+async function setGuestRsvp(eventId, { name, phone, response, partySize, inviteId = null }) {
   const context = await guestRsvpContext(eventId);
   if (!context) throw ApiError.notFound('هذه المناسبة لا تقبل تأكيد الحضور');
 
   await db.execute(
-    `INSERT INTO event_rsvps (event_id, user_id, guest_name, guest_phone, response, party_size, source)
-     VALUES (?, NULL, ?, ?, ?, ?, 'share_page')
+    `INSERT INTO event_rsvps (event_id, user_id, guest_name, guest_phone, invite_id, response, party_size, source)
+     VALUES (?, NULL, ?, ?, ?, ?, ?, 'share_page')
      ON DUPLICATE KEY UPDATE guest_name = VALUES(guest_name), response = VALUES(response),
-       party_size = VALUES(party_size), source = 'share_page'`,
-    [eventId, name, phone, response, partySize]
+       party_size = VALUES(party_size), invite_id = VALUES(invite_id), source = 'share_page'`,
+    [eventId, name, phone, inviteId, response, partySize]
   );
 
   return { ...await rsvpCountersForEvent(eventId, context) };
+}
+
+// --- الدعوات الشخصية: «أهلاً فلان» (تذكرة #183) --------------------
+//
+// صاحب المناسبة ينشئ لكل ضيف دعوةً برابط `/e/:id/i/<token>`، والصفحة تعرض اسم
+// الضيف ونموذج الحضور نفسه من #169 باسمه مسبقاً. القواعد هنا:
+//
+// - **الحكم داخل استعلام الخدمة** بنفس `adminScope.ownerOrTownScopeClause` الذي
+//   يستعمله `listEventRsvps` — لا في طبقة المسار — والرفض **404 لا 403** كي لا
+//   يُؤكَّد وجود مناسبة لمن لا يملكها.
+// - **التوكِن عشوائي من `crypto`**: 32 حرفاً hex، ولا يُشتقّ من الاسم ولا من
+//   المعرّف — توكِن يُخمَّن يعني قائمة ضيوف مكشوفة لمن يجرّب.
+// - **الهاتف لا يدخل استعلاماً هنا أصلاً**، كحال «مين جاي».
+
+/** توكِن دعوة واحد: 32 حرفاً hex صغيراً من مولّد العشوائية النظامي. */
+function inviteToken() {
+  return crypto.randomBytes(16).toString('hex');
+}
+
+/**
+ * هل هذا نصّ توكِن دعوة بالشكل الوحيد الذي يولّده الخادم؟ يُستعمل في الصفحة
+ * والمسار معاً، فلا يُقارَن رمزٌ قصير أو بحروف كبيرة بقاعدة البيانات أصلاً —
+ * والرمز الخاطئ والشكل الخاطئ كلاهما 404 موحّدة بلا تفريق.
+ */
+const INVITE_TOKEN_PATTERN = /^[0-9a-f]{32}$/;
+
+function isInviteToken(value) {
+  return typeof value === 'string' && INVITE_TOKEN_PATTERN.test(value);
+}
+
+/**
+ * بوابة الملكية للمناسبة: شرط النطاق وفحص الوجود في استعلام واحد، أو 404.
+ * مشتركة بين الوظائف الأربع هنا، والشرط نفسه يبنيه
+ * `adminScope.ownerOrTownScopeClause` كما في `listEventRsvps` — وهو ما يمنع
+ * افتراق قائمة الدعوات عن قائمة الحضور يوماً. وتُعاد القطعة مع معاملاتها
+ * ليستعملها الاستعلام الرئيسي أيضاً بلا بناء ثانٍ.
+ */
+async function eventManagementScope(eventId, user) {
+  const { clause, params } = await adminScope.ownerOrTownScopeClause(user, 'e');
+  const event = await db.queryOne(`SELECT e.id FROM events e WHERE e.id = ?${clause}`, [eventId, ...params]);
+  if (!event) throw ApiError.notFound('المناسبة غير موجودة');
+  return { clause, params };
+}
+
+/**
+ * إدراج دعوة واحدة بتوكِن جديد، وإعادة التوليد عند تصادم المفتاح الفريد.
+ * `ER_DUP_ENTRY` هنا لا يعني شيئاً آخر: `token` هو المفتاح الفريد الوحيد على
+ * `event_invites` غير المعرّف الذاتي. وإعادة المحاولة في المعاملة نفسها آمنة —
+ * خطأ تكرار المفتاح على `INSERT` لا يُسقط معاملة InnoDB. وبعد ثلاث إعادات
+ * يُرمى الخطأ أخيراً بدل حلقة لا تنتهي؛ والنصّ عربي لأنه قد يصل المستخدم.
+ */
+const INVITE_TOKEN_RETRIES = 3;
+
+async function insertInviteWithFreshToken(connection, eventId, name) {
+  for (let attempt = 0; ; attempt += 1) {
+    const token = inviteToken();
+    try {
+      const [result] = await connection.execute(
+        'INSERT INTO event_invites (event_id, name, token) VALUES (?, ?, ?)',
+        [eventId, name, token]
+      );
+      return { id: result.insertId, name, token };
+    } catch (err) {
+      if (err.code !== 'ER_DUP_ENTRY' || attempt >= INVITE_TOKEN_RETRIES) {
+        if (err.code === 'ER_DUP_ENTRY') {
+          throw ApiError.conflict('تعذّر توليد رابط دعوة فريد — أعد المحاولة');
+        }
+        throw err;
+      }
+      logger.warn(`[invites] token collision on event ${eventId}, regenerating (attempt ${attempt + 1}).`);
+    }
+  }
+}
+
+/**
+ * إنشاء دعوة لكل اسم في الطلب، في **معاملة واحدة**: قائمة منتصفة الإنشاء ليست
+ * نتيجة يريدها صاحب المناسبة، والأسماء نفسها قد تتكرّر (ضيفان باسم واحد) فلا
+ * مفتاح فريد على `name`.
+ */
+async function createEventInvites(eventId, names, user) {
+  await eventManagementScope(eventId, user);
+
+  return db.transaction(async connection => {
+    const created = [];
+    for (const name of names) {
+      created.push(await insertInviteWithFreshToken(connection, eventId, name));
+    }
+    return created;
+  });
+}
+
+/**
+ * دعوات المناسبة بترتيب إنشائها، لكل واحدة جوابها إن وُجد — `LEFT JOIN` واحد
+ * على `event_rsvps.invite_id`، وشرط النطاق نفسه الذي يحمله `listEventRsvps`
+ * (‏`clause` على الصفّ المُنضَمّ، بعد فحص الوجود أولاً) فلا تفترق القائمتان.
+ * ووصفٌّ واحد للجواب لا أكثر: يُقرأ الصفّ ذو أكبر `id` (`MAX(latest.id)`) —
+ * أحدثُ صفٍّ **إنشاءً**، لا أحدثُ جوابٍ تحديثاً — لأن توكِن واحداً قد يجيب منه
+ * أكثر من هاتف (ضيفان في بيت واحد)، وقائمة الدعوات صفٌّ لكل **دعوة**. فإعادةُ
+ * جوابٍ على صفٍّ قائم لا تجعله هو الظاهر.
+ */
+async function listEventInvites(eventId, user) {
+  const { clause, params } = await eventManagementScope(eventId, user);
+
+  const rows = await db.query(
+    `SELECT i.id, i.name, i.token, i.opened_at,
+            er.response AS rsvp_response, er.party_size AS rsvp_party_size
+       FROM event_invites i
+       JOIN events e ON e.id = i.event_id
+       LEFT JOIN event_rsvps er
+              ON er.id = (SELECT MAX(latest.id) FROM event_rsvps latest WHERE latest.invite_id = i.id)
+      WHERE i.event_id = ?${clause}
+      ORDER BY i.created_at ASC, i.id ASC`,
+    [eventId, ...params]
+  );
+
+  return rows.map(row => ({
+    id: row.id,
+    name: row.name,
+    token: row.token,
+    opened_at: row.opened_at,
+    rsvp: row.rsvp_response === null
+      ? null
+      : { response: row.rsvp_response, party_size: Number(row.rsvp_party_size) }
+  }));
+}
+
+/**
+ * حذف دعوة واحدة من هذه المناسبة. الشرطان في `DELETE` نفسه: الملكية (بفحص
+ * المناسبة أعلاه) والانتماء (`id = ? AND event_id = ?`) — فدعوة مناسبة أخرى
+ * تعطي 404 لا حذفاً. والجواب يبقى: القيد `ON DELETE SET NULL` يفكّ الإشارة وحدها.
+ */
+async function deleteEventInvite(eventId, inviteId, user) {
+  await eventManagementScope(eventId, user);
+
+  const result = await db.execute(
+    'DELETE FROM event_invites WHERE id = ? AND event_id = ?',
+    [inviteId, eventId]
+  );
+  if (!result.affectedRows) throw ApiError.notFound('الدعوة غير موجودة');
+}
+
+/**
+ * دعوة بصفحتها العامة: الصفّ أو `null` بلا رمي — صفحة الدعوة تسأل «دعوة أو لا»،
+ * والـ404 الموحّدة قرار المسار لا قرار هذا النداء. ولا هاتف ولا صفوف أجوبة هنا.
+ */
+async function resolveInvite(eventId, token) {
+  return db.queryOne(
+    'SELECT id, name, token, opened_at FROM event_invites WHERE event_id = ? AND token = ?',
+    [eventId, token]
+  );
+}
+
+/**
+ * «فُتحت الدعوة» — تُكتب **مرة واحدة**: `WHERE opened_at IS NULL` يجعل الفتح
+ * الثاني (والثالث) بلا أثر، فلا يتغيّر التاريخ الذي يقرؤه صاحب المناسبة.
+ * والفشل يُسجَّل عند المستدعي ولا يُسقط الصفحة: تسجيل الفتح لا يستحق صفحة 500.
+ */
+async function markInviteOpened(inviteId) {
+  await db.execute(
+    'UPDATE event_invites SET opened_at = NOW() WHERE id = ? AND opened_at IS NULL',
+    [inviteId]
+  );
 }
 
 /**
@@ -3235,6 +3415,12 @@ module.exports = {
   guestRsvpOpen,
   guestRsvpContext,
   setGuestRsvp,
+  isInviteToken,
+  createEventInvites,
+  listEventInvites,
+  deleteEventInvite,
+  resolveInvite,
+  markInviteOpened,
   myListBucket,
   listMyReminders,
   listLiveAnnouncements,

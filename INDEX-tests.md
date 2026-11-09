@@ -3,7 +3,7 @@
 > **مولَّد من `server/scripts/build-index.js` — لا تحرّره بيدك؛ شغّل `npm run index:build`.**
 > ملحق `INDEX.md`: كل حالة `await test(` في ملفَي الاختبار، مرتّبة بالملف ثم السطر.
 
-## حالات الاختبار — 1304
+## حالات الاختبار — 1319
 
 `npm test` يشغّل `web-dom` ثم `smoke`؛ `smoke` يحتاج MySQL حيّة، وكل حالة معرَّفة داخل ملفها.
 
@@ -772,34 +772,45 @@
 | `طلب الضيف يستهلك دلو /api المجهول المشترك، حتى لو أُرفق رمز صالح` | `server/test/smoke.test.js:18132` |
 | `الطلب الحادي عشر من IP واحد في الساعة يعطي 429 بصفحة عربية` | `server/test/smoke.test.js:18168` |
 | `نصّا الخصوصية وADR-0006 محدَّثان بجمع اسم الضيف وهاتفه والإشارة إلى ADR-0015` | `server/test/smoke.test.js:18222` |
-| `PATCH /api/admin/events/:id/featured يكتب featured_until، والمبرزة تتصدّر تغذية محافظتها بـis_featured منطقية` | `server/test/smoke.test.js:18327` |
-| `الرابعة النشِطة في المحافظة نفسها 409 عربية، والرابعة في محافظة أخرى تُقبل` | `server/test/smoke.test.js:18363` |
-| `إلغاء الإبراز بـnull يعيد الصفّ لمكانه ويُفرّغ مقعد السقف` | `server/test/smoke.test.js:18410` |
-| `تاريخ انتهى (أمس) لا يُبرز: is_featured false والصفّ لا يتصدّر` | `server/test/smoke.test.js:18439` |
-| `أدمن خارج نطاق المناسبة يُردّ 404 لا 403 ولا يُكتب شيء، وأدمن داخله يمرّ` | `server/test/smoke.test.js:18455` |
-| `تاريخ الإبراز يُتحقَّق في validate.js: صيغة خاطئة 400، وغياب المفتاح 400 لا إلغاء صامت` | `server/test/smoke.test.js:18485` |
-| `الترقيم لا ينكسر: COUNT(*) يعدّ الصفوف نفسها، والمبرزة تظهر مرة واحدة عبر الصفحات` | `server/test/smoke.test.js:18506` |
-| `السقف يحرس الانتقال إلى نشِط وحده: تاريخ مستقبلي لصفّ غير مبرز 409، وتاريخ منقضٍ له 200` | `server/test/smoke.test.js:18535` |
-| `طلبان متزامنان لإبراز مناسبتين مختلفتين بمقعد حرّ واحد: أحدهما 200 والآخر 409، والنشِطة لا تتجاوز السقف` | `server/test/smoke.test.js:18573` |
-| `GET /api/stats/ticker عام — كل صفّ { region_id, name, upcoming_count }، وtotal مجموع الصفوف، وupdated_at لحظة` | `server/test/smoke.test.js:18691` |
-| `عدّ المحافظة يطابق القائمة العامة نفسها — المعلّقة والمجدولة لا تُعدّان` | `server/test/smoke.test.js:18722` |
-| `مناسبة «بالرابط فقط» معتمدة وقادمة لا تُعدّ في الشريط` | `server/test/smoke.test.js:18763` |
-| `مناسبة انتهى امتدادها لا تُعدّ «قادمة» — وهي معتمدة ويجدها زائر في الأرشيف` | `server/test/smoke.test.js:18779` |
-| `الطلب الثاني خلال الكاش لا يستعلم شيئاً، وupdated_at لحظة التعبئة نفسها` | `server/test/smoke.test.js:18801` |
-| `الكاش هو ما يجمّد الرقم: مناسبة قادمة ثالثة لا تُحتسب حتى تنتهي مدّته، ثم تُحتسب` | `server/test/smoke.test.js:18839` |
-| `Set up: مناسبة عرس ومناسبة عزاء معتمدتان لصاحب البطاقة` | `server/test/smoke.test.js:18995` |
-| `GET /api/card-templates عام: ١٢ قالباً وأربعة مقاسات وخمس عائلات خطوط` | `server/test/smoke.test.js:19039` |
-| `المعاينة تعيد image/png بالمقاس المصغّر الصحيح للمقاسات الأربعة` | `server/test/smoke.test.js:19067` |
-| `الحفظ يعيد رابطاً بالمقاس الكامل لكل مقاس، وكل بطاقة أساسية وحدها` | `server/test/smoke.test.js:19090` |
-| `download.png يفضّل البطاقة الأساسية على الملصق: مقاس الناتج = مقاس البطاقة المحفوظة + الشريط (#182)` | `server/test/smoke.test.js:19127` |
-| `غير المالك يُردّ بـ404 في القائمة والحفظ والمعاينة` | `server/test/smoke.test.js:19140` |
-| `اختيار بلا لون أو قالب أو مقاس يُردّ 400 عربية لا 500` | `server/test/smoke.test.js:19182` |
-| `طلب مرفوض بملف لا يترك صورة يتيمة في uploads` | `server/test/smoke.test.js:19203` |
-| `العزاء لا يرى إلا قوالب النبرة الهادئة — ولو أُرسل قالب فرح رُدّ 400` | `server/test/smoke.test.js:19244` |
-| `البطاقة الأساسية تصير og:image، وحذفها يعيد البطاقة المولَّدة` | `server/test/smoke.test.js:19281` |
-| `PATCH يجعل البطاقة المطلوبة أساسية وحدها` | `server/test/smoke.test.js:19321` |
-| `photo_source: upload يحفظ صورة المصدر ويُبقي photo_url حيّة` | `server/test/smoke.test.js:19343` |
-| `معاينة متكررة تتجاوز الحدّ ⇒ 429 برسالة عربية` | `server/test/smoke.test.js:19386` |
+| `Set up: عرس معتمد قادم، وعرس معتمد انتهى، وعزاء معتمد — كلها لحساب واحد` | `server/test/smoke.test.js:18276` |
+| `إنشاء ثلاثة أسماء يعيد ثلاثة روابط مختلفة، توكين كلٍّ منها ٣٢ حرفاً hex` | `server/test/smoke.test.js:18309` |
+| `غير المالك وأدمن خارج البلدة: 404 للمسارات الثلاثة — وأدمن البلدة يقرأ` | `server/test/smoke.test.js:18347` |
+| `صفحة الدعوة 200: «أهلاً <الاسم>» والاسم مسبقاً والتوكِن مخفيّ، noindex، بلا <script>` | `server/test/smoke.test.js:18379` |
+| `الفتح الأول يكتب opened_at، والثاني لا يغيّره` | `server/test/smoke.test.js:18414` |
+| `الجواب من الدعوة يكتب invite_id ويعود إلى صفحة الدعوة، ويظهر في «مين جاي»` | `server/test/smoke.test.js:18449` |
+| `جواب عادي بلا دعوة يبقى invite_id = NULL ويبقى على صفحة المناسبة` | `server/test/smoke.test.js:18496` |
+| `رمز خاطئ أو غير موجود أو لا يخصّ المناسبة: 404 الموحّدة بلا كتابة` | `server/test/smoke.test.js:18517` |
+| `مناسبة انتهت أو نوع مطفأ: صفحة الدعوة 404 ولو كان رمزها صحيحاً` | `server/test/smoke.test.js:18553` |
+| `حذف الدعوة لا يحذف الجواب: invite_id يصير NULL والصفّ يبقى في «مين جاي»` | `server/test/smoke.test.js:18569` |
+| `قائمة أسماء فارغة أو زائدة أو اسم فارغ: 400 عربية بلا صفّ جديد` | `server/test/smoke.test.js:18607` |
+| `PATCH /api/admin/events/:id/featured يكتب featured_until، والمبرزة تتصدّر تغذية محافظتها بـis_featured منطقية` | `server/test/smoke.test.js:18724` |
+| `الرابعة النشِطة في المحافظة نفسها 409 عربية، والرابعة في محافظة أخرى تُقبل` | `server/test/smoke.test.js:18760` |
+| `إلغاء الإبراز بـnull يعيد الصفّ لمكانه ويُفرّغ مقعد السقف` | `server/test/smoke.test.js:18807` |
+| `تاريخ انتهى (أمس) لا يُبرز: is_featured false والصفّ لا يتصدّر` | `server/test/smoke.test.js:18836` |
+| `أدمن خارج نطاق المناسبة يُردّ 404 لا 403 ولا يُكتب شيء، وأدمن داخله يمرّ` | `server/test/smoke.test.js:18852` |
+| `تاريخ الإبراز يُتحقَّق في validate.js: صيغة خاطئة 400، وغياب المفتاح 400 لا إلغاء صامت` | `server/test/smoke.test.js:18882` |
+| `الترقيم لا ينكسر: COUNT(*) يعدّ الصفوف نفسها، والمبرزة تظهر مرة واحدة عبر الصفحات` | `server/test/smoke.test.js:18903` |
+| `السقف يحرس الانتقال إلى نشِط وحده: تاريخ مستقبلي لصفّ غير مبرز 409، وتاريخ منقضٍ له 200` | `server/test/smoke.test.js:18932` |
+| `طلبان متزامنان لإبراز مناسبتين مختلفتين بمقعد حرّ واحد: أحدهما 200 والآخر 409، والنشِطة لا تتجاوز السقف` | `server/test/smoke.test.js:18970` |
+| `GET /api/stats/ticker عام — كل صفّ { region_id, name, upcoming_count }، وtotal مجموع الصفوف، وupdated_at لحظة` | `server/test/smoke.test.js:19088` |
+| `عدّ المحافظة يطابق القائمة العامة نفسها — المعلّقة والمجدولة لا تُعدّان` | `server/test/smoke.test.js:19119` |
+| `مناسبة «بالرابط فقط» معتمدة وقادمة لا تُعدّ في الشريط` | `server/test/smoke.test.js:19160` |
+| `مناسبة انتهى امتدادها لا تُعدّ «قادمة» — وهي معتمدة ويجدها زائر في الأرشيف` | `server/test/smoke.test.js:19176` |
+| `الطلب الثاني خلال الكاش لا يستعلم شيئاً، وupdated_at لحظة التعبئة نفسها` | `server/test/smoke.test.js:19198` |
+| `الكاش هو ما يجمّد الرقم: مناسبة قادمة ثالثة لا تُحتسب حتى تنتهي مدّته، ثم تُحتسب` | `server/test/smoke.test.js:19236` |
+| `Set up: مناسبة عرس ومناسبة عزاء معتمدتان لصاحب البطاقة` | `server/test/smoke.test.js:19392` |
+| `GET /api/card-templates عام: ١٢ قالباً وأربعة مقاسات وخمس عائلات خطوط` | `server/test/smoke.test.js:19436` |
+| `المعاينة تعيد image/png بالمقاس المصغّر الصحيح للمقاسات الأربعة` | `server/test/smoke.test.js:19464` |
+| `الحفظ يعيد رابطاً بالمقاس الكامل لكل مقاس، وكل بطاقة أساسية وحدها` | `server/test/smoke.test.js:19487` |
+| `download.png يفضّل البطاقة الأساسية على الملصق: مقاس الناتج = مقاس البطاقة المحفوظة + الشريط (#182)` | `server/test/smoke.test.js:19524` |
+| `غير المالك يُردّ بـ404 في القائمة والحفظ والمعاينة` | `server/test/smoke.test.js:19537` |
+| `اختيار بلا لون أو قالب أو مقاس يُردّ 400 عربية لا 500` | `server/test/smoke.test.js:19579` |
+| `طلب مرفوض بملف لا يترك صورة يتيمة في uploads` | `server/test/smoke.test.js:19600` |
+| `العزاء لا يرى إلا قوالب النبرة الهادئة — ولو أُرسل قالب فرح رُدّ 400` | `server/test/smoke.test.js:19641` |
+| `البطاقة الأساسية تصير og:image، وحذفها يعيد البطاقة المولَّدة` | `server/test/smoke.test.js:19678` |
+| `PATCH يجعل البطاقة المطلوبة أساسية وحدها` | `server/test/smoke.test.js:19718` |
+| `photo_source: upload يحفظ صورة المصدر ويُبقي photo_url حيّة` | `server/test/smoke.test.js:19740` |
+| `معاينة متكررة تتجاوز الحدّ ⇒ 429 برسالة عربية` | `server/test/smoke.test.js:19783` |
 | `web/index.html + config.js + api.js + app.js load together in a jsdom document with no source change` | `server/test/web-dom.test.js:1007` |
 | `switchTab('tabAdd') actually builds the publish form — dynamicFormFields stops being empty` | `server/test/web-dom.test.js:1039` |
 | `the publish form carries a «سهرة الشباب» field for a type that defines one` | `server/test/web-dom.test.js:1059` |
@@ -1291,25 +1302,29 @@
 | `«مين جاي» يرسم الأسماء والعدد والجواب والمصدر والمجاميع` | `server/test/web-dom.test.js:17752` |
 | `زرّ «مين جاي» يرسمه «مناسباتي» لمناسبة نوعها مفتوح، ويغيب عن غيرها` | `server/test/web-dom.test.js:17776` |
 | `فتح «مين جاي» يقرأ GET /api/events/:id/rsvps بالرمز، ويُظهر رسالة الخادم عند الرفض` | `server/test/web-dom.test.js:17793` |
-| `كرت العرس يحمل الأفعال الثلاثة، والعزاء «عزّي» وحده بلا عدّاد، ونوع بلا rsvp_enabled بلا «جاي»` | `server/test/web-dom.test.js:17867` |
-| `«جاي» من الكرت يسجّل الجواب بعدد 1 ويُفعّل «ذكّرني» ظاهراً` | `server/test/web-dom.test.js:17908` |
-| `«بارك» يفتح ورقة «اختر رسالة» برسائل النوع، واختيار رسالة يفتح التبريك بنصّها قابلاً للتعديل` | `server/test/web-dom.test.js:17960` |
-| `إغلاق ورقة الرسائل أثناء جلب الأنواع لا يرمي ولا يكتب إلى الورقة المغلقة` | `server/test/web-dom.test.js:18028` |
-| `ردّ ورقة رسائل قديمة لا يستبدل حالة ورقة جديدة أو محتواها` | `server/test/web-dom.test.js:18053` |
-| `ورقة الرسائل لا تُكتب من الكود: نوع بلا رسائل نشِطة يفتح باب الكتابة وحده` | `server/test/web-dom.test.js:18083` |
-| `عدّادات صفحة المناسبة: مهتمين وتبريكات حين يرسلهما الخادم، ويغيبان حين يطفئهما النوع أو تكون النغمة وقورة` | `server/test/web-dom.test.js:18111` |
-| `بلا اختيار محفوظ وجهاز داكن: لا data-theme على <html> والأيقونة شمس` | `server/test/web-dom.test.js:18145` |
-| `اختيار محفوظ dark يُطبَّق على <html> لحظة تحميل السكربت — قبل أول رسم` | `server/test/web-dom.test.js:18162` |
-| `toggleTheme يقلب المظهر ويكتبه في localStorage ويحدّث الأيقونة` | `server/test/web-dom.test.js:18176` |
-| `قيمة محفوظة فاسدة تُتجاهَل: لا data-theme، والنظام يحكم` | `server/test/web-dom.test.js:18197` |
-| `theme-color يتبع المظهر الظاهر، وقيمتاه هما --ground في styles.css` | `server/test/web-dom.test.js:18222` |
-| `الصفحات الخمس تحمّل theme-boot.js في <head> قبل أول نمط` | `server/test/web-dom.test.js:18238` |
-| `لوحة الإدارة تحترم الاختيار المحفوظ عبر theme-boot نفسه` | `server/test/web-dom.test.js:18256` |
-| `لا متغيّر CSS مستعمل وغير معرَّف في styles.css ولا admin.css` | `server/test/web-dom.test.js:18273` |
-| `«مناسبتي» وصفحة المناسبة تحملان «صمّم بطاقة» و«ارفع بطاقتك الجاهزة» لصاحبها` | `server/test/web-dom.test.js:18399` |
-| `فتح الستوديو يجلب الكتالوج ويعرض قوالب النبرة الاحتفالية وحدها` | `server/test/web-dom.test.js:18429` |
-| `مناسبة العزاء ترى قالب العزاء وحده (#180)` | `server/test/web-dom.test.js:18453` |
-| `«معاينة» ترسل القالب والمقاس المختارين وتعرض الـblob العائد` | `server/test/web-dom.test.js:18468` |
-| `«حفظ البطاقة» يرسل POST ويعرض رابط المقاس الكامل` | `server/test/web-dom.test.js:18505` |
-| `فشل الشبكة في المعاينة يظهر رسالة عربية بلا انهيار` | `server/test/web-dom.test.js:18531` |
-| `429 في المعاينة والحفظ: «حاول بعد قليل» (#180)` | `server/test/web-dom.test.js:18552` |
+| `فتح «الدعوات» يقرأ GET /api/events/:id/invites بالرمز ويرسم الاسم والرابط وحالة الفتح والجواب` | `server/test/web-dom.test.js:17849` |
+| `«أنشئ الدعوات» يرسل POST بأسماء السطور غير الفارغة، و«حذف» يرسل DELETE على المسار نفسه` | `server/test/web-dom.test.js:17907` |
+| `«مين جاي» يعرض سطر الدعوة لصفّها وحده: الاسم و«فُتحت»/«لم تُفتح»` | `server/test/web-dom.test.js:17954` |
+| `زرّ «الدعوات» يُرسم بجانب «مين جاي» بنفس شرط النوع` | `server/test/web-dom.test.js:17992` |
+| `كرت العرس يحمل الأفعال الثلاثة، والعزاء «عزّي» وحده بلا عدّاد، ونوع بلا rsvp_enabled بلا «جاي»` | `server/test/web-dom.test.js:18047` |
+| `«جاي» من الكرت يسجّل الجواب بعدد 1 ويُفعّل «ذكّرني» ظاهراً` | `server/test/web-dom.test.js:18088` |
+| `«بارك» يفتح ورقة «اختر رسالة» برسائل النوع، واختيار رسالة يفتح التبريك بنصّها قابلاً للتعديل` | `server/test/web-dom.test.js:18140` |
+| `إغلاق ورقة الرسائل أثناء جلب الأنواع لا يرمي ولا يكتب إلى الورقة المغلقة` | `server/test/web-dom.test.js:18208` |
+| `ردّ ورقة رسائل قديمة لا يستبدل حالة ورقة جديدة أو محتواها` | `server/test/web-dom.test.js:18233` |
+| `ورقة الرسائل لا تُكتب من الكود: نوع بلا رسائل نشِطة يفتح باب الكتابة وحده` | `server/test/web-dom.test.js:18263` |
+| `عدّادات صفحة المناسبة: مهتمين وتبريكات حين يرسلهما الخادم، ويغيبان حين يطفئهما النوع أو تكون النغمة وقورة` | `server/test/web-dom.test.js:18291` |
+| `بلا اختيار محفوظ وجهاز داكن: لا data-theme على <html> والأيقونة شمس` | `server/test/web-dom.test.js:18325` |
+| `اختيار محفوظ dark يُطبَّق على <html> لحظة تحميل السكربت — قبل أول رسم` | `server/test/web-dom.test.js:18342` |
+| `toggleTheme يقلب المظهر ويكتبه في localStorage ويحدّث الأيقونة` | `server/test/web-dom.test.js:18356` |
+| `قيمة محفوظة فاسدة تُتجاهَل: لا data-theme، والنظام يحكم` | `server/test/web-dom.test.js:18377` |
+| `theme-color يتبع المظهر الظاهر، وقيمتاه هما --ground في styles.css` | `server/test/web-dom.test.js:18402` |
+| `الصفحات الخمس تحمّل theme-boot.js في <head> قبل أول نمط` | `server/test/web-dom.test.js:18418` |
+| `لوحة الإدارة تحترم الاختيار المحفوظ عبر theme-boot نفسه` | `server/test/web-dom.test.js:18436` |
+| `لا متغيّر CSS مستعمل وغير معرَّف في styles.css ولا admin.css` | `server/test/web-dom.test.js:18453` |
+| `«مناسبتي» وصفحة المناسبة تحملان «صمّم بطاقة» و«ارفع بطاقتك الجاهزة» لصاحبها` | `server/test/web-dom.test.js:18579` |
+| `فتح الستوديو يجلب الكتالوج ويعرض قوالب النبرة الاحتفالية وحدها` | `server/test/web-dom.test.js:18609` |
+| `مناسبة العزاء ترى قالب العزاء وحده (#180)` | `server/test/web-dom.test.js:18633` |
+| `«معاينة» ترسل القالب والمقاس المختارين وتعرض الـblob العائد` | `server/test/web-dom.test.js:18648` |
+| `«حفظ البطاقة» يرسل POST ويعرض رابط المقاس الكامل` | `server/test/web-dom.test.js:18685` |
+| `فشل الشبكة في المعاينة يظهر رسالة عربية بلا انهيار` | `server/test/web-dom.test.js:18711` |
+| `429 في المعاينة والحفظ: «حاول بعد قليل» (#180)` | `server/test/web-dom.test.js:18732` |

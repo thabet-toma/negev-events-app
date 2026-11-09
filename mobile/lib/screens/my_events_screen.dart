@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../api/negev_api.dart';
 import '../main.dart';
 import '../models/event.dart';
+import '../state/share_event.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
 import '../widgets/auth_action_button.dart';
@@ -88,6 +90,19 @@ class _MyEventsScreenState extends State<MyEventsScreen> {
     );
   }
 
+  /// «الدعوات» (تذكرة #183) — إنشاء دعوة لكل ضيف ومشاركة روابطها، بنفس شرط
+  /// رسم «مين جاي» لأن الضيف لا يجيب إلا على نوع تقبل الحضور.
+  Future<void> _openInvites(Event event) async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _InvitesDialog(
+        api: AppServices.of(context).api,
+        eventId: event.id,
+        title: event.displayTitle,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -150,15 +165,30 @@ class _MyEventsScreenState extends State<MyEventsScreen> {
                     ),
                     // «مين جاي» (تذكرة #168) — صاحب المناسبة وحده، ولهذا الشاشة
                     // مناسباته وحدها. الأسماء والعدد والمصدر من `GET .../rsvps`،
-                    // بلا هاتف: الخادم لا يرسله في أي ردّ.
+                    // بلا هاتف: الخادم لا يرسله في أي ردّ. ومعها «الدعوات»
+                    // (تذكرة #183) بنفس الشرط: الضيف لا يجيب إلا على نوع تقبل
+                    // الحضور، فالشرط نفسه يفتح البابين.
                     if (event.occasionType?.rsvpEnabled == true &&
                         event.occasionType?.isSolemn != true)
                       Padding(
                         padding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
-                        child: TextButton.icon(
-                          onPressed: () => _openRsvpList(event),
-                          icon: const Icon(Icons.how_to_reg_outlined, size: 18),
-                          label: const Text('مين جاي'),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: TextButton.icon(
+                                onPressed: () => _openRsvpList(event),
+                                icon: const Icon(Icons.how_to_reg_outlined, size: 18),
+                                label: const Text('مين جاي'),
+                              ),
+                            ),
+                            Expanded(
+                              child: TextButton.icon(
+                                onPressed: () => _openInvites(event),
+                                icon: const Icon(Icons.mail_outline, size: 18),
+                                label: const Text('الدعوات'),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                   ],
@@ -278,8 +308,15 @@ class _RsvpListDialogState extends State<_RsvpListDialog> {
                             ),
                           ),
                           subtitle: Text(
-                            '${rsvpSourceLabels[rsvp.source] ?? rsvp.source} — '
-                            'العدد: ${rsvp.partySize}',
+                            [
+                              '${rsvpSourceLabels[rsvp.source] ?? rsvp.source} — '
+                                  'العدد: ${rsvp.partySize}',
+                              // سطر الدعوة (تذكرة #183): الاسم الذي كتبه صاحب
+                              // المناسبة، وهل فُتحت الدعوة — أو لا سطر لجواب عادي.
+                              if (rsvp.invite != null)
+                                'دعوة: ${rsvp.invite!.name} — '
+                                    '${rsvp.invite!.isOpened ? 'فُتحت' : 'لم تُفتح'}',
+                            ].join('\n'),
                             style: TextStyle(
                               fontSize: 12,
                               color: context.c.inkFaint,
@@ -308,6 +345,247 @@ class _RsvpListDialogState extends State<_RsvpListDialog> {
           child: const Text('إغلاق'),
         ),
       ],
+    );
+  }
+}
+
+/// «الدعوات» (تذكرة #183) — صاحب المناسبة يُنشئ لكل ضيف دعوةً برابط
+/// `/e/:id/i/<token>` يقول «أهلاً <الاسم>» وفيه نموذج الحضور باسمه مسبقاً.
+///
+/// كل شيء من الخادم: الأسماء والروابط المطلقة (`url`) وحالة الفتح (`opened_at`)
+/// والجواب. ولا يبني العميل رابطاً بنفسه، ولا يعرف سقف الأسماء — الرفض 400
+/// برسالة عربية من الخادم يُعرض كما وصل. والهاتف لا يصل في أي استجابة.
+class _InvitesDialog extends StatefulWidget {
+  const _InvitesDialog({
+    required this.api,
+    required this.eventId,
+    required this.title,
+  });
+
+  final NegevApi api;
+  final int eventId;
+  final String title;
+
+  @override
+  State<_InvitesDialog> createState() => _InvitesDialogState();
+}
+
+class _InvitesDialogState extends State<_InvitesDialog> {
+  late Future<EventInviteList> _future;
+  final TextEditingController _namesController = TextEditingController();
+  bool _creating = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = widget.api.eventInvites(widget.eventId);
+  }
+
+  @override
+  void dispose() {
+    _namesController.dispose();
+    super.dispose();
+  }
+
+  void _reload() {
+    // جسم كتلة لا سهم: `setState(() => _future = …)` يجعل التعبير يعيد `Future`،
+    // وFlutter يرفض ذلك في وضع التنقيح ويرمي **قبل** `markNeedsBuild` — فلا
+    // تُعاد القائمة بعد الحذف أبداً. الكتلة تعيد `null` فيُعلَّم العنصر للبناء.
+    setState(() {
+      _future = widget.api.eventInvites(widget.eventId);
+    });
+  }
+
+  /// اسم في كل سطر، والسطور الفارغة تُسقَط — كصندوق الويب نفسه.
+  List<String> _typedNames() => _namesController.text
+      .split('\n')
+      .map((line) => line.trim())
+      .where((line) => line.isNotEmpty)
+      .toList();
+
+  Future<void> _create() async {
+    final names = _typedNames();
+    if (names.isEmpty) {
+      showMessage(context, 'اكتب اسماً واحداً على الأقل — اسم في كل سطر',
+          isError: true);
+      return;
+    }
+
+    setState(() => _creating = true);
+    try {
+      final created = await widget.api.createEventInvites(widget.eventId, names);
+      if (!mounted) return;
+      _namesController.clear();
+      showMessage(
+        context,
+        created.length == 1 ? 'تم إنشاء الدعوة' : 'تم إنشاء ${created.length} دعوات',
+      );
+      _reload();
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', isError: true);
+    } finally {
+      if (mounted) setState(() => _creating = false);
+    }
+  }
+
+  Future<void> _delete(EventInvite invite) async {
+    try {
+      await widget.api.deleteEventInvite(widget.eventId, invite.id);
+      if (!mounted) return;
+      showMessage(context, 'تم حذف الدعوة');
+      _reload();
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', isError: true);
+    }
+  }
+
+  Future<void> _copy(EventInvite invite) async {
+    await Clipboard.setData(ClipboardData(text: invite.url));
+    if (!mounted) return;
+    showMessage(context, 'تم نسخ رابط الدعوة');
+  }
+
+  Future<void> _share(EventInvite invite) async {
+    await shareViaSystem(context, 'أهلاً ${invite.name}\n${invite.url}');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text('الدعوات الشخصية'),
+          const SizedBox(height: 4),
+          Text(
+            widget.title,
+            style: TextStyle(fontSize: 12.5, color: context.c.inkFaint),
+          ),
+        ],
+      ),
+      content: SizedBox(
+        width: 340,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _namesController,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: 'أسماء الضيوف — اسم في كل سطر',
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: _creating ? null : _create,
+                icon: const Icon(Icons.add, size: 18),
+                label: Text(_creating ? 'جارٍ الإنشاء…' : 'أنشئ الدعوات'),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Flexible(child: _invitesList()),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('إغلاق'),
+        ),
+      ],
+    );
+  }
+
+  Widget _invitesList() {
+    return FutureBuilder<EventInviteList>(
+      future: _future,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 18),
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        if (snapshot.hasError) {
+          return Text(
+            '${snapshot.error}',
+            style: TextStyle(color: context.c.danger, fontSize: 13),
+          );
+        }
+
+        final invites = snapshot.data?.invites ?? const <EventInvite>[];
+        if (invites.isEmpty) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Text(
+              'لا دعوات بعد — اكتب الأسماء أعلاه ثم اضغط «أنشئ الدعوات»',
+              style: TextStyle(color: context.c.inkFaint),
+            ),
+          );
+        }
+
+        return ListView.separated(
+          shrinkWrap: true,
+          itemCount: invites.length,
+          separatorBuilder: (_, _) => Divider(color: context.c.lineSoft),
+          itemBuilder: (context, index) {
+            final invite = invites[index];
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  invite.name,
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: context.c.ink,
+                  ),
+                ),
+                Text(
+                  invite.isOpened ? 'فُتحت' : 'لم تُفتح',
+                  style: TextStyle(fontSize: 12, color: context.c.inkFaint),
+                ),
+                if (invite.rsvp != null)
+                  Text(
+                    'الجواب: ${invite.rsvp!.isGoing ? 'جاي' : 'مش جاي'} — '
+                    'العدد ${invite.rsvp!.partySize}',
+                    style: TextStyle(fontSize: 12, color: context.c.inkSoft),
+                  ),
+                Text(
+                  invite.url,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 11, color: context.c.inkFaint),
+                ),
+                Wrap(
+                  children: [
+                    TextButton.icon(
+                      onPressed: () => _copy(invite),
+                      icon: const Icon(Icons.copy_all_outlined, size: 16),
+                      label: const Text('نسخ'),
+                    ),
+                    TextButton.icon(
+                      onPressed: () => _share(invite),
+                      icon: const Icon(Icons.share_outlined, size: 16),
+                      label: const Text('مشاركة'),
+                    ),
+                    TextButton.icon(
+                      onPressed: () => _delete(invite),
+                      icon: const Icon(Icons.delete_outline, size: 16),
+                      label: const Text('حذف'),
+                    ),
+                  ],
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 }

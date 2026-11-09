@@ -17827,6 +17827,186 @@ async function run() {
     );
   });
 
+  console.log('\nالدعوات الشخصية — الإنشاء والروابط وحالة الفتح في الويب (تذكرة #183)');
+
+  /**
+   * دعوة كما يعيدها `GET /api/events/:id/invites`: الرابط المطلق يبنيه الخادم
+   * من `PUBLIC_URL` والتوكِن، والواجهة تعرضه ولا تركّبه.
+   */
+  const INVITE_TOKEN_ONE = '0123456789abcdef0123456789abcdef';
+  function buildInvite(overrides = {}) {
+    return {
+      id: 901,
+      name: 'سالم أبو الخير',
+      token: INVITE_TOKEN_ONE,
+      url: `https://web.test/e/183/i/${INVITE_TOKEN_ONE}`,
+      opened_at: '2026-11-05T10:00:00.000Z',
+      rsvp: { response: 'yes', party_size: 2 },
+      ...overrides
+    };
+  }
+
+  await test('فتح «الدعوات» يقرأ GET /api/events/:id/invites بالرمز ويرسم الاسم والرابط وحالة الفتح والجواب', async () => {
+    const calls = [];
+    const base = buildFetchStub();
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (win) => {
+        win.fetch = async (url, options = {}) => {
+          const requestPath = String(url).split('?')[0];
+          calls.push({ path: requestPath, method: options.method || 'GET', headers: options.headers || {} });
+          if (requestPath === '/api/events/183/invites') {
+            return jsonResponse({
+              success: true,
+              invites: [
+                buildInvite(),
+                buildInvite({
+                  id: 902,
+                  name: 'مريم الاختبار',
+                  token: 'f'.repeat(32),
+                  url: `https://web.test/e/183/i/${'f'.repeat(32)}`,
+                  opened_at: null,
+                  rsvp: null
+                })
+              ]
+            });
+          }
+          return base(url, options);
+        };
+      }
+    });
+    const { window } = dom;
+
+    await window.openEventInvitesModal(183);
+
+    const read = calls.find(call => call.path === '/api/events/183/invites');
+    assert.ok(read, 'the list must come from the dedicated invites route');
+    assert.strictEqual(read.headers.Authorization, 'Bearer test-token-web-dom', 'and it must carry the session token');
+    assert.notStrictEqual(
+      window.document.getElementById('eventInvitesModal').style.display, 'none',
+      'the modal must actually open — a panel nobody sees is not a panel'
+    );
+
+    const body = window.document.getElementById('eventInvitesBody');
+    assert.ok(body.textContent.includes('سالم أبو الخير'), 'every invite is listed by the name the owner typed');
+    assert.ok(body.textContent.includes('مريم الاختبار'));
+    assert.ok(
+      body.textContent.includes(`https://web.test/e/183/i/${INVITE_TOKEN_ONE}`),
+      'the link is the one the server built — the page never rebuilds it'
+    );
+    assert.ok(body.textContent.includes('فُتحت'), 'an opened invite says so');
+    assert.ok(body.textContent.includes('لم تُفتح'), 'and an untouched one says that instead');
+    assert.ok(body.textContent.includes('جاي — 2'), 'the answer and its party size come from the server');
+    assert.ok(body.textContent.includes('لا جواب بعد'), 'an invite nobody answered from is marked as such');
+    assert.ok(
+      /copyEventInviteLink\(901\)/.test(body.innerHTML),
+      'each row offers a copy button for its own link'
+    );
+  });
+
+  await test('«أنشئ الدعوات» يرسل POST بأسماء السطور غير الفارغة، و«حذف» يرسل DELETE على المسار نفسه', async () => {
+    const calls = [];
+    const base = buildFetchStub();
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (win) => {
+        win.fetch = async (url, options = {}) => {
+          const requestPath = String(url).split('?')[0];
+          const method = options.method || 'GET';
+          calls.push({ path: requestPath, method, body: options.body, headers: options.headers || {} });
+          if (requestPath === '/api/events/183/invites' && method === 'POST') {
+            return jsonResponse({
+              success: true,
+              message: 'تم إنشاء 2 دعوات',
+              invites: [buildInvite(), buildInvite({ id: 902, name: 'مريم الاختبار' })]
+            }, { status: 201 });
+          }
+          if (requestPath === '/api/events/183/invites') {
+            return jsonResponse({ success: true, invites: [] });
+          }
+          if (requestPath === '/api/events/183/invites/901') {
+            return jsonResponse({ success: true, message: 'تم حذف الدعوة' });
+          }
+          return base(url, options);
+        };
+      }
+    });
+    const { window } = dom;
+
+    await window.openEventInvitesModal(183);
+    window.document.getElementById('eventInvitesNames').value = 'سالم أبو الخير\n\n  مريم الاختبار  ';
+    await window.createEventInvites();
+
+    const post = calls.find(call => call.method === 'POST' && call.path === '/api/events/183/invites');
+    assert.ok(post, 'the create button must POST to the invites route');
+    assert.deepStrictEqual(
+      JSON.parse(post.body), { names: ['سالم أبو الخير', 'مريم الاختبار'] },
+      'one name per line, trimmed, and the blank line dropped'
+    );
+    assert.strictEqual(post.headers.Authorization, 'Bearer test-token-web-dom');
+
+    await window.deleteEventInvite(901);
+    const del = calls.find(call => call.method === 'DELETE' && call.path === '/api/events/183/invites/901');
+    assert.ok(del, 'the row delete must reach the DELETE route for that invite only');
+    assert.strictEqual(del.headers.Authorization, 'Bearer test-token-web-dom');
+  });
+
+  await test('«مين جاي» يعرض سطر الدعوة لصفّها وحده: الاسم و«فُتحت»/«لم تُفتح»', () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    dom.window.renderRsvpList({
+      rsvps: [
+        {
+          id: 1, name: 'سالم أبو الخير', response: 'yes', party_size: 2, source: 'share_page',
+          invite: { id: 901, name: 'سالم أبو الخير', opened_at: '2026-11-05T10:00:00.000Z' }
+        },
+        { id: 2, name: 'ضيف بلا دعوة', response: 'yes', party_size: 1, source: 'share_page', invite: null }
+      ],
+      totals: { going_count: 3, going_rows: 2, not_going_rows: 0, total_rows: 2 }
+    });
+
+    const body = document.getElementById('rsvpListBody');
+    assert.ok(
+      body.textContent.includes('دعوة: سالم أبو الخير — فُتحت'),
+      'the invite line names the invite and says it was opened'
+    );
+    assert.strictEqual(
+      (body.textContent.match(/دعوة:/g) || []).length, 1,
+      'a plain answer gets no invite line — nothing is invented for it'
+    );
+
+    dom.window.renderRsvpList({
+      rsvps: [{
+        id: 3, name: 'مريم الاختبار', response: 'no', party_size: 1, source: 'share_page',
+        invite: { id: 902, name: 'مريم الاختبار', opened_at: null }
+      }],
+      totals: { going_count: 0, going_rows: 0, not_going_rows: 1, total_rows: 1 }
+    });
+    assert.ok(
+      document.getElementById('rsvpListBody').textContent.includes('دعوة: مريم الاختبار — لم تُفتح'),
+      'and an unopened invite says «لم تُفتح» — the state is the server\'s opened_at, not a guess'
+    );
+  });
+
+  await test('زرّ «الدعوات» يُرسم بجانب «مين جاي» بنفس شرط النوع', () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    dom.window.renderMyEvents([
+      { id: 200, status: 'approved', title: 'مناسبة الدعوات', town: 'رهط', event_date: '2026-12-31', occasion_type: RSVP_WEDDING_TYPE },
+      { id: 201, status: 'approved', title: 'مناسبة العزاء', town: 'رهط', event_date: '2026-12-31', occasion_type: { ...FUNERAL_TYPE, rsvp_enabled: true } },
+      { id: 202, status: 'approved', title: 'مناسبة مطفأة', town: 'رهط', event_date: '2026-12-31', occasion_type: { ...WEDDING_TYPE, rsvp_enabled: false } }
+    ]);
+
+    const html = document.getElementById('myEventsList').innerHTML;
+    assert.strictEqual((html.match(/openEventInvitesModal\(/g) || []).length, 1, 'exactly one row offers «الدعوات»');
+    assert.ok(html.includes('openEventInvitesModal(200)'), 'the open wedding type is the one that gets it');
+    assert.ok(!html.includes('openEventInvitesModal(201)'), 'a solemn type must not offer it even if the flag was flipped');
+    assert.ok(!html.includes('openEventInvitesModal(202)'), 'nor a type with the feature switched off');
+    assert.ok(html.includes('openRsvpListModal(200)'), 'and «مين جاي» sits beside it — the same condition, one row');
+  });
+
   console.log('\nالكرت ومحيطه — الأفعال والرسائل الجاهزة (تذكرة #170)');
 
   /** نوع عرس مفتوح لتأكيد الحضور برسائل جاهزة — الشكل نفسه الذي يعيده الخادم. */

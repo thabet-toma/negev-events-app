@@ -2569,6 +2569,60 @@ const steps = [
       );
       logger.info('[migrations] add-story-placement-2026-11: stories.placement added (existing rows: bar).');
     }
+  },
+  {
+    // الدعوات الشخصية (تذكرة #183): جدول `event_invites`، ثم المفتاح الأجنبي
+    // `event_rsvps.invite_id` الذي أُجّل عمداً في #169 (كان عموداً بلا قيد).
+    //
+    // `schema.sql` ينشئ الجدولين ومعهم القيد للتنصيبات الجديدة، أمّا قاعدة قائمة
+    // فجدولها `event_rsvps` موجود بلا القيد، و`CREATE TABLE IF NOT EXISTS` لا
+    // يضيف شيئاً — فلا يصلها التغيير إلا من هنا. والخطوة آمنة التكرار: الجدول
+    // محروس بـ`tableExists`، والفهرس بـ`indexExists`، والقيد بفحص
+    // `information_schema.KEY_COLUMN_USAGE` (‏`TABLE_CONSTRAINTS` تعرف المفتاح
+    // أيضاً، لكنّ `KEY_COLUMN_USAGE` تقول إلى أيّ جدول يُشير — وهو ما يهمّ هنا).
+    //
+    // **`ON DELETE SET NULL` هو المقصود:** حذف دعوة **لا** يحذف الجواب الذي
+    // جمعته — يبقى الصفّ باسمه وعدده في «مين جاي» ويفقد الإشارة إلى دعوة لم تعد.
+    // ولا صفّ قائم يفشل عند إضافة القيد: العمود لم يكتب فيه شيء قبل هذه التذكرة،
+    // فكلّ ما فيه NULL.
+    name: 'add-event-invites-2026-11',
+    async run(connection) {
+      if (!(await tableExists(connection, 'event_invites'))) {
+        await connection.query(`
+          CREATE TABLE event_invites (
+            id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            event_id   INT UNSIGNED NOT NULL,
+            name       VARCHAR(120) NOT NULL,
+            token      CHAR(32)     NOT NULL,
+            opened_at  TIMESTAMP    NULL DEFAULT NULL,
+            created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_event_invites_token (token),
+            KEY idx_event_invites_event (event_id),
+            CONSTRAINT fk_event_invites_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+        logger.info('[migrations] add-event-invites-2026-11: event_invites table created.');
+      }
+
+      if (!(await indexExists(connection, 'event_rsvps', 'idx_event_rsvps_invite'))) {
+        await connection.query('ALTER TABLE event_rsvps ADD INDEX idx_event_rsvps_invite (invite_id)');
+        logger.info('[migrations] add-event-invites-2026-11: idx_event_rsvps_invite added.');
+      }
+
+      const [[inviteFk]] = await connection.execute(
+        `SELECT COUNT(*) AS cnt FROM information_schema.KEY_COLUMN_USAGE
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'event_rsvps'
+            AND CONSTRAINT_NAME = 'fk_event_rsvps_invite' AND REFERENCED_TABLE_NAME = 'event_invites'`
+      );
+      if (!Number(inviteFk.cnt)) {
+        await connection.query(
+          'ALTER TABLE event_rsvps ADD CONSTRAINT fk_event_rsvps_invite '
+          + 'FOREIGN KEY (invite_id) REFERENCES event_invites(id) ON DELETE SET NULL'
+        );
+        logger.info('[migrations] add-event-invites-2026-11: fk_event_rsvps_invite added.');
+      }
+    }
   }
 ];
 

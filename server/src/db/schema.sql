@@ -417,6 +417,26 @@ CREATE TABLE IF NOT EXISTS event_reminders (
   CONSTRAINT fk_event_reminders_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- The personal invite behind «أهلاً فلان» (تذكرة #183): one row per guest the
+-- owner names, opened at `/e/:id/i/<token>`. `token` is 32 hex characters from
+-- `crypto.randomBytes(16)` and never derived from the name or the id — a
+-- guessable token would hand anyone the owner's guest list — and it is the only
+-- thing that URL carries. `opened_at` is written once, on the first open, by
+-- `UPDATE … WHERE opened_at IS NULL`, and never again; a wrong token answers
+-- with the same page-not-found as a missing event, so it never confirms one.
+CREATE TABLE IF NOT EXISTS event_invites (
+  id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  event_id   INT UNSIGNED NOT NULL,
+  name       VARCHAR(120) NOT NULL,
+  token      CHAR(32)     NOT NULL,
+  opened_at  TIMESTAMP    NULL DEFAULT NULL,
+  created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_event_invites_token (token),
+  KEY idx_event_invites_event (event_id),
+  CONSTRAINT fk_event_invites_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- «جاي / مش جاي» — a real attendance answer, unlike the follow above (#140/#146,
 -- ADR-0015). Two faces share the table and are told apart by `source`:
 --   account     a signed-in user answers from the app or web/ (تذكرة #168).
@@ -426,10 +446,12 @@ CREATE TABLE IF NOT EXISTS event_reminders (
 --               what makes re-submitting the same phone an UPDATE, not a second row.
 -- `guest_phone` is the guest face's duplicate key and its abuse control, and it
 -- never leaves the server: no response of any route selects it.
--- `invite_id` is deliberately a plain nullable column with NO foreign key: the
--- personal-invite table (`event_invites`) arrives in a later ticket, and adding
--- the reference now would either block this migration or force that ticket's
--- table to be written here. Left unused until then, on purpose.
+-- `invite_id` points at the personal invite this answer came from
+-- (`event_invites` above, تذكرة #183). `ON DELETE SET NULL` is the whole point
+-- of the reference: deleting an invite must never delete the answer it
+-- collected — the row keeps its name and count in «مين جاي» and simply stops
+-- naming an invite that no longer exists. A plain answer (account, or the share
+-- page opened without an invite) keeps it NULL.
 CREATE TABLE IF NOT EXISTS event_rsvps (
   id          INT UNSIGNED    NOT NULL AUTO_INCREMENT,
   event_id    INT UNSIGNED    NOT NULL,
@@ -446,11 +468,13 @@ CREATE TABLE IF NOT EXISTS event_rsvps (
   UNIQUE KEY uq_event_rsvps_user (event_id, user_id),
   UNIQUE KEY uq_event_rsvps_guest_phone (event_id, guest_phone),
   KEY idx_event_rsvps_event_response (event_id, response),
-  -- `user_id` ليس أوّل عمود في المفتاح الفريد، فمفتاحه الأجنبي يحتاج فهرساً
-  -- صريحاً بدل الفهرس الضمني الذي تنشئه MySQL باسمها.
+  -- `user_id` و`invite_id` ليس أيّ منهما أوّل عمود في مفتاح فريد، فمفتاحهما
+  -- الأجنبي يحتاج فهرساً صريحاً بدل الفهرس الضمني الذي تنشئه MySQL باسمها.
   KEY idx_event_rsvps_user (user_id),
+  KEY idx_event_rsvps_invite (invite_id),
   CONSTRAINT fk_event_rsvps_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
-  CONSTRAINT fk_event_rsvps_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  CONSTRAINT fk_event_rsvps_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_event_rsvps_invite FOREIGN KEY (invite_id) REFERENCES event_invites(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- The public trace of a critical date amendment, written only once an admin
