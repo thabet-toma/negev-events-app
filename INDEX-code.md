@@ -263,9 +263,9 @@
 | `resolveByName` | `server/src/services/people.service.js:226` |
 | `listForAdmin` | `server/src/services/people.service.js:226` |
 | `mergeTwo` | `server/src/services/people.service.js:226` |
-| `getPrices` | `server/src/services/prices.service.js:265` |
-| `clearCache` | `server/src/services/prices.service.js:266` |
-| `PRICES_UNAVAILABLE_MESSAGE` | `server/src/services/prices.service.js:267` |
+| `getPrices` | `server/src/services/prices.service.js:350` |
+| `clearCache` | `server/src/services/prices.service.js:351` |
+| `PRICES_UNAVAILABLE_MESSAGE` | `server/src/services/prices.service.js:352` |
 | `eraseAnalyticsForUser` | `server/src/services/privacy.service.js:226` |
 | `createRequest` | `server/src/services/privacy.service.js:227` |
 | `listRequests` | `server/src/services/privacy.service.js:228` |
@@ -2038,8 +2038,8 @@
 | `FACEBOOK_PAGE_ID_2` | `server/src/config/index.js:161` |
 | `FACEBOOK_PAGE_ACCESS_TOKEN_2` | `server/src/config/index.js:162`, `server/src/config/index.js:166` |
 | `KATRA_NEWS_BASE_URL` | `server/src/config/index.js:134`, `server/src/services/news.service.js:48` |
-| `PRICES_FX_URL` | `server/src/config/index.js:146`, `server/src/services/prices.service.js:70` |
-| `PRICES_GOLD_URL` | `server/src/config/index.js:147`, `server/src/services/prices.service.js:76` |
+| `PRICES_FX_URL` | `server/src/config/index.js:146`, `server/src/services/prices.service.js:74` |
+| `PRICES_GOLD_URL` | `server/src/config/index.js:147`, `server/src/services/prices.service.js:80` |
 
 ### متغيرات إضافية يقرؤها `server/src`
 
@@ -2050,5 +2050,5 @@
 | `KATRA_NEWS_CACHE_TTL_MS` | `server/src/config/index.js:137`, `server/src/services/news.service.js:54` |
 | `KATRA_NEWS_TIMEOUT_MS` | `server/src/config/index.js:138`, `server/src/services/news.service.js:61` |
 | `LOG_LEVEL` | `server/src/utils/logger.js:4` |
-| `PRICES_CACHE_TTL_MS` | `server/src/config/index.js:150`, `server/src/services/prices.service.js:82` |
-| `PRICES_TIMEOUT_MS` | `server/src/config/index.js:151`, `server/src/services/prices.service.js:88` |
+| `PRICES_CACHE_TTL_MS` | `server/src/config/index.js:150`, `server/src/services/prices.service.js:86` |
+| `PRICES_TIMEOUT_MS` | `server/src/config/index.js:151`, `server/src/services/prices.service.js:92` |

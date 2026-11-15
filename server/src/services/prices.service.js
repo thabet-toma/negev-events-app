@@ -26,6 +26,10 @@
  * خارجي لا في طلب الزائر.
  */
 
+const dns = require('node:dns');
+const http = require('node:http');
+const https = require('node:https');
+
 const config = require('../config');
 const ApiError = require('../utils/ApiError');
 const logger = require('../utils/logger');
@@ -190,23 +194,104 @@ function normaliseGoldPrice(payload, ilsPerUsd) {
 }
 
 /**
+ * محلّل عناوين يفرض IPv4، **مقصوراً على النداء الخارجي الذي يُمرَّر إليه** — لا
+ * monkey-patching على `dns.lookup` العام ولا تثبيت عنوان IP (عنوان المصدر يتغيّر).
+ *
+ * السبب: حاوية الإنتاج Alpine/musl. مضيف `api.gold-api.com` يجيب سجل A وحده
+ * ويردّ NXDOMAIN على AAAA، فتُسقط musl نتيجة getaddrinfo كلها حين يُطلب
+ * الاثنان، بينما `dns.lookup(host, { family: 4 })` ينجح. `fetch` لا يسمح
+ * بتمرير عائلة الحل، و`http(s).get` يسمح بخيار `lookup` هذا.
+ *
+ * خيارات `net` تُمرَّر كما هي (ومنها `all` في مسار autoSelectFamily) إلا
+ * `family` فتُثبَّت 4، فلا يُطلب IPv6 في هذا النداء إطلاقاً.
+ */
+function lookupIPv4(hostname, options, callback) {
+  dns.lookup(hostname, { ...options, family: 4 }, callback);
+}
+
+/** أقصى تحويلات يتبعها النداء الواحد — سلوك `fetch` نفسه، بسقف أضيق يمنع الحلقة. */
+const MAX_REDIRECTS = 3;
+
+/**
  * نداء واحد إلى مصدر خارجي. أي خروج عن العقد — شبكة، مهلة، 5xx، نصّ غير JSON،
  * جسم بلا `price`/`rates` — يرمي، والقرار (آخر نسخة أو 503) لمن يستدعيه.
+ *
+ * يُبنى على `http(s).get` لا `fetch` لسببين: تمرير `lookup` أعلاه، وإبقاء اتباع
+ * التحويلات الذي كان `fetch` يفعله. والتحقّق من الشهادة يبقى على اسم المضيف
+ * الحقيقي — لا اتصال بـIP خام ولا `rejectUnauthorized`. والوحدة تُختار
+ * بالبروتوكول لأن اختبارات الخادم تشير إلى خادمها الوهمي بعنوان `http://127.0.0.1`.
  */
 async function fetchJson(url) {
-  const res = await fetch(url, {
-    headers: { Accept: 'application/json' },
-    signal: AbortSignal.timeout(timeoutMs())
-  });
-  if (!res.ok) throw new Error(`prices source responded ${res.status}`);
+  // إشارة واحدة للنداء كلّه: التحويلات لا تجدّد المهلة ولا تطيلها.
+  return requestJson(new URL(url), AbortSignal.timeout(timeoutMs()), MAX_REDIRECTS);
+}
 
-  let payload;
-  try {
-    payload = await res.json();
-  } catch {
-    throw new Error('prices source returned a non-JSON body');
-  }
-  return payload;
+/**
+ * طلب GET واحد داخل `fetchJson`: يتبع `3xx` حتى `redirectsLeft`، ثم يفكّ جسم
+ * الردّ JSON. المهلة إشارة النداء الأصلي وحدها، فلا يضاعف التحويلُ السقفَ الزمني.
+ */
+function requestJson(endpoint, signal, redirectsLeft) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const fail = error => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+    const succeed = payload => {
+      if (settled) return;
+      settled = true;
+      resolve(payload);
+    };
+
+    const transport = endpoint.protocol === 'http:' ? http : https;
+    const request = transport.get(endpoint, {
+      headers: { Accept: 'application/json' },
+      signal,
+      lookup: lookupIPv4
+    }, response => {
+      // مستمعا الخطأ قبل أي شيء: جسم يُقطع بعد الرفض لا يرمي حدثاً بلا مستمع.
+      response.on('error', fail);
+      response.on('aborted', () => fail(new Error('prices source request aborted')));
+
+      const status = response.statusCode;
+      const location = response.headers.location;
+      if (status >= 300 && status < 400 && location && redirectsLeft > 0) {
+        response.resume();
+        let next;
+        try {
+          next = new URL(location, endpoint);
+        } catch {
+          fail(new Error(`prices source responded ${status}`));
+          return;
+        }
+        requestJson(next, signal, redirectsLeft - 1).then(succeed, fail);
+        return;
+      }
+
+      if (!(status >= 200 && status < 300)) {
+        response.resume();
+        fail(new Error(`prices source responded ${status}`));
+        return;
+      }
+
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', chunk => { body += chunk; });
+      response.on('end', () => {
+        let payload;
+        try {
+          payload = JSON.parse(body);
+        } catch {
+          fail(new Error('prices source returned a non-JSON body'));
+          return;
+        }
+        succeed(payload);
+      });
+    });
+
+    request.on('error', fail);
+  });
 }
 
 /** يسجّل سبب السقوط بلا كشف رابط أو محتوى — للمشغّل وحده. */
