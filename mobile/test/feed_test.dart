@@ -43,9 +43,17 @@ NegevApi feedScreenApi({
   Object? storiesBody,
   Object? trendingBody,
   Object? Function(Uri url)? trendingBodyFor,
+  Object? statsBody,
 }) {
   final client = MockClient((request) async {
     requests?.add(request.url);
+    if (request.url.path.endsWith('/api/stats/ticker') && statsBody != null) {
+      return http.Response(
+        jsonEncode(statsBody),
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
+    }
     if (request.url.path.endsWith('/api/stories')) {
       return http.Response(
         jsonEncode(
@@ -475,7 +483,7 @@ void main() {
     );
 
     testWidgets(
-      'feed is its own scroller holding only cards; announcements, search, and load-more are outside PageView',
+      'feed_pager scrolls header and cards vertically; announcements, search, and load-more are outside the cards sliver',
       (tester) async {
         final api = feedScreenApi(
           eventsBody: {
@@ -524,57 +532,62 @@ void main() {
         await pumpFeedScreen(tester, api);
         await tester.pumpAndSettle();
 
-        final pageViewFinder = find.byType(PageView);
-        expect(pageViewFinder, findsOneWidget);
-        final pageView = tester.widget<PageView>(pageViewFinder);
-        expect(pageView.scrollDirection, Axis.vertical);
+        final feedFinder = find.byKey(const Key('feed_pager'));
+        expect(feedFinder, findsOneWidget);
+        final feedScroll = tester.widget<CustomScrollView>(feedFinder);
+        expect(feedScroll.scrollDirection, Axis.vertical);
 
-        // PageView يحتوي كروت المناسبات
+        final cardsSliverFinder = find.byType(SliverFixedExtentList);
+        expect(cardsSliverFinder, findsOneWidget);
+
+        // شريحة الكروت تحتوي كروت المناسبات
         expect(
-          find.descendant(of: pageViewFinder, matching: find.byType(EventCard)),
+          find.descendant(of: cardsSliverFinder, matching: find.byType(EventCard)),
           findsWidgets,
         );
 
-        // الإعلانات وشريط البحث وزر تحميل المزيد لا تتبع الـ PageView
+        // الإعلانات وشريط البحث وزر تحميل المزيد لا تتبع المُمرِّر
         expect(
           find.descendant(
-            of: pageViewFinder,
+            of: feedFinder,
             matching: find.textContaining('تغيّر موعد المناسبة'),
           ),
           findsNothing,
         );
         expect(
           find.descendant(
-            of: pageViewFinder,
+            of: feedFinder,
             matching: find.byType(TextField),
           ),
           findsNothing,
         );
         expect(
           find.descendant(
-            of: pageViewFinder,
+            of: feedFinder,
             matching: find.text('عرض المزيد'),
           ),
           findsNothing,
         );
 
-        // لكنها موجودة في الكروم الثابت والطبقات الخارجية (تظهر بالضغط على كبسة الفلاتر والبحث)
+        // لكنها موجودة في لوح الفلاتر والطبقات الخارجية (تظهر بالضغط على كبسة الفلاتر والبحث)
         await tester.tap(find.text('الفلاتر والبحث'));
         await tester.pumpAndSettle();
 
         expect(find.textContaining('تغيّر موعد المناسبة'), findsOneWidget);
         expect(find.byType(TextField), findsOneWidget);
         // ولا زرّ «عرض المزيد» عائماً في أيّ طبقة: كان يغطّي صفّ أزرار الكرت،
-        // والصفحة التالية تُجلب تلقائياً من `onPageChanged`.
+        // والصفحة التالية تُجلب تلقائياً من `_onFeedScroll`.
         expect(find.text('عرض المزيد'), findsNothing);
 
-        // وهذا هو التوكيد الذي يحرس قرار الملحق فعلاً: محور القفز يحمل
-        // **الكروت وحدها**، فعدد صفحاته يساوي عدد المناسبات بالضبط — لا صفحة
+        // وهذا هو التوكيد الذي يحرس قرار الملحق فعلاً: شريحة الكروت تحمل
+        // **الكروت وحدها**، فعدد عناصرها يساوي عدد المناسبات بالضبط — لا صفحة
         // زائدة لتعميم ولا لذيل تحميل. «يحتوي كروتاً» أعلاه يبقى صحيحاً حتى لو
         // تسلّل عنصر ثالث بينها؛ هذا لا يبقى.
         // مناسبتان في التجهيزة أعلاه، وتعميم واحد، وصفحة تالية متاحة — فلو
-        // بقي أيٌّ من الاثنين على المحور لصار العدد ثلاثة أو أربعة.
-        expect(pageView.childrenDelegate.estimatedChildCount, 2);
+        // بقي أيٌّ من الاثنين في شريحة الكروت لصار العدد ثلاثة أو أربعة.
+        final cardsSliver =
+            tester.widget<SliverFixedExtentList>(cardsSliverFinder);
+        expect(cardsSliver.delegate.estimatedChildCount, 2);
       },
     );
 
@@ -914,6 +927,8 @@ void main() {
         expect(find.byIcon(Icons.check_circle_outline), findsOneWidget);
         expect(find.byIcon(Icons.check_circle), findsNothing);
 
+        await tester.ensureVisible(find.text('جاي'));
+        await tester.pumpAndSettle();
         await tester.tap(find.text('جاي'));
         await tester.pump();
         expect(puts, hasLength(1));
@@ -1259,19 +1274,26 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        final pageView = tester.widget<PageView>(find.byType(PageView));
-        pageView.controller!.jumpToPage(2);
+        final feedScroll = tester
+            .widget<CustomScrollView>(find.byKey(const Key('feed_pager')))
+            .controller!;
+        final headerExtent = tester.getTopLeft(find.byType(EventCard).first).dy -
+            tester.getTopLeft(find.byKey(const Key('feed_pager'))).dy;
+        final cardExtent =
+            tester.getSize(find.byKey(const Key('feed_pager'))).height;
+        final thirdCardOffset = headerExtent + 2 * cardExtent;
+        feedScroll.jumpTo(thirdCardOffset);
         await tester.pumpAndSettle();
-        expect(pageView.controller!.page, 2);
+        expect(feedScroll.offset, closeTo(thirdCardOffset, 1));
 
         // فتح المناسبة من الكرت الثالث ثم الرجوع — المسار نفسه الذي كان يعيد
-        // المستخدم إلى أوّل كرت (`_loadFirstPage` ← `jumpToPage(0)`).
+        // المستخدم إلى أوّل كرت (`_loadFirstPage` ← `jumpTo(0)`).
         await tester.tap(find.byType(CardMedia).last);
         await tester.pumpAndSettle();
         tester.state<NavigatorState>(find.byType(Navigator).first).pop();
         await tester.pumpAndSettle();
 
-        expect(pageView.controller!.page, 2);
+        expect(feedScroll.offset, closeTo(thirdCardOffset, 1));
       },
     );
 
@@ -1751,17 +1773,26 @@ void main() {
       await pumpFeedScreen(tester, api);
       await tester.pumpAndSettle();
 
-      final pageView = tester.widget<PageView>(find.byType(PageView));
-      pageView.controller!.jumpToPage(2);
-      await tester.pumpAndSettle();
-      expect(pageView.controller!.page, 2);
+      final feedScroll = tester
+          .widget<CustomScrollView>(find.byKey(const Key('feed_pager')))
+          .controller!;
+      final headerExtent = tester.getTopLeft(find.byType(EventCard).first).dy -
+          tester.getTopLeft(find.byKey(const Key('feed_pager'))).dy;
+      final cardExtent =
+          tester.getSize(find.byKey(const Key('feed_pager'))).height;
+      final thirdCardOffset = headerExtent + 2 * cardExtent;
 
       final before = requests.where((u) => u.path.endsWith('/api/events')).length;
 
       // فلتر المكان: «كل الأماكن» ← «رهط». الخيار في ورقة الفلتر وحده (بلدة
-      // الكرت في التغذية تحمل النصّ نفسه).
+      // الكرت في التغذية تحمل النصّ نفسه). نفتح اللوح من الرأس ثم ننتقل إلى
+      // الكرت الثالث قبل التطبيق، لنثبت أن «رجوع لنتائجك السابقة» يعيد الكرت
+      // الثالث نفسه لا الأول.
       await tester.tap(find.text('الفلاتر والبحث'));
       await tester.pumpAndSettle();
+      feedScroll.jumpTo(thirdCardOffset);
+      await tester.pumpAndSettle();
+      expect(feedScroll.offset, closeTo(thirdCardOffset, 1));
       await tester.tap(find.text('كل الأماكن'));
       await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(CheckboxListTile, 'رهط'));
@@ -1771,7 +1802,10 @@ void main() {
       // نتائج الفلتر الجديد (كرت واحد) ورسالة الرجوع بعد وصولها.
       expect(find.text('↩ رجوع لنتائجك السابقة'), findsOneWidget);
       expect(
-        tester.widget<PageView>(find.byType(PageView)).childrenDelegate.estimatedChildCount,
+        tester
+            .widget<SliverFixedExtentList>(find.byType(SliverFixedExtentList))
+            .delegate
+            .estimatedChildCount,
         1,
       );
 
@@ -1781,13 +1815,16 @@ void main() {
       final after = requests.where((u) => u.path.endsWith('/api/events')).length;
       expect(after, before + 1, reason: 'طلب الفلتر وحده، والرجوع بلا أي شبكة');
       expect(
-        tester.widget<PageView>(find.byType(PageView)).childrenDelegate.estimatedChildCount,
+        tester
+            .widget<SliverFixedExtentList>(find.byType(SliverFixedExtentList))
+            .delegate
+            .estimatedChildCount,
         3,
         reason: 'كروت ما قبل التغيير عادت',
       );
       expect(
-        tester.widget<PageView>(find.byType(PageView)).controller!.page,
-        2,
+        feedScroll.offset,
+        closeTo(thirdCardOffset, 1),
         reason: 'الموضع الذي كان عليه القارئ يعود معها',
       );
     });
@@ -2050,8 +2087,18 @@ void main() {
           (widget) => widget is EventCard && widget.event.id == id,
         );
 
-    PageController pagerOf(WidgetTester tester) =>
-        tester.widget<PageView>(find.byKey(const Key('feed_pager'))).controller!;
+    Future<void> jumpToFeedPage(
+      WidgetTester tester,
+      int page, {
+      required double headerExtent,
+      required double cardExtent,
+    }) async {
+      final controller = tester
+          .widget<CustomScrollView>(find.byKey(const Key('feed_pager')))
+          .controller!;
+      controller.jumpTo(headerExtent + page * cardExtent);
+      await tester.pumpAndSettle();
+    }
 
     testWidgets(
       'الشريط bar وحده، والكاروسيل أعلى التغذية، وإعلان بعد الكرت ٨ و١٦ بالتناوب',
@@ -2082,7 +2129,7 @@ void main() {
           reason: 'إعلان «بين الكروت» لا يسكن الشريط',
         );
 
-        // 2) الكاروسيل: بانر الموضع carousel وحده، وأعلى التغذية نفسها.
+        // 2) الكاروسيل: بانر الموضع carousel وحده، وأعلى الكروت في التغذية نفسها.
         final carousel = find.byKey(const Key('story_carousel'));
         expect(carousel, findsOneWidget, reason: 'بانر الكاروسيل يظهر حين تصل ستوريات carousel');
         expect(
@@ -2096,23 +2143,26 @@ void main() {
           reason: 'ستوري الشريط لا تهاجر إلى الكاروسيل',
         );
         expect(
-          tester.getTopLeft(carousel).dy,
-          lessThan(tester.getTopLeft(find.byKey(const Key('feed_pager'))).dy),
-          reason: 'الكاروسيل أعلى التغذية لا داخلها ولا تحتها',
+          tester.getBottomLeft(carousel).dy,
+          lessThanOrEqualTo(tester.getTopLeft(cardFor(301)).dy),
+          reason: 'الكاروسيل أعلى الكروت في التغذية لا داخلها ولا تحتها',
         );
 
         // 3) الإعلان بعد الثامن: الصفحة ٧ ما زالت الكرت الثامن (رقم ٣٠٨)،
         // والصفحة ٨ إعلان، والصفحة ٩ الكرت التاسع (٣٠٩).
-        final controller = pagerOf(tester);
+        final headerExtent = tester.getTopLeft(cardFor(301)).dy -
+            tester.getTopLeft(find.byKey(const Key('feed_pager'))).dy;
+        final cardExtent =
+            tester.getSize(find.byKey(const Key('feed_pager'))).height;
 
-        controller.jumpToPage(7);
-        await tester.pumpAndSettle();
+        await jumpToFeedPage(tester, 7,
+            headerExtent: headerExtent, cardExtent: cardExtent);
         expect(cardFor(308), findsOneWidget, reason: 'الصفحة ٧ ما زالت الكرت الثامن');
         expect(find.byKey(const Key('feed_ad_after_8')), findsNothing, reason: 'لا إعلان قبل الكرت الثامن');
         expect(find.byKey(const Key('feed_ad_after_16')), findsNothing, reason: 'ولا إعلان قبل الكرت الثامن');
 
-        controller.jumpToPage(8);
-        await tester.pumpAndSettle();
+        await jumpToFeedPage(tester, 8,
+            headerExtent: headerExtent, cardExtent: cardExtent);
         expect(
           find.byKey(const Key('feed_ad_after_8')),
           findsOneWidget,
@@ -2121,17 +2171,17 @@ void main() {
         expect(find.text('إعلان أول'), findsOneWidget, reason: 'أول ستوري feed هو أول إعلان بالتناوب');
         expect(cardFor(309), findsNothing, reason: 'كرت المناسبة التاسعة بعد الإعلان لا قبله');
 
-        controller.jumpToPage(9);
-        await tester.pumpAndSettle();
+        await jumpToFeedPage(tester, 9,
+            headerExtent: headerExtent, cardExtent: cardExtent);
         expect(cardFor(309), findsOneWidget, reason: 'الكرت التاسع يلي الإعلان مباشرةً');
 
         // 4) الإعلان بعد السادس عشر، وستوري feed الثاني فيها بالتناوب.
-        controller.jumpToPage(16);
-        await tester.pumpAndSettle();
+        await jumpToFeedPage(tester, 16,
+            headerExtent: headerExtent, cardExtent: cardExtent);
         expect(cardFor(316), findsOneWidget, reason: 'الصفحة ١٦ الكرت السادس عشر');
 
-        controller.jumpToPage(17);
-        await tester.pumpAndSettle();
+        await jumpToFeedPage(tester, 17,
+            headerExtent: headerExtent, cardExtent: cardExtent);
         expect(
           find.byKey(const Key('feed_ad_after_16')),
           findsOneWidget,
@@ -2139,8 +2189,8 @@ void main() {
         );
         expect(find.text('إعلان ثانٍ'), findsOneWidget, reason: 'التناوب: الستوري الثاني هو الإعلان الثاني');
 
-        controller.jumpToPage(18);
-        await tester.pumpAndSettle();
+        await jumpToFeedPage(tester, 18,
+            headerExtent: headerExtent, cardExtent: cardExtent);
         expect(cardFor(317), findsOneWidget, reason: 'الكرت السابع عشر يلي الإعلان الثاني');
       },
     );
@@ -2167,6 +2217,11 @@ void main() {
           requests: requests,
         );
         await pumpPlacementFeed(tester, api: api);
+
+        final headerExtent = tester.getTopLeft(cardFor(301)).dy -
+            tester.getTopLeft(find.byKey(const Key('feed_pager'))).dy;
+        final cardExtent =
+            tester.getSize(find.byKey(const Key('feed_pager'))).height;
 
         List<Uri> clicksTo(int storyId) =>
             requests.where((uri) => uri.path == '/api/stories/$storyId/click').toList();
@@ -2208,8 +2263,8 @@ void main() {
         );
 
         // 3) الإعلان بين الكروت: الصورة تفتح العارض…
-        pagerOf(tester).jumpToPage(8);
-        await tester.pumpAndSettle();
+        await jumpToFeedPage(tester, 8,
+            headerExtent: headerExtent, cardExtent: cardExtent);
         await tester.tap(find.byKey(const Key('feed_ad_media_903')));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 100));
@@ -2247,18 +2302,21 @@ void main() {
         );
         await pumpPlacementFeed(tester, api: api);
 
-        final controller = pagerOf(tester);
+        final headerExtent = tester.getTopLeft(cardFor(301)).dy -
+            tester.getTopLeft(find.byKey(const Key('feed_pager'))).dy;
+        final cardExtent =
+            tester.getSize(find.byKey(const Key('feed_pager'))).height;
 
-        controller.jumpToPage(4);
-        await tester.pumpAndSettle();
+        await jumpToFeedPage(tester, 4,
+            headerExtent: headerExtent, cardExtent: cardExtent);
         expect(cardFor(305), findsOneWidget, reason: 'الصفحة ٤ ما زالت الكرت الخامس');
         expect(find.byKey(const Key('feed_ad_after_5')), findsNothing,
             reason: 'لا إعلان قبل الكرت الخامس');
 
         // لو بقي الثابت 8 في العميل لكانت هذه الصفحة الكرت السادس ولا إعلان
         // فيها — فسقوط هذا التأكيد هو ما يثبت أن الفاصل قُرئ من الردّ.
-        controller.jumpToPage(5);
-        await tester.pumpAndSettle();
+        await jumpToFeedPage(tester, 5,
+            headerExtent: headerExtent, cardExtent: cardExtent);
         expect(
           find.byKey(const Key('feed_ad_after_5')),
           findsOneWidget,
@@ -2266,20 +2324,20 @@ void main() {
         );
         expect(find.text('إعلان أول'), findsOneWidget, reason: 'أول ستوري feed هو أول إعلان');
 
-        controller.jumpToPage(6);
-        await tester.pumpAndSettle();
+        await jumpToFeedPage(tester, 6,
+            headerExtent: headerExtent, cardExtent: cardExtent);
         expect(cardFor(306), findsOneWidget, reason: 'الكرت السادس يلي الإعلان مباشرةً');
 
         // ولا إعلان بعد الثامن: الصفحة ٨ الكرت الثامن نفسه — تأكيد يسقط لو
         // عاد العميل إلى فاصل 8.
-        controller.jumpToPage(8);
-        await tester.pumpAndSettle();
+        await jumpToFeedPage(tester, 8,
+            headerExtent: headerExtent, cardExtent: cardExtent);
         expect(cardFor(308), findsOneWidget, reason: 'الصفحة ٨ الكرت الثامن مع فاصل 5');
         expect(find.byKey(const Key('feed_ad_after_8')), findsNothing,
             reason: 'لا إعلان بعد الكرت الثامن: الفاصل من الخادم 5 لا 8');
 
-        controller.jumpToPage(11);
-        await tester.pumpAndSettle();
+        await jumpToFeedPage(tester, 11,
+            headerExtent: headerExtent, cardExtent: cardExtent);
         expect(find.byKey(const Key('feed_ad_after_10')), findsOneWidget,
             reason: 'الإعلان التالي بعد الكرت العاشر — الصفحة ١١ مع فاصل 5');
         expect(find.text('إعلان ثانٍ'), findsOneWidget, reason: 'التناوب بين ستوريات feed مستمر');
@@ -2360,6 +2418,171 @@ void main() {
 
         expect(find.byType(EventDetailsScreen), findsOneWidget,
             reason: 'الكرت يفتح التفاصيل بالمسار نفسه الذي يفتحه كرت التغذية');
+      },
+    );
+  });
+
+  group('تمرير التغذية الرئيسية على مقاس هاتف حقيقي', () {
+    testWidgets(
+      'الرأس يطوي بالسحب على الكرت، والكرت يملأ التغذية بصورة > 150، والتقليب مثبّت، والسحب للأسفل يعيد الرأس بلا فيض',
+      (tester) async {
+        tester.view.physicalSize = const Size(1080, 2340);
+        tester.view.devicePixelRatio = 3.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        SharedPreferences.setMockInitialValues({});
+
+        final api = feedScreenApi(
+          storiesBody: {
+            'success': true,
+            'feed_ad_interval': 8,
+            'stories': [
+              {'id': 901, 'title': 'ستوري أولى', 'placement': 'bar'},
+              {'id': 902, 'title': 'ستوري ثانية', 'placement': 'bar'},
+              {
+                'id': 903,
+                'title': 'بانر الكاروسيل',
+                'placement': 'carousel',
+                'target_url': 'https://example.com/c',
+                'cta_label': 'تسوّق',
+              },
+            ],
+          },
+          statsBody: {
+            'success': true,
+            'regions': [
+              {'region_id': 1, 'name': 'النقب', 'upcoming_count': 12},
+              {'region_id': 2, 'name': 'طولكرم', 'upcoming_count': 4},
+            ],
+            'total': 16,
+          },
+          trendingBody: {
+            'success': true,
+            'window_days': 7,
+            'events': [
+              for (final id in [701, 702, 703])
+                {
+                  'id': id,
+                  'title': 'مناسبة شائعة $id',
+                  'groom_name': 'سالم',
+                  'family_clan': 'آل سالم',
+                  'town': 'رهط',
+                  'event_date': '2026-12-0${id - 700}',
+                },
+            ],
+          },
+          eventsBody: {
+            'success': true,
+            'events': [
+              for (final id in [801, 802, 803])
+                {
+                  'id': id,
+                  'title': 'عرس $id',
+                  'groom_name': 'عريس $id',
+                  'family_clan': 'آل فلان',
+                  'town': 'رهط',
+                  'event_date': '2026-12-1${id - 800}',
+                },
+            ],
+            'pagination': {'page': 1, 'limit': 30, 'total': 3, 'totalPages': 1},
+            'announcements': <Map<String, dynamic>>[],
+          },
+        );
+
+        await pumpFeedScreen(tester, api);
+        await tester.pumpAndSettle();
+
+        Finder cardFor(int id) => find.byWidgetPredicate(
+              (w) => w is EventCard && w.event.id == id,
+            );
+
+        // (أ) عند الفتح الرأس ظاهر، وtrending_strip وstories_strip فوق الكرت الأول.
+        final storiesStrip = find.byKey(const Key('stories_strip'));
+        final trendingStrip = find.byKey(const Key('trending_strip'));
+        expect(storiesStrip, findsOneWidget);
+        expect(trendingStrip, findsOneWidget);
+        expect(find.text('المجموع 16'), findsOneWidget);
+        expect(cardFor(801), findsOneWidget);
+        expect(
+          tester.getBottomLeft(storiesStrip).dy,
+          lessThanOrEqualTo(tester.getTopLeft(trendingStrip).dy),
+        );
+        expect(
+          tester.getBottomLeft(trendingStrip).dy,
+          lessThanOrEqualTo(tester.getTopLeft(cardFor(801)).dy),
+        );
+
+        // (ب) السحب للأعلى على الكرت نفسه بقدر الرأس: يخرج الرأس، ويملأ الكرت
+        // مساحة التغذية (±1)، ويكون ارتفاع CardMedia أكبر من 150 منطقياً.
+        final feedRect = tester.getRect(find.byKey(const Key('feed_pager')));
+        final firstCardRect = tester.getRect(cardFor(801));
+        final headerHeight = firstCardRect.top -
+            tester.getTopLeft(find.byType(EventsScreen)).dy;
+        expect(headerHeight, greaterThan(100));
+
+        // نقطة السحب داخل الجزء المرئي من الكرت الأول لا على الرأس.
+        final visibleTop = firstCardRect.top.clamp(feedRect.top, feedRect.bottom);
+        final visibleBottom =
+            firstCardRect.bottom.clamp(feedRect.top, feedRect.bottom);
+        final cardDragStart =
+            Offset(firstCardRect.center.dx, (visibleTop + visibleBottom) / 2);
+        await tester.dragFrom(cardDragStart, Offset(0, -headerHeight));
+        await tester.pumpAndSettle();
+
+        final storiesOffScreen = storiesStrip.evaluate().isEmpty ||
+            tester.getBottomLeft(storiesStrip).dy <= 0;
+        final trendingOffScreen = trendingStrip.evaluate().isEmpty ||
+            tester.getBottomLeft(trendingStrip).dy <= 0;
+        expect(storiesOffScreen, isTrue, reason: 'stories_strip خرج من الشاشة');
+        expect(trendingOffScreen, isTrue, reason: 'trending_strip خرج من الشاشة');
+
+        final feedHeight =
+            tester.getSize(find.byKey(const Key('feed_pager'))).height;
+        final cardHeight = tester.getSize(cardFor(801)).height;
+        expect(
+          (cardHeight - feedHeight).abs(),
+          lessThanOrEqualTo(1),
+          reason: 'ارتفاع الكرت الأول يساوي ارتفاع مساحة التغذية (±1)',
+        );
+        expect(
+          (tester.getTopLeft(cardFor(801)).dy - feedRect.top).abs(),
+          lessThanOrEqualTo(1),
+          reason: 'الكرت الأول يملأ مساحة التغذية من أعلاها بعد خروج الرأس',
+        );
+        expect(
+          tester.getSize(find.byType(CardMedia).first).height,
+          greaterThan(150),
+          reason: 'صورة الكرت ظاهرة بارتفاع موجب أكبر من 150 منطقياً',
+        );
+
+        // (ج) سحب آخر للأعلى على الكرت ينقل إلى الكرت الثاني مثبّتاً.
+        await tester.fling(cardFor(801), Offset(0, -feedHeight * 0.5), 1000);
+        await tester.pumpAndSettle();
+        expect(cardFor(802), findsOneWidget);
+        final feedTop =
+            tester.getTopLeft(find.byKey(const Key('feed_pager'))).dy;
+        expect(
+          (tester.getTopLeft(cardFor(802)).dy - feedTop).abs(),
+          lessThanOrEqualTo(1),
+          reason: 'الكرت الثاني مثبّت عند أعلى مساحة التغذية',
+        );
+
+        // (د) سحب للأسفل حتى القمّة يعيد الرأس ظاهراً.
+        await tester.fling(cardFor(802), Offset(0, feedHeight * 0.6), 1200);
+        await tester.pumpAndSettle();
+        await tester.fling(cardFor(801), Offset(0, headerHeight + 100), 1200);
+        await tester.pumpAndSettle();
+
+        expect(storiesStrip, findsOneWidget);
+        expect(trendingStrip, findsOneWidget);
+        expect(tester.getTopLeft(storiesStrip).dy, greaterThanOrEqualTo(0));
+        expect(
+          tester.getBottomLeft(trendingStrip).dy,
+          lessThanOrEqualTo(tester.getTopLeft(cardFor(801)).dy),
+        );
+
+        // (هـ) لا overflow طوال الاختبار.
+        expect(tester.takeException(), isNull);
       },
     );
   });

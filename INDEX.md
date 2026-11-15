@@ -14,7 +14,7 @@
 |---|---|---|
 | `server/src` | 83 | 29746 |
 | `web` | 8 | 22685 |
-| `mobile/lib` | 69 | 35796 |
+| `mobile/lib` | 69 | 36021 |
 
 ### توزيع `server/src`
 
@@ -55,7 +55,7 @@
 | `config.dart` | 1 | 69 |
 | `main.dart` | 1 | 273 |
 | `models/` | 12 | 3130 |
-| `screens/` | 21 | 23927 |
+| `screens/` | 21 | 24152 |
 | `state/` | 18 | 1859 |
 | `theme.dart` | 1 | 296 |
 | `widgets/` | 13 | 3627 |

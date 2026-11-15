@@ -511,15 +511,13 @@ void main() {
     // مرساة موجبة قبل أي قياس: كرتٌ ومحورٌ على الشاشة فعلاً، وإلّا فقياسٌ على
     // شجرة فارغة ينجح بلا معنى.
     expect(find.byType(EventCard), findsOneWidget);
-    final pageView = find.byType(PageView);
-    expect(pageView, findsOneWidget);
+    final feedPager = find.byKey(const Key('feed_pager'));
+    expect(feedPager, findsOneWidget);
 
-    // ١. الشريط ينتهي عند أعلى التغذية أو قبلها: لا يعلو الكرت ولا يكتب على
+    // ١. الشريط ينتهي عند أعلى الكرت أو قبله: لا يعلو الكرت ولا يكتب على
     // صورته — وهي العلّة التي جاء هذا الترتيب لإزالتها (النموذج، العرض «أ»).
     final rail = find.byKey(const Key('stories_strip'));
     final railBottom = tester.getRect(rail).bottom;
-    final feedTop = tester.getRect(pageView).top;
-    expect(railBottom, lessThanOrEqualTo(feedTop));
     expect(tester.getRect(find.byType(EventCard)).top, greaterThanOrEqualTo(railBottom));
 
     // ٢. الكروم صفّ واحد: كبسة الفلاتر وأيقونة «حسابي» في حزمة أفقية

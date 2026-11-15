@@ -40,7 +40,7 @@ Map<String, dynamic> _eventRow(int id, String day) => {
       'event_date': day,
     };
 
-/// عميل وهمي يوجّه حسب المسار: ثلاث مناسبات (تكفي لصفحتَي `PageView`)، وقصص
+/// عميل وهمي يوجّه حسب المسار: ثلاث مناسبات (تكفي للتمرير إلى كرت متأخّر)، وقصص
 /// وأنواع فارغة، وبلدات الخادم (لا قائمة في العميل). [requests] يلتقط الطلبات
 /// كي يُثبَت أنّ الشعار لم يُحدث جلباً.
 NegevApi _shellApi({List<Uri>? requests}) {
@@ -305,13 +305,15 @@ void main() {
 
         // درج الفلاتر طبقةٌ داخل شاشة التغذية لا مسار في المتنقّل، فلا يغطّي
         // ترويسة الهيكل: الشعار مرئي ويُنقر وهو مفتوح — فهذا ما يجب أن يغلقه.
-        final pageController =
-            tester.widget<PageView>(find.byType(PageView)).controller!;
-        pageController.jumpToPage(2);
-        await tester.pumpAndSettle();
         await tester.tap(find.text('الفلاتر والبحث'));
         await tester.pumpAndSettle();
         expect(find.text('مناسبات منطقتك'), findsOneWidget, reason: 'الدرج مفتوح فعلاً');
+        final feedScroll = tester
+            .widget<CustomScrollView>(find.byKey(const Key('feed_pager')))
+            .controller!;
+        feedScroll.jumpTo(feedScroll.position.maxScrollExtent);
+        await tester.pumpAndSettle();
+        expect(feedScroll.offset, greaterThan(0), reason: 'التغذية على كرت متأخّر');
 
         final before = _feedRequests(requests);
         await tester.tap(find.byKey(const Key('shell_brand_logo')));
@@ -322,7 +324,7 @@ void main() {
           findsNothing,
           reason: '«الرئيسية» تغلق الدرج، فلا يبقى سطحٌ مفتوح فوق القائمة',
         );
-        expect(pageController.page, 0, reason: 'ثم تصعد بالقائمة إلى أوّلها');
+        expect(feedScroll.offset, 0, reason: 'ثم تصعد بالقائمة إلى أوّلها مع إظهار الرأس');
         expect(
           _feedRequests(requests),
           before,
@@ -391,20 +393,21 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('بحث: سالم'), findsOneWidget);
 
-        final pageController =
-            tester.widget<PageView>(find.byType(PageView)).controller!;
-        pageController.jumpToPage(2);
+        final feedScroll = tester
+            .widget<CustomScrollView>(find.byKey(const Key('feed_pager')))
+            .controller!;
+        feedScroll.jumpTo(feedScroll.position.maxScrollExtent);
         await tester.pumpAndSettle();
-        expect(pageController.page, 2, reason: 'الاختبار يبدأ من كرت متأخّر فعلاً');
+        expect(feedScroll.offset, greaterThan(0), reason: 'الاختبار يبدأ من كرت متأخّر فعلاً');
 
         final before = _feedRequests(requests);
         await tester.tap(find.byKey(const Key('shell_brand_logo')));
         await tester.pumpAndSettle();
 
         expect(
-          pageController.page,
+          feedScroll.offset,
           0,
-          reason: 'الشعار على «المناسبات» يصعد إلى أول القائمة',
+          reason: 'الشعار على «المناسبات» يصعد إلى أول القائمة مع إظهار الرأس',
         );
         expect(
           find.text('بحث: سالم'),

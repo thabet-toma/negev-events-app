@@ -1042,6 +1042,8 @@ void main() {
 
         // (٢) إعادة الحفظ من كرت التغذية — تُكتب الإشارة هنا أيضاً، وإلا صارت
         // الإزالة التالية تكراراً مساوياً لا يُخطر أحداً.
+        await tester.ensureVisible(find.text('ذكّرني'));
+        await tester.pumpAndSettle();
         await tester.tap(find.text('ذكّرني'));
         await tester.pumpAndSettle();
         expect(services.savedChange.value, (eventId: 5, saved: true));
