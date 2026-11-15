@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 
 import '../api/negev_api.dart' show NegevApi, Village;
 import '../main.dart';
@@ -102,11 +103,11 @@ class EventsScreen extends StatefulWidget {
   /// الشاشة حيّة خلف التبويبات الأخرى، فلا بدّ أن تُخبَر صراحةً.
   final bool isActive;
 
-  /// إشارة الشعار في ترويسة الهيكل: كل زيادة تقفز بالقائمة إلى أول كرت (#157).
+  /// إشارة الشعار في ترويسة الهيكل: كل زيادة تقفز بالقائمة إلى قمّة التغذية (#157).
   ///
-  /// إشارة لا استدعاء — الهيكل لا يعرف `_pageController` ولا كيف تُبنى القائمة،
-  /// والكبسة لا تغيّر فلتراً ولا تجلب صفحة أولى: `jumpToPage(0)` وحده، فما
-  /// اختاره المستخدم من فلتر ونتائج يبقى كما هو.
+  /// إشارة لا استدعاء — الهيكل لا يعرف `_feedScroll` ولا كيف تُبنى القائمة،
+  /// والكبسة لا تغيّر فلتراً ولا تجلب صفحة أولى: قفزٌ إلى `0` وحده، فما
+  /// اختاره المستخدم من فلتر ونتائج يبقى كما هو، ويُظهر الرأس مع الكرت الأول.
   final ValueNotifier<int>? topRequest;
 
   @override
@@ -115,7 +116,13 @@ class EventsScreen extends StatefulWidget {
 
 class _EventsScreenState extends State<EventsScreen> with RouteAware {
   final _searchController = TextEditingController();
-  final _pageController = PageController();
+  final _feedScroll = ScrollController();
+  final _headerKey = GlobalKey();
+  final _feedHeaderKey = GlobalKey();
+  double _headerExtent = 0;
+  double _feedHeaderExtent = 0;
+  double _cardExtent = 0;
+  bool _headerMeasureScheduled = false;
 
   /// اختيار متعدّد — بلدة أو أكثر، قرية أو أكثر، نوع مناسبة أو أكثر معاً
   /// (#85 خطوة 40-43). قائمة فارغة تعني «كل الأماكن»/«كل الأنواع»، لا فلترة.
@@ -216,14 +223,14 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   int _requestGeneration = 0;
 
   /// لقطة ما كان معروضاً قبل آخر تغيير فلتر فعلي (مكان/نوع/تاريخ/أرشفة/مسح):
-  /// زرّ الرجوع في الرسالة يعيدها كاملة بـ`setState` و`jumpToPage` بلا طلب
+  /// زرّ الرجوع في الرسالة يعيدها كاملة بـ`setState` والقفز للموضع بلا طلب
   /// شبكة. `null` = لا شيء يُعاد إليه، فلا تُعرض الرسالة.
   _ResultsSnapshot? _snapshot;
 
   /// هل تنتظر اللقطة وصول نتائج التغيير كي تُعرض رسالة الرجوع؟ تُطفأ بعد العرض.
   bool _snapshotPending = false;
 
-  /// `onPageChanged` الناتج عن `jumpToPage` في `_restoreSnapshot` لا يجوز أن
+  /// `_onFeedScroll` الناتج عن القفز في `_restoreSnapshot` لا يجوز أن
   /// يُطلق جلب «المزيد» — الرجوع للقطة بلا أي طلب شبكة.
   bool _restoringSnapshot = false;
 
@@ -243,6 +250,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   @override
   void initState() {
     super.initState();
+    _feedScroll.addListener(_onFeedScroll);
     widget.topRequest?.addListener(_jumpToFirstCard);
   }
 
@@ -515,15 +523,82 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     _liveStatusSub?.cancel();
     _savedChange?.removeListener(_handleSavedChange);
     widget.topRequest?.removeListener(_jumpToFirstCard);
+    _feedScroll.removeListener(_onFeedScroll);
     _searchController.dispose();
-    _pageController.dispose();
+    _feedScroll.dispose();
     super.dispose();
   }
 
-  /// كبسة شعار الهيكل على وجهة «المناسبات» نفسها: صعود إلى أول القائمة.
+  void _scheduleMeasureHeader() {
+    if (_headerMeasureScheduled) return;
+    _headerMeasureScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _headerMeasureScheduled = false;
+      _measureHeader();
+    });
+  }
+
+  void _measureHeader() {
+    if (!mounted || _showTopChrome) return;
+    final fhCtx = _feedHeaderKey.currentContext;
+    if (fhCtx != null) {
+      final fhBox = fhCtx.findRenderObject() as RenderBox?;
+      if (fhBox != null && fhBox.hasSize) {
+        _feedHeaderExtent = fhBox.size.height;
+      }
+    }
+    final ctx = _headerKey.currentContext;
+    if (ctx == null) return;
+    final box = ctx.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return;
+    final next = box.size.height;
+    if ((next - _headerExtent).abs() <= 0.5) return;
+    final prev = _headerExtent;
+    _headerExtent = next;
+    if (!_restoringSnapshot &&
+        prev > 0 &&
+        _feedScroll.hasClients &&
+        _feedScroll.offset >= prev - 1.0 &&
+        !_feedScroll.position.isScrollingNotifier.value) {
+      final max = _feedScroll.position.maxScrollExtent;
+      final adjusted = (_feedScroll.offset + (next - prev)).clamp(0.0, max);
+      if ((adjusted - _feedScroll.offset).abs() > 0.5) {
+        _feedScroll.jumpTo(adjusted);
+      }
+    }
+  }
+
+  void _jumpToCard(int pageIndex) {
+    if (!_feedScroll.hasClients) return;
+    _measureHeader();
+    final target = pageIndex <= 0
+        ? 0.0
+        : _headerExtent + pageIndex * _cardExtent;
+    final max = _feedScroll.position.maxScrollExtent;
+    _feedScroll.jumpTo(target.clamp(0.0, max));
+  }
+
+  void _onFeedScroll() {
+    if (!_feedScroll.hasClients || _cardExtent <= 0 || _events.isEmpty) return;
+    final pages = _composeFeedPages();
+    if (pages.isEmpty) return;
+    final raw = ((_feedScroll.offset - _headerExtent) / _cardExtent).round();
+    final index = raw.clamp(0, pages.length - 1);
+    if (index == _currentPage) return;
+    _currentPage = index;
+    _autoplayCurrent();
+    // قفزة الرجوع للقطة ليست تمريراً من المستخدم، فلا تجلب «المزيد».
+    if (_restoringSnapshot) return;
+    final hasMore = _pagination?.hasMore ?? false;
+    if (index >= pages.length - 2 && hasMore && !_loadingMore) {
+      _loadMore();
+    }
+  }
+
+  /// كبسة شعار الهيكل على وجهة «المناسبات» نفسها: صعود إلى قمّة التغذية.
   ///
   /// تمريرٌ وحده — لا `_loadFirstPage` ولا `force`: الفلتر المختار والنتائج
-  /// المعروضة تبقى كما هي.
+  /// المعروضة تبقى كما هي، ويعود إلى `0` ليظهر الرأس مع الكرت الأول.
   ///
   /// وقبل الصعود يُغلق لوح الفلاتر (`_showTopChrome`): طبقةٌ داخل هذه الشاشة
   /// لا مسارٌ في `Navigator`، فلا يغطّي ترويسة الهيكل ولا يغلقه شيء فوقها —
@@ -533,8 +608,8 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   void _jumpToFirstCard() {
     if (!mounted) return;
     if (_showTopChrome) setState(() => _showTopChrome = false);
-    if (!_pageController.hasClients) return;
-    _pageController.jumpToPage(0);
+    if (!_feedScroll.hasClients) return;
+    _feedScroll.jumpTo(0);
   }
 
   /// يشغّل صوت الكرت الظاهر الآن — أو يُسكت ما شغّلته التغذية إن لم يكن له
@@ -598,8 +673,8 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
           _entranceEventIds = result.events.map((e) => e.id).toSet();
         }
       });
-      if (_pageController.hasClients) {
-        _pageController.jumpToPage(0);
+      if (_feedScroll.hasClients) {
+        _feedScroll.jumpTo(0);
       }
       _currentPage = 0;
       _autoplayCurrent();
@@ -699,12 +774,12 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
       _snapshot = null;
       _snapshotPending = false;
     });
-    // القفزة بعد إعادة البناء: `PageView` ما زال على عدد كروت الفلتر الجديد
+    // القفزة بعد إعادة البناء: الشريحة ما زالت على عدد كروت الفلتر الجديد
     // داخل هذه اللحظة، فالقفز قبله يُقصّ إلى آخر كرت متاح.
     _restoringSnapshot = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      if (_pageController.hasClients) _pageController.jumpToPage(_currentPage);
+      _jumpToCard(_currentPage);
       _restoringSnapshot = false;
       _autoplayCurrent();
     });
@@ -717,6 +792,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   Future<void> _refreshInPlace() async {
     if (_initialLoading) return;
     final shownId = _eventAtOrBeforePage(_currentPage)?.id;
+    final oldPage = _currentPage;
     final generation = _requestGeneration;
     try {
       final result = await AppServices.of(context).api.listEvents(
@@ -741,7 +817,9 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
         _announcements = result.announcements;
         _currentPage = index;
       });
-      if (_pageController.hasClients) _pageController.jumpToPage(index);
+      if (index != oldPage || index > 0) {
+        _jumpToCard(index);
+      }
       _autoplayCurrent();
     } catch (_) {
       // تحديث خلفي — فشله لا يستحق رسالة؛ القائمة الحالية تبقى كما هي.
@@ -1317,73 +1395,129 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     // ستوريات موضع `carousel` (تذكرة #173): كاروسيل بانرات أعلى التغذية
     // مباشرة. بلا ستوريات كاروسيل لا عنصر ولا مساحة — التخطيط كما كان.
     final carouselStories = _storiesFor('carousel');
+    _scheduleMeasureHeader();
     return Scaffold(
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // 1. رأس التغذية ثم التغذية تحته: عمودٌ حقيقي في مساحة الشاشة، فلا
-          // شيء يطفو فوق الكرت الأول ولا يكتب على صورته.
-          Column(
-            children: [
-              // حين يُفتح لوح الفلاتر يحلّ محلّ الرأس بدل أن يجلس فوقه: اللوح
-              // يرسم أدواته بنفسه، فلا تبقى وراءه نسخة ثانية من شريط
-              // الستوريات ولا من كبسة الفلاتر.
-              if (!_showTopChrome) _feedHeader(),
-              // شريط التوسّع (#127): خبر المحافظة في سطرين داخل التغذية، فوق
-              // الكروت مباشرةً كبطاقة الدخول — يدفعها قليلاً ثم يختفي بـ×،
-              // ولا طبقة تحجبها ولا ورقة حواريّة. يتبع تبديل المحافظة بنفسه.
-              const RegionBanner(),
-              // بطاقة الدخول التسويقية: عنصر عادي في عمود التغذية — **تحت**
-              // شريط الستوريات لا فوقه — فتدفع الكروت قليلاً ثم تختفي ويعود
-              // التخطيط. بطاقةٌ تشير إلى أوّل ستوري لا يجوز أن تحجبه.
-              if (_entryCardVisible && _entryStory != null)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
-                  child: _EntryCard(
-                    story: _entryStory!,
-                    onClose: _hideEntryCard,
-                    onTap: () => _openEntryStory(_entryStory!),
+          // 1. مُمرِّر واحد يجمع الرأس والكروت معاً: يطوي الرأس متّصلاً مع
+          // الإصبع بالسحب على الكرت نفسه، ثم يأخذ كل كرت مساحة التغذية كاملة.
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final viewportHeight = constraints.maxHeight;
+              _cardExtent = viewportHeight;
+              return Stack(
+                alignment: Alignment.bottomCenter,
+                children: [
+                  RefreshIndicator(
+                    onRefresh: () async {
+                      final services = AppServices.of(context);
+                      _loadStories();
+                      _loadLiveChannel();
+                      // «الأكثر تفاعلاً» (تذكرة #177) مع السحب كبقية أسطح
+                      // الاكتشاف: نافذته سبعة أيام تتحرّك مع الساعة، فسحبٌ لا
+                      // يجددها يُبقي الشريط على أرقام الأمس.
+                      _loadTrending();
+                      // السحب للتحديث يقرأ الشريط والتعميم من جديد كذلك — رقمُ
+                      // الشريط يُبطل كل خمس دقائق على الخادم، لا عند كل سحب.
+                      services.homeTicker.refresh();
+                      // السحب للتحديث يلتقط أيضاً مقطعاً افتراضياً رفعه الأدمن للتوّ.
+                      services.audio
+                          .defaultTrack(services.api, refresh: true)
+                          .then((url) {
+                        if (mounted) _defaultAudioUrl = url;
+                      });
+                      await _loadFirstPage();
+                    },
+                    child: CustomScrollView(
+                      key: const Key('feed_pager'),
+                      controller: _feedScroll,
+                      scrollCacheExtent: const ScrollCacheExtent.pixels(0.0),
+                      physics: _FeedSnapPhysics(
+                        parent: const AlwaysScrollableScrollPhysics(),
+                        headerExtent: () => _headerExtent,
+                        cardExtent: () => _cardExtent,
+                        hasCards: () =>
+                            !_initialLoading &&
+                            _error == null &&
+                            _events.isNotEmpty,
+                      ),
+                      slivers: [
+                        SliverToBoxAdapter(
+                          child: NotificationListener<
+                              SizeChangedLayoutNotification>(
+                            onNotification: (_) {
+                              _scheduleMeasureHeader();
+                              return false;
+                            },
+                            child: SizeChangedLayoutNotifier(
+                              child: Column(
+                                key: _headerKey,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  // حين يُفتح لوح الفلاتر يحلّ محلّ الرأس بدل أن يجلس فوقه: اللوح
+                                  // يرسم أدواته بنفسه، فلا تبقى وراءه نسخة ثانية من شريط
+                                  // الستوريات ولا من كبسة الفلاتر، مع حفظ الارتفاع كي لا يقفز
+                                  // المحتوى خلف الغطاء.
+                                  if (!_showTopChrome)
+                                    KeyedSubtree(
+                                      key: _feedHeaderKey,
+                                      child: _feedHeader(),
+                                    )
+                                  else
+                                    SizedBox(height: _feedHeaderExtent),
+                                  // شريط التوسّع (#127): خبر المحافظة في سطرين داخل التغذية، فوق
+                                  // الكروت مباشرةً كبطاقة الدخول — يدفعها قليلاً ثم يختفي بـ×،
+                                  // ولا طبقة تحجبها ولا ورقة حواريّة. يتبع تبديل المحافظة بنفسه.
+                                  const RegionBanner(),
+                                  // بطاقة الدخول التسويقية: عنصر عادي في عمود التغذية — **تحت**
+                                  // شريط الستوريات لا فوقه — فتدفع الكروت قليلاً ثم تختفي ويعود
+                                  // التخطيط. بطاقةٌ تشير إلى أوّل ستوري لا يجوز أن تحجبه.
+                                  if (_entryCardVisible && _entryStory != null)
+                                    Padding(
+                                      padding: const EdgeInsets.fromLTRB(
+                                          12, 6, 12, 0),
+                                      child: _EntryCard(
+                                        story: _entryStory!,
+                                        onClose: _hideEntryCard,
+                                        onTap: () =>
+                                            _openEntryStory(_entryStory!),
+                                      ),
+                                    ),
+                                  // كاروسيل البانرات أعلى التغذية (تذكرة #173)، تحت بطاقة الدخول
+                                  // التي تختفي وحدها — ثم تبدأ الكروت.
+                                  if (carouselStories.isNotEmpty)
+                                    _StoryCarousel(
+                                      stories: carouselStories,
+                                      onOpen: (index) =>
+                                          _openStoryList(carouselStories, index),
+                                      onCta: (story) =>
+                                          openStoryTarget(context, story),
+                                    ),
+                                  // «الأكثر تفاعلاً هذا الأسبوع» (تذكرة #177): تحت الكاروسيل وفوق
+                                  // الكروت. بلا نتيجة لا عنصر في الشجرة إطلاقاً — لا عنوان بلا
+                                  // بطاقات ولا مساحة محجوزة تُزيح الكرت الأول.
+                                  if (_trending.isNotEmpty)
+                                    _TrendingStrip(
+                                      events: _trending,
+                                      onOpen: (eventId) => _openEvent(eventId),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                        ..._buildFeedSlivers(viewportHeight),
+                      ],
+                    ),
                   ),
-                ),
-              // كاروسيل البانرات أعلى التغذية (تذكرة #173)، تحت بطاقة الدخول
-              // التي تختفي وحدها — ثم تبدأ الكروت.
-              if (carouselStories.isNotEmpty)
-                _StoryCarousel(
-                  stories: carouselStories,
-                  onOpen: (index) => _openStoryList(carouselStories, index),
-                  onCta: (story) => openStoryTarget(context, story),
-                ),
-              // «الأكثر تفاعلاً هذا الأسبوع» (تذكرة #177): تحت الكاروسيل وفوق
-              // الكروت. بلا نتيجة لا عنصر في الشجرة إطلاقاً — لا عنوان بلا
-              // بطاقات ولا مساحة محجوزة تُزيح الكرت الأول.
-              if (_trending.isNotEmpty)
-                _TrendingStrip(
-                  events: _trending,
-                  onOpen: (eventId) => _openEvent(eventId),
-                ),
-              Expanded(
-                child: RefreshIndicator(
-                  onRefresh: () async {
-                    final services = AppServices.of(context);
-                    _loadStories();
-                    _loadLiveChannel();
-                    // «الأكثر تفاعلاً» (تذكرة #177) مع السحب كبقية أسطح
-                    // الاكتشاف: نافذته سبعة أيام تتحرّك مع الساعة، فسحبٌ لا
-                    // يجددها يُبقي الشريط على أرقام الأمس.
-                    _loadTrending();
-                    // السحب للتحديث يقرأ الشريط والتعميم من جديد كذلك — رقمُ
-                    // الشريط يُبطل كل خمس دقائق على الخادم، لا عند كل سحب.
-                    services.homeTicker.refresh();
-                    // السحب للتحديث يلتقط أيضاً مقطعاً افتراضياً رفعه الأدمن للتوّ.
-                    services.audio.defaultTrack(services.api, refresh: true).then((url) {
-                      if (mounted) _defaultAudioUrl = url;
-                    });
-                    await _loadFirstPage();
-                  },
-                  child: _buildList(),
-                ),
-              ),
-            ],
+                  if (_loadingMore) _loadingMorePill(),
+                  // لا زرّ «عرض المزيد» عائم: كان يغطّي صفّ أزرار الكرت نفسه،
+                  // والصفحة التالية تُجلب تلقائياً من `_onFeedScroll` قبل آخر
+                  // كرتين أصلاً.
+                ],
+              );
+            },
           ),
 
           // 2. لوحة الفلاتر والبحث المنسدلة (تظهر عند الضغط على الكبسة)
@@ -1873,17 +2007,25 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     );
   }
 
-  Widget _buildList() {
+  List<Widget> _buildFeedSlivers(double cardExtent) {
     if (_initialLoading) {
       // هياكل تحميل بدل دوّارة (٥٣)
-      return const EventFeedSkeletonList();
+      return [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: SizedBox(
+            height: cardExtent,
+            child: const EventFeedSkeletonList(),
+          ),
+        ),
+      ];
     }
 
     if (_error != null) {
-      return ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        children: [
-          Padding(
+      return [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Padding(
             padding: const EdgeInsets.all(28),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -1904,15 +2046,15 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
               ],
             ),
           ),
-        ],
-      );
+        ),
+      ];
     }
 
     if (_events.isEmpty) {
-      return ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        children: [
-          Padding(
+      return [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Padding(
             padding: const EdgeInsets.all(28),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -1939,37 +2081,21 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
               ],
             ),
           ),
-        ],
-      );
+        ),
+      ];
     }
 
-    final hasMore = _pagination?.hasMore ?? false;
     // صفحات التغذية: الكروت، وبعد كل [_feedAdInterval] إعلانُ ستوري موضع
     // `feed` (تذكرة #173). بلا إعلانات تطابق `_events` صفحةً بصفحة.
     final pages = _composeFeedPages();
     final feedAds = _storiesFor('feed');
 
-    return Stack(
-      alignment: Alignment.bottomCenter,
-      children: [
-        PageView.builder(
-          key: const Key('feed_pager'),
-          controller: _pageController,
-          scrollDirection: Axis.vertical,
-          physics: const AlwaysScrollableScrollPhysics(
-            parent: PageScrollPhysics(),
-          ),
-          itemCount: pages.length,
-          onPageChanged: (index) {
-            _currentPage = index;
-            _autoplayCurrent();
-            // قفزة الرجوع للقطة ليست تمريراً من المستخدم، فلا تجلب «المزيد».
-            if (_restoringSnapshot) return;
-            if (index >= pages.length - 2 && hasMore && !_loadingMore) {
-              _loadMore();
-            }
-          },
-          itemBuilder: (context, index) {
+    return [
+      SliverFixedExtentList(
+        key: const Key('feed_cards_sliver'),
+        itemExtent: cardExtent,
+        delegate: SliverChildBuilderDelegate(
+          (context, index) {
             final entry = pages[index];
             final ad = entry.ad;
             // إعلان بين الكروت: صفحة كاملة كالكرت. الصورة تفتح العارض
@@ -1999,57 +2125,170 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                 ? FirstScreenFadeIn(index: entry.eventIndex, child: card)
                 : card;
           },
+          childCount: pages.length,
         ),
-        if (_loadingMore)
-          Positioned(
-            bottom: 16,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
-              decoration: BoxDecoration(
-                color: context.c.surface,
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(color: context.c.line),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x40000000),
-                    blurRadius: 16,
-                    offset: Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: context.c.sky,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'جاري تحميل المزيد...',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
-                      color: context.c.ink,
-                    ),
-                  ),
-                ],
+      ),
+    ];
+  }
+
+  Widget _loadingMorePill() {
+    return Positioned(
+      bottom: 16,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+        decoration: BoxDecoration(
+          color: context.c.surface,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: context.c.line),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x40000000),
+              blurRadius: 16,
+              offset: Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: context.c.sky,
               ),
             ),
-          ),
-        // لا زرّ «عرض المزيد» عائم: كان يغطّي صفّ أزرار الكرت نفسه، والصفحة
-        // التالية تُجلب تلقائياً من `onPageChanged` قبل آخر كرتين أصلاً.
-      ],
+            const SizedBox(width: 8),
+            Text(
+              'جاري تحميل المزيد...',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
+                color: context.c.ink,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
 
+/// فيزياء التمرير للتغذية: حرّة داخل منطقة الرأس (0..headerExtent)، ومثبّتة
+/// على حدود الكروت (`headerExtent + k * cardExtent`) بكرت واحد على الأكثر
+/// لكل سحبة كما يفعل `PageScrollPhysics`، مع السماح بالعودة للرأس عند السحب
+/// للأسفل من الكرت الأول.
+class _FeedSnapPhysics extends ScrollPhysics {
+  const _FeedSnapPhysics({
+    super.parent,
+    required this.headerExtent,
+    required this.cardExtent,
+    required this.hasCards,
+  });
+
+  final double Function() headerExtent;
+  final double Function() cardExtent;
+  final bool Function() hasCards;
+
+  @override
+  _FeedSnapPhysics applyTo(ScrollPhysics? ancestor) {
+    return _FeedSnapPhysics(
+      parent: buildParent(ancestor),
+      headerExtent: headerExtent,
+      cardExtent: cardExtent,
+      hasCards: hasCards,
+    );
+  }
+
+  @override
+  Simulation? createBallisticSimulation(
+    ScrollMetrics position,
+    double velocity,
+  ) {
+    if (!hasCards()) {
+      return super.createBallisticSimulation(position, velocity);
+    }
+    final h = headerExtent();
+    final c = cardExtent();
+    if (c <= 0 || position.maxScrollExtent <= h) {
+      return super.createBallisticSimulation(position, velocity);
+    }
+
+    final p = position.pixels;
+    if (p < position.minScrollExtent ||
+        p > position.maxScrollExtent ||
+        (velocity <= 0.0 && p <= position.minScrollExtent) ||
+        (velocity >= 0.0 && p >= position.maxScrollExtent)) {
+      return super.createBallisticSimulation(position, velocity);
+    }
+
+    final tolerance = toleranceFor(position);
+
+    // 1) داخل منطقة الرأس (0 <= p < h):
+    if (p < h) {
+      if (velocity < -tolerance.velocity) {
+        return super.createBallisticSimulation(position, velocity);
+      }
+      if (velocity.abs() <= tolerance.velocity) {
+        // تثبيت على h عند الاقتراب منها (مثل خسارة touchSlop بعد سحبٍ بقدر الرأس).
+        if (h - p <= 24.0) {
+          return ScrollSpringSimulation(
+            spring,
+            p,
+            h.clamp(position.minScrollExtent, position.maxScrollExtent),
+            velocity,
+            tolerance: tolerance,
+          );
+        }
+        return null;
+      }
+      final freeSim = super.createBallisticSimulation(position, velocity);
+      if (freeSim != null && freeSim.x(double.infinity) < h - 24.0) {
+        return freeSim;
+      }
+      return ScrollSpringSimulation(
+        spring,
+        p,
+        h.clamp(position.minScrollExtent, position.maxScrollExtent),
+        velocity,
+        tolerance: tolerance,
+      );
+    }
+
+    // 2) منطقة الكروت (p >= h): تثبيت على h + k * c.
+    double page = (p - h) / c;
+    if (velocity < -tolerance.velocity) {
+      page -= 0.5001;
+    } else if (velocity > tolerance.velocity) {
+      page += 0.5001;
+    }
+    final targetIndex = page.round();
+    if (targetIndex < 0) {
+      return super.createBallisticSimulation(position, velocity);
+    }
+
+    final targetPixels = (h + targetIndex * c)
+        .clamp(position.minScrollExtent, position.maxScrollExtent);
+    if ((targetPixels - p).abs() < tolerance.distance &&
+        velocity.abs() < tolerance.velocity) {
+      return null;
+    }
+    if (targetPixels != p) {
+      return ScrollSpringSimulation(
+        spring,
+        p,
+        targetPixels,
+        velocity,
+        tolerance: tolerance,
+      );
+    }
+    return null;
+  }
+}
+
 /// لقطة ما قبل تغيير الفلتر — القائمة وموضع الكرت والفلتر كاملاً. تُعاد
-/// بـ`setState` و`jumpToPage` بلا طلب شبكة، فلا يضيع تقدّم القائمة.
+/// بـ`setState` والقفز للموضع بلا طلب شبكة، فلا يضيع تقدّم القائمة.
 class _ResultsSnapshot {
   const _ResultsSnapshot({
     required this.events,
