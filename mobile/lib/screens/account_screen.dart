@@ -26,10 +26,10 @@ import 'service_provider_details_screen.dart';
 class AccountScreen extends StatelessWidget {
   const AccountScreen({super.key, this.isActive = true});
 
-  /// هل الشاشة معروضة الآن؟ الدفعُ من زرّ «حسابي» في الترويسة يتركها على
-  /// قيمتها الافتراضية `true`، كي لا يجلب عدّاد «قائمتي» من كل مستخدم مسجَّل
-  /// عند إقلاع التطبيق، بل عند فتح الشاشة وحدها (نفس نمط
-  /// `EventsScreen`/`MyListScreen`).
+  /// هل الشاشة معروضة الآن؟ الهيكل يمرّرها `true` حين تكون «حسابي» الوجهة
+  /// المختارة في الشريط السفلي، ويُدفع بها شاشةً من `AuthActionButton` فتبقى
+  /// `true` — كي لا يجلب عدّاد «قائمتي» من كل مستخدم مسجَّل عند إقلاع التطبيق،
+  /// بل عند فتح الشاشة وحدها (نفس نمط `EventsScreen`/`MyListScreen`).
   final bool isActive;
 
   @override

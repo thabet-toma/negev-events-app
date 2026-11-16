@@ -9,6 +9,7 @@ import '../theme.dart';
 import '../widgets/async_view.dart';
 import '../widgets/auth_action_button.dart';
 import '../widgets/event_card.dart';
+import 'add_event_screen.dart';
 import 'edit_event_screen.dart';
 
 /// تسمية مصدر الجواب في «مين جاي» — القيم من الخادم كما هي (`event_rsvps.source`).
@@ -56,24 +57,81 @@ Color eventStatusWash(BuildContext context, String? status) {
 
 /// كل ما نشره المستخدم الحالي — بكل الحالات وبلا حدّ «القادم فقط»: مناسبة
 /// قيد المراجعة يجب أن تبقى ظاهرة هنا بوضوح، ومناسبة منتهية تبقى في تاريخه.
-class MyEventsScreen extends StatefulWidget {
+///
+/// الشاشة المدفوعة صارت غلافاً رفيعاً حول [MyEventsSection]: الجسم نفسه
+/// يُستعمل مضمَّناً في «مناسباتي» الوجهة الرابعة في الشريط السفلي
+/// (`my_hub_screen.dart`)، فلا نسخة ثانية من القائمة ولا من منطق جلبها.
+class MyEventsScreen extends StatelessWidget {
   const MyEventsScreen({super.key});
 
   @override
-  State<MyEventsScreen> createState() => _MyEventsScreenState();
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('مناسباتي'),
+        actions: const [AuthActionButton()],
+      ),
+      body: const MyEventsSection(),
+    );
+  }
 }
 
-class _MyEventsScreenState extends State<MyEventsScreen> {
+/// قائمة «مناسباتي» وحدها — الشاشة المدفوعة تعرضها بحجمها الكامل، و«مناسباتي»
+/// تعرضها مضمَّنةً تحت عنوانها ثم «قائمتي» تحتها.
+class MyEventsSection extends StatefulWidget {
+  const MyEventsSection({
+    super.key,
+    this.embedded = false,
+    this.isActive = true,
+  });
+
+  /// هل تُعرض داخل قائمة أبٍ تُمرَّر هي نفسها؟ المضمَّن لا يُمرَّر بنفسه (لا
+  /// `ListView` متداخل بلا نهاية)، وحالته الفارغة تدعو إلى النشر بدل الرسالة
+  /// وحدها — فهو المدخل الوحيد للنشر هناك.
+  final bool embedded;
+
+  /// هل القسم مرئيّ الآن؟ يُمرَّر `false` من أبٍ يضمّه مخفيّاً خلف تبويب آخر
+  /// (`IndexedStack` في الهيكل) كي لا يجلب قبل ظهوره — وإلا بقي جلبه الأوّل
+  /// من الإقلاع قديماً لا يتجدّد عند فتح الوجهة.
+  final bool isActive;
+
+  @override
+  State<MyEventsSection> createState() => MyEventsSectionState();
+}
+
+class MyEventsSectionState extends State<MyEventsSection> {
   Future<List<Event>>? _future;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _future ??= AppServices.of(context).api.myEvents();
+    // أوّل جلب حين تكون مرئيّة وحدها: المخفيّة خلف تبويب آخر لا تطلب من
+    // الإقلاع، فلا يعود جلبها قديماً بعد نشر مناسبة في الأثناء.
+    if (_future == null && widget.isActive) {
+      _future = AppServices.of(context).api.myEvents();
+    }
   }
 
-  void _reload() {
-    setState(() => _future = AppServices.of(context).api.myEvents());
+  @override
+  void didUpdateWidget(covariant MyEventsSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // عادت مرئيّة بعد أن كانت خلف تبويب آخر: جلب جديد كي تظهر ما نُشر في
+    // الأثناء («أضف عرسك» من وجهة أخرى) بلا سحبٍ للتحديث.
+    if (widget.isActive && !oldWidget.isActive) reload();
+  }
+
+  /// جلب جديد — يُستدعى من هذه الشاشة، ومن أبٍ يضمّ القسم (سحب «مناسباتي»
+  /// للتحديث) عبر مفتاح على الحالة.
+  ///
+  /// جسم كتلة لا سهم، للسبب المكتوب في `_InvitesDialogState._reload` أدناه:
+  /// `setState(() => _future = …)` يجعل التعبير يعيد `Future` وFlutter يرفضه.
+  Future<void> reload() {
+    final f = AppServices.of(context).api.myEvents();
+    setState(() {
+      _future = f;
+    });
+    // الفشل لا يصعد إلى مَن ينتظر السحب: الحالة تُعرض في `AsyncView` وحدها.
+    return f.then((_) {}, onError: (_) {});
   }
 
   /// «مين جاي» — نصيب صاحب المناسبة وحده؛ الخادم يردّ 404 لكل غيره، فلا حاجة
@@ -105,20 +163,65 @@ class _MyEventsScreenState extends State<MyEventsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('مناسباتي'),
-        actions: const [AuthActionButton()],
-      ),
-      body: FutureBuilder<List<Event>>(
-        future: _future,
-        builder: (context, snapshot) {
-          return AsyncView<List<Event>>(
-            snapshot: snapshot,
-            onRetry: _reload,
-            isEmpty: (data) => data.isEmpty,
-            emptyMessage: 'لم تنشر أي مناسبة بعد',
-            builder: (events) => ListView.builder(
+    // مخفيّة ولم تُجلب بعد: لا شيء — لا مؤشّر ولا حالة «لا بيانات»، فالوجهة
+    // ليست معروضة و`didUpdateWidget` أعلاه هو ما يجلب حين تعود.
+    if (!widget.isActive && _future == null) return const SizedBox.shrink();
+
+    return FutureBuilder<List<Event>>(
+      future: _future,
+      builder: (context, snapshot) {
+        return AsyncView<List<Event>>(
+          snapshot: snapshot,
+          onRetry: reload,
+          // المضمَّن لا يُفرغ: فراغه دعوةٌ إلى النشر داخل `builder` أدناه.
+          isEmpty: (data) => !widget.embedded && data.isEmpty,
+          emptyMessage: 'لم تنشر أي مناسبة بعد',
+          builder: (events) {
+            if (events.isEmpty) {
+              // «مناسباتي» بلا منشورات: دعوة مباشرة إلى «أضف عرسك» بدل رسالة
+              // فراغ تُترك بلا مخرج — وهي المدخل للنشر في هذه الوجهة.
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 26,
+                    vertical: 40,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'ما نشرت مناسبات بعد',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 15,
+                          color: context.c.inkFaint,
+                          height: 1.6,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      FilledButton.icon(
+                        key: const Key('my_hub_add_event'),
+                        onPressed: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => const AddEventScreen(),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.add),
+                        label: const Text('أضف عرسك'),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }
+
+            return ListView.builder(
+              shrinkWrap: widget.embedded,
+              physics: widget.embedded
+                  ? const NeverScrollableScrollPhysics()
+                  : null,
               padding: const EdgeInsets.symmetric(vertical: 8),
               itemCount: events.length,
               itemBuilder: (context, index) {
@@ -160,7 +263,7 @@ class _MyEventsScreenState extends State<MyEventsScreen> {
                             builder: (_) => EditEventScreen(event: event),
                           ),
                         );
-                        _reload();
+                        reload();
                       },
                     ),
                     // «مين جاي» (تذكرة #168) — صاحب المناسبة وحده، ولهذا الشاشة
@@ -194,10 +297,10 @@ class _MyEventsScreenState extends State<MyEventsScreen> {
                   ],
                 );
               },
-            ),
-          );
-        },
-      ),
+            );
+          },
+        );
+      },
     );
   }
 }

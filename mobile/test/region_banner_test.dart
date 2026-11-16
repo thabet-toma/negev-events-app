@@ -465,7 +465,7 @@ void main() {
       await _boot(tester, _app(services, const HomeShell()));
       expect(find.byKey(const Key('region_banner')), findsNothing,
           reason: 'المفتاح يُقرأ عند أول بناء فيبقى مخفياً');
-      expect(find.byType(NavigationBar), findsOneWidget);
+      expect(find.byKey(const Key('home_bottom_nav')), findsOneWidget);
 
       // وتبديل المحافظة يعرض شريط المحافظة الجديدة رغم إخفاء الأولى.
       await services.regions.select(5, signedIn: false);

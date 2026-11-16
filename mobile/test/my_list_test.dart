@@ -626,12 +626,54 @@ void main() {
       expect(deletes, hasLength(1));
       expect(deletes.single.url.queryParameters['scope'], 'ended');
     });
+
+    testWidgets(
+      'زرّ الترويسة يتبع `counts.ended`: يظهر بوجود منتهية ويختفي بصفرها',
+      (tester) async {
+        // منتهيةٌ واحدة ⇒ الزرّ في الترويسة.
+        final withEnded = MyListBackend(listBody([
+          entryJson(id: 1, bucket: 'now'),
+          entryJson(id: 5, bucket: 'ended_recent', eventDate: '2026-10-10'),
+        ], ended: 1));
+        final api = withEnded.build();
+        final auth = await tester.runAsync(() => signedIn(api));
+        await pumpMyList(tester, api: api, auth: auth!);
+
+        expect(
+          find.text('نظّف المنتهية'),
+          findsOneWidget,
+          reason: 'في `AppBar` ما دام في القائمة منتهٍ',
+        );
+
+        // صفر منتهية ⇒ لا زرّ، ولو كانت القائمة نفسها غير فارغة — العدّاد من
+        // `counts.ended` في الاستجابة، لا من عدد الصفوف المعروضة.
+        final withoutEnded = MyListBackend(listBody([
+          entryJson(id: 2, bucket: 'later', daysUntilStart: 9),
+        ], ended: 0));
+        final api2 = withoutEnded.build();
+        final auth2 = await tester.runAsync(() => signedIn(api2));
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump();
+        await pumpMyList(tester, api: api2, auth: auth2!);
+
+        expect(
+          find.text('نظّف المنتهية'),
+          findsNothing,
+          reason: 'صفر منتهية ⇒ لا زرّ',
+        );
+        expect(
+          find.byKey(const Key('my_list_row_2')),
+          findsOneWidget,
+          reason: 'شاهد: القائمة رُسمت فعلاً — الغياب سببه العدّاد لا قائمة فارغة',
+        );
+      },
+    );
   });
 
-  group('(و) الشريط السفلي — ثلاث وجهات، و«قائمتي» و«النقوط» في «حسابي»', () {
+  group('(و) الشريط السفلي — خمس وجهات، والزرّ الوسطي ليس وجهة', () {
     testWidgets(
-      'ثلاث وجهات بلا «قائمتي» ولا «النقوط» ولا «حسابي»، وزرّ النشر في رأس التغذية '
-      'لا عائماً — على عرض ٣٦٠dp',
+      'خمس وجهات بترتيبها («حسابي» آخِرها) بلا «قائمتي» ولا «النقوط»، '
+      'والوسطى ورقةٌ لا وجهة، وزرّ النشر في رأس التغذية لا عائماً — على عرض ٣٦٠dp',
       (tester) async {
         // ورقة أول تشغيل (تذكرة #126) لا شأن لها بهذا الاختبار: نعلن أن
         // السؤال سبق أن طُرح كي لا تبقى ورقة مفتوحة تحجب نقرات الشريط.
@@ -673,33 +715,51 @@ void main() {
 
         await settleTab();
 
-        final navBar = tester.widget<NavigationBar>(find.byType(NavigationBar));
-        // الشريط ثلاث وجهات: «حسابي» تُدفع شاشةً من زرّ الترويسة، و«قائمتي»
-        // و«دفتر النقوط» و«الخريطة» بطاقات وصل سريع داخل شاشة الحساب
-        // (account_screen.dart)، فلا وجهة لها هنا ولا تُعاد إلى الشريط بلا
-        // قرار جديد.
-        expect(navBar.destinations, hasLength(3));
+        final navBar = find.byKey(const Key('home_bottom_nav'));
+        expect(navBar, findsOneWidget, reason: 'شريط الهيكل الجديد');
+
+        // الوجهات الخمس بترتيبها من اليمين في RTL: «حسابي» آخِرها — وكانت
+        // تُدفع من زرّ الترويسة قبل إعادة تصميم الرئيسية.
         expect(
           [
-            for (final destination in navBar.destinations)
-              (destination as NavigationDestination).label,
+            for (var i = 0; i < 5; i++)
+              tester
+                  .widget<Text>(
+                    find.descendant(
+                      of: find.byKey(Key('nav_tab_$i')),
+                      matching: find.byType(Text),
+                    ),
+                  )
+                  .data,
           ],
-          ['المناسبات', 'خدماتنا', 'خدمات الأعراس'],
+          ['المناسبات', 'خدماتنا', 'خدمات الأعراس', 'مناسباتي', 'حسابي'],
+        );
+
+        // الزرّ الوسطي موضعه بين «خدماتنا» (١) و«خدمات الأعراس» (٢)، وفي RTL
+        // المحور السيني يتناقص من اليمين إلى اليسار.
+        final centerX = tester.getCenter(
+          find.byKey(const Key('nav_center_button')),
+        ).dx;
+        expect(
+          centerX,
+          lessThan(tester.getCenter(find.byKey(const Key('nav_tab_1'))).dx),
+          reason: 'الزرّ الوسطي بعد «خدماتنا»',
         );
         expect(
-          find.descendant(of: find.byType(NavigationBar), matching: find.text('قائمتي')),
+          centerX,
+          greaterThan(tester.getCenter(find.byKey(const Key('nav_tab_2'))).dx),
+          reason: 'وقبل «خدمات الأعراس»',
+        );
+
+        expect(
+          find.descendant(of: navBar, matching: find.text('قائمتي')),
           findsNothing,
-          reason: '«قائمتي» لم تعد وجهة في الشريط',
+          reason: '«قائمتي» قسمٌ داخل «مناسباتي» لا وجهة ثانية في الشريط',
         );
         expect(
-          find.descendant(of: find.byType(NavigationBar), matching: find.text('النقوط')),
+          find.descendant(of: navBar, matching: find.text('النقوط')),
           findsNothing,
           reason: 'دفتر النقوط لم يعد وجهة في الشريط',
-        );
-        expect(
-          find.descendant(of: find.byType(NavigationBar), matching: find.text('حسابي')),
-          findsNothing,
-          reason: '«حسابي» لم تعد وجهة في الشريط: تُدفع من زرّ الترويسة',
         );
 
         // تبويب المناسبات: لا زرّ عائم — نشرُه في رأس التغذية نفسه
