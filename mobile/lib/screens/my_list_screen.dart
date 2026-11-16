@@ -48,6 +48,10 @@ enum _MyListFilter { all, upcoming, ended }
 ///
 /// الشاشة لا تعيد ترتيباً ولا اشتقاق تاريخ: `bucket` و`span_*` من الخادم،
 /// والفلترة هنا **على مجموعة الدلاء وحدها**.
+///
+/// وهي غلافٌ حول [MyListSection]: الجسم نفسه يُعرض مضمَّناً في «مناسباتي»
+/// الوجهة الرابعة في الشريط السفلي (`my_hub_screen.dart`)، فلا نسخة ثانية من
+/// القائمة ولا من منطق جلبها.
 class MyListScreen extends StatefulWidget {
   const MyListScreen({super.key, this.isActive = true});
 
@@ -60,6 +64,125 @@ class MyListScreen extends StatefulWidget {
 }
 
 class _MyListScreenState extends State<MyListScreen> {
+  /// القسم المضمَّن — الشاشة تطلب منه «نظّف المنتهية» من زرّها في `AppBar`،
+  /// فالمنطق والحوار في القسم وحده (وهو نفسه ما يعرضه «مناسباتي» المضمَّن).
+  final GlobalKey<MyListSectionState> _sectionKey =
+      GlobalKey<MyListSectionState>();
+
+  /// عدد المنتهية كما أبلغه القسم بعد كل تغيير في بياناته — الزرّ يظهر بوجوده
+  /// ويختفي بصفر، والقسم وحده يعرف ما وصل من الخادم.
+  int _endedCount = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final auth = AppServices.of(context).auth;
+
+    return AnimatedBuilder(
+      animation: auth,
+      builder: (context, _) {
+        if (!auth.isSignedIn) {
+          // خروج: عدّاد جلسة سابقة لا يُعرض لزائر — القسم الجديد يعيد بنائه.
+          _endedCount = 0;
+          return _buildSignInPrompt();
+        }
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('قائمتي'),
+            actions: [
+              if (_endedCount > 0)
+                TextButton(
+                  onPressed: () => _sectionKey.currentState?.confirmClearEnded(),
+                  child: const Text('نظّف المنتهية'),
+                ),
+              const AuthActionButton(),
+            ],
+          ),
+          body: MyListSection(
+            key: _sectionKey,
+            isActive: widget.isActive,
+            onEndedCountChanged: (count) {
+              if (count != _endedCount) setState(() => _endedCount = count);
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSignInPrompt() {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('قائمتي'),
+        actions: const [AuthActionButton()],
+      ),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(30),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.bookmark_border, size: 48, color: context.c.inkFaint),
+              const SizedBox(height: 16),
+              Text(
+                'قائمتي',
+                style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.bold,
+                  color: context.c.ink,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'احفظ المناسبات التي تهمّك أثناء التصفّح، وتابع القادم منها وما انتهى في مكان واحد.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: context.c.inkSoft, height: 1.6),
+              ),
+              const SizedBox(height: 22),
+              ElevatedButton.icon(
+                onPressed: () =>
+                    openSignInGate(context, 'سجّل الدخول لعرض قائمتك'),
+                icon: const Icon(Icons.login),
+                label: const Text('تسجيل الدخول'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// قائمة «قائمتي» وحدها — البيانات والفلترة والأقسام وصفوف المزوّدين
+/// المحفوظين، بلا `Scaffold` ولا ترويسة.
+///
+/// **تفترض حساباً مسجَّلاً**: دعوة الدخول في [MyListScreen] (ولها ترويستها)،
+/// والقسم يُضمَّن في «مناسباتي» تحت عنوانها، فلا ترويسة ثانية ولا نسخة ثانية
+/// من منطق الجلب.
+class MyListSection extends StatefulWidget {
+  const MyListSection({
+    super.key,
+    this.isActive = true,
+    this.embedded = false,
+    this.onEndedCountChanged,
+  });
+
+  /// نفس دلالة [MyListScreen.isActive]: `false` من أبٍ يضمّ القسم مخفيّاً خلف
+  /// سطح آخر كي لا يجلب وهو بعيد.
+  final bool isActive;
+
+  /// هل يُعرض داخل قائمة أبٍ تمرّ هي نفسها؟ المضمَّن بلا `RefreshIndicator`
+  /// (السحب للأب) وبلا تمرير داخلي، وقائمة الصفوف تُقاس بارتفاع محتواها.
+  final bool embedded;
+
+  /// يُبلَّغ بعدد المنتهية بعد كل تغيير في البيانات، فيتبع الأب ما يراه
+  /// المستخدم (زرّ «نظّف المنتهية» في الترويسة المدفوعة).
+  final ValueChanged<int>? onEndedCountChanged;
+
+  @override
+  State<MyListSection> createState() => MyListSectionState();
+}
+
+class MyListSectionState extends State<MyListSection> {
   /// آخر استجابة ناجحة — لا تُمسَح عند إعادة الجلب، فيبقى الصفّ والموضع
   /// (لا قفز إلى أعلى القائمة) أثناء التحديث.
   MyList? _data;
@@ -88,11 +211,15 @@ class _MyListScreenState extends State<MyListScreen> {
       _revision = services.myListRevision;
       _revision!.addListener(_handleRevision);
     }
-    if (_data == null && _loading && _auth!.isSignedIn) _load();
+    // لا جلبَ وهي بعيدة: القسم المضمَّن خلف تبويب آخر ينتظر ظهوره
+    // (`didUpdateWidget` أدناه) — نفس دلالة `isActive` المعلنة.
+    if (_data == null && _loading && _auth!.isSignedIn && widget.isActive) {
+      _load();
+    }
   }
 
   @override
-  void didUpdateWidget(covariant MyListScreen oldWidget) {
+  void didUpdateWidget(covariant MyListSection oldWidget) {
     super.didUpdateWidget(oldWidget);
     // صارت مرئيّة بعد أن كانت خلف تبويب آخر — الجديد يصل الآن.
     if (widget.isActive && !oldWidget.isActive) _load();
@@ -103,6 +230,19 @@ class _MyListScreenState extends State<MyListScreen> {
     _auth?.removeListener(_handleAuthChange);
     _revision?.removeListener(_handleRevision);
     super.dispose();
+  }
+
+  /// جلب جديد من مصدره — يستدعيه أبٌ يضمّ القسم (سحب «مناسباتي» للتحديث)
+  /// عبر مفتاح على الحالة.
+  Future<void> reload() => _load();
+
+  /// يُعلِم الأب بعدد المنتهية بعد كل تغيير في `_data` — في إطار تالٍ، فلا
+  /// يقع `setState` في الأب أثناء بناء هذا القسم.
+  void _notifyEndedCount() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      widget.onEndedCountChanged?.call(_data?.ended ?? 0);
+    });
   }
 
   /// تسجيل دخول أو خروج — الشاشة كانت قد رسمت حالة أخرى.
@@ -121,6 +261,7 @@ class _MyListScreenState extends State<MyListScreen> {
         _filter = _MyListFilter.all;
         _endedExpanded = false;
       });
+      _notifyEndedCount();
     }
   }
 
@@ -173,6 +314,7 @@ class _MyListScreenState extends State<MyListScreen> {
         _error = null;
       });
       _syncNowCount(services);
+      _notifyEndedCount();
     } catch (error) {
       if (!mounted) return;
       // تحديث صامت فشل: ما يراه المستخدم يبقى كما هو، ويُصحَّح عند أول جلب
@@ -218,6 +360,7 @@ class _MyListScreenState extends State<MyListScreen> {
     setState(() => _data = _data?.withoutEvent(eventId));
     // الشارة تتبع ما رُسم للتوّ — لا تنتظر جلباً، فلا تبقى تكذب بعد الإزالة.
     _syncNowCount(services);
+    _notifyEndedCount();
 
     try {
       await services.api.unremind(eventId);
@@ -309,7 +452,9 @@ class _MyListScreenState extends State<MyListScreen> {
     if (mounted) await _load();
   }
 
-  Future<void> _confirmClearEnded() async {
+  /// «نظّف المنتهية» — الحوار والحذف، وزرّها في ترويسة الشاشة المدفوعة يناديه
+  /// من مفتاح على هذه الحالة (القسم المضمَّن لا ترويسة له).
+  Future<void> confirmClearEnded() async {
     final services = AppServices.of(context);
 
     final confirmed = await showDialog<bool>(
@@ -344,31 +489,6 @@ class _MyListScreenState extends State<MyListScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final auth = AppServices.of(context).auth;
-
-    return AnimatedBuilder(
-      animation: auth,
-      builder: (context, _) {
-        if (!auth.isSignedIn) return _buildSignInPrompt();
-        return Scaffold(
-          appBar: AppBar(
-            title: const Text('قائمتي'),
-            actions: [
-              if ((_data?.ended ?? 0) > 0)
-                TextButton(
-                  onPressed: _confirmClearEnded,
-                  child: const Text('نظّف المنتهية'),
-                ),
-              const AuthActionButton(),
-            ],
-          ),
-          body: _buildBody(),
-        );
-      },
-    );
-  }
-
-  Widget _buildBody() {
     final data = _data;
     if (data == null) {
       if (_error != null) {
@@ -377,7 +497,31 @@ class _MyListScreenState extends State<MyListScreen> {
           onRetry: _load,
         );
       }
+      // مخفيّة ولم يصل جلبها الأوّل بعد: لا شيء بدل مؤشّر تحميل لا ينتهي —
+      // أبناء `IndexedStack` المخفيّون يبقون أحياءً فيُبهت مؤشّرهم بلا فائدة.
+      // المؤشّر للانتظار المرئي وحده، ويعود فور أن تصير الوجهة مختارة.
+      if (!widget.isActive) return const SizedBox.shrink();
       return const Center(child: CircularProgressIndicator());
+    }
+
+    // العناصر نفسها في الحالتين — المضمَّن يفارق الشاشة في التمرير والسحب
+    // وحدهما، لا في المحتوى.
+    final children = [
+      if (data.underReviewCount > 0)
+        _UnderReviewNotice(count: data.underReviewCount),
+      _buildChips(data),
+      const SizedBox(height: 2),
+      ..._buildSections(data),
+      if (_savedProviders.isNotEmpty) _buildSavedProviders(),
+    ];
+
+    if (widget.embedded) {
+      // داخل قائمة أبٍ تُمرَّر هي نفسها: ارتفاعٌ بمحتواه، وتمريرٌ للأب وحده.
+      return ListView(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        children: children,
+      );
     }
 
     return RefreshIndicator(
@@ -385,14 +529,7 @@ class _MyListScreenState extends State<MyListScreen> {
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.only(bottom: 96),
-        children: [
-          if (data.underReviewCount > 0)
-            _UnderReviewNotice(count: data.underReviewCount),
-          _buildChips(data),
-          const SizedBox(height: 2),
-          ..._buildSections(data),
-          if (_savedProviders.isNotEmpty) _buildSavedProviders(),
-        ],
+        children: children,
       ),
     );
   }
@@ -800,7 +937,7 @@ class _MyListScreenState extends State<MyListScreen> {
   }
 
   /// قسم «مزوّدون محفوظون» — بطاقات المزوّدين وحدها، بلا وجهة جديدة في الشريط.
-  /// لا يُبنى إطلاقاً حين لا محفوظات (الشرط في `_buildBody`)، فلا عنوان لقسم فارغ.
+  /// لا يُبنى إطلاقاً حين لا محفوظات (الشرط في `build`)، فلا عنوان لقسم فارغ.
   Widget _buildSavedProviders() {
     return Column(
       key: const Key('my_list_saved_providers'),
@@ -949,48 +1086,6 @@ class _MyListScreenState extends State<MyListScreen> {
       ),
     );
     if (mounted) await _load();
-  }
-
-  Widget _buildSignInPrompt() {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('قائمتي'),
-        actions: const [AuthActionButton()],
-      ),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(30),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.bookmark_border, size: 48, color: context.c.inkFaint),
-              const SizedBox(height: 16),
-              Text(
-                'قائمتي',
-                style: TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.bold,
-                  color: context.c.ink,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'احفظ المناسبات التي تهمّك أثناء التصفّح، وتابع القادم منها وما انتهى في مكان واحد.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: context.c.inkSoft, height: 1.6),
-              ),
-              const SizedBox(height: 22),
-              ElevatedButton.icon(
-                onPressed: () =>
-                    openSignInGate(context, 'سجّل الدخول لعرض قائمتك'),
-                icon: const Icon(Icons.login),
-                label: const Text('تسجيل الدخول'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 }
 

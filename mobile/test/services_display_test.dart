@@ -216,10 +216,16 @@ Future<void> _pumpServicesInShell(WidgetTester tester, NegevApi api) async {
   });
   SharedPreferences.setMockInitialValues({regionOnboardedKey: true, welcomeSeenKey: true});
 
+  // الجلسة تُحمَّل كما يحمّلها `main.dart` قبل أول إطار: شاشة «حسابي» في
+  // `IndexedStack` (المقعد الأخير في الشريط) ترسم مؤشّر تحميل حتى تصير جاهزة،
+  // والمؤشّر الدائم يمنع `pumpAndSettle` بعده من الاستقرار.
+  final auth = AuthStore(api);
+  await auth.load();
+
   await tester.pumpWidget(
     AppServices(
       api: api,
-      auth: AuthStore(api),
+      auth: auth,
       realtime: RealtimeService(),
       child: MaterialApp(
         theme: AppTheme.light(),
@@ -244,10 +250,7 @@ Future<void> _pumpServicesInShell(WidgetTester tester, NegevApi api) async {
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 100));
 
-  final navBar = find.byType(NavigationBar);
-  await tester.tap(
-    find.descendant(of: navBar, matching: find.text('خدمات الأعراس')),
-  );
+  await tester.tap(find.byKey(const Key('nav_tab_2')));
   await tester.pumpAndSettle();
 }
 

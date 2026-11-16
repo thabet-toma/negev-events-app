@@ -9,32 +9,43 @@ import '../state/region_store.dart';
 import '../state/update_checker.dart';
 import '../state/welcome.dart';
 import '../theme.dart';
+import '../widgets/featured_hub_sheet.dart';
 import '../widgets/region_onboarding_sheet.dart';
 import '../widgets/update_dialog.dart';
 import '../widgets/welcome_sheet.dart';
+import 'account_screen.dart';
 import 'add_event_screen.dart';
 import 'agenda_screen.dart';
 import 'events_screen.dart';
+import 'my_hub_screen.dart';
 import 'services_hub_screen.dart';
 import 'services_screen.dart';
 
-/// الهيكل الرئيسي — ثلاث وجهات بشريط تنقّل سفلي: المناسبات، خدماتنا، خدمات
-/// الأعراس (بهذا الترتيب في RTL من اليمين).
+/// الهيكل الرئيسي — خمس وجهات بشريط تنقّل سفلي، وبين «خدماتنا» و«خدمات
+/// الأعراس» زرٌّ ذهبي وسطي (ليس وجهةً)، وبهذا الترتيب في RTL من اليمين:
+/// المناسبات، خدماتنا، الزرّ الوسطي، خدمات الأعراس، مناسباتي، حسابي.
 ///
-/// وفوق الثلاث ترويسةُ الهيكل بشعار «اعراسنا» (`_brandBar`): نسخة واحدة من
-/// الأصل المولَّد، تكبس فتُعيد إلى «المناسبات» وتصعد بقائمتها إلى أولها (#157).
+/// وفوقها ترويسةُ الهيكل بشعار «اعراسنا» (`_brandBar`): نسخة واحدة من الأصل
+/// المولَّد، تكبس فتُعيد إلى «المناسبات» وتصعد بقائمتها إلى أولها (#157).
 /// وبجانبه ترويسةٌ غنية (تذكرة #174): «أهلاً، الاسم» للمسجَّل وحده، وكبسولة
-/// المحافظة التي تفتح ورقة المحافظة القائمة، وقلب «قائمتي»، وزرّ الأجندة —
-/// والشريط السفلي يبقى ثلاث وجهات.
-/// والشاشات المدفوعة («تفاصيل مناسبة»، «حسابي»، الألبومات…) تغطّيها كلها، فلا
+/// المحافظة التي تفتح ورقة المحافظة القائمة، وقلب «قائمتي»، وزرّ الأجندة.
+/// والشاشات المدفوعة («تفاصيل مناسبة»، الألبومات، «قائمتي»…) تغطّيها كلها، فلا
 /// شعار فوقها ولا ترويسة ثانية — تبقى «رجوع + عنوان» كما هي.
 ///
-/// «حسابي» ليست وجهةً في الشريط: تُدفع شاشةً من زرّها في الترويسة
-/// (`AuthActionButton` ← `AccountScreen`)، فلا نسخة ثانية لها في الشريط.
+/// و«حسابي» **آخِر وجهة في الشريط** (كانت تُدفع شاشةً من زرّها في الترويسة
+/// قبل إعادة تصميم الرئيسية): شاشتها كما هي (`AccountScreen`)، ولها الآن مقعد
+/// ثابت بعد «مناسباتي».
 ///
-/// الخريطة و«قائمتي» والنقوط خرجت من الشريط حين ضاق بستّ وجهات، وشاشاتها باقية
-/// كما هي ويُوصل إليها من بطاقات الوصل السريع داخل شاشة «حسابي» — لم تُحذف ولم
-/// تُنسخ.
+/// و«مناسباتي» وجهةٌ جديدة: ما نشره المستخدم أوّلاً، ثمّ «قائمتي» (المحفوظات)
+/// تحته في الشاشة نفسها (`MyHubScreen`) — لا وجهتان متقاربتان، ولا نسخة ثانية
+/// من القائمة. والقلب في الترويسة يبقى يفتح `MyListScreen` وحدها كما كان.
+/// والخريطة والنقوط لم تكونا وجهتين هنا، وشاشاتهما باقية كما هي ويُوصل إليها
+/// من بطاقات الوصل السريع داخل «حسابي» — لم تُحذف ولم تُنسخ.
+///
+/// والزرّ الوسطي **ليس وجهة**: ذهبي دائري بشعار العلامة، مرتفع قليلاً فوق
+/// الشريط، يفتح ورقة «مميّز عندنا» (`featured_hub_sheet.dart`) بقائمة مختارات
+/// ثابتة بقرار المالك — و«أضف عرسك/أضف خدمتك» ليستا فيها لأن مكانهما الكبستان
+/// الثابتتان أدناه.
 ///
 /// وزرّ النشر العائم (FAB) لم تبقَ له حاجة: فوق الشريط كبستان ثابتان —
 /// «أضف عرسك» (بارز) و«أضف خدمتك» (أهدأ) — يظهران في كل الوجهات، ونشر التغذية
@@ -47,6 +58,54 @@ class HomeShell extends StatefulWidget {
 }
 
 class _HomeShellState extends State<HomeShell> {
+  /// فهرس وجهة «خدماتنا» — منصّات كترا الأخرى.
+  static const int _hubTab = 1;
+
+  /// فهرس وجهة «خدمات الأعراس» — دليل مزوّدي الخدمة.
+  static const int _servicesTab = 2;
+
+  /// فهرس وجهة «مناسباتي» — منشورات المستخدم ثمّ «قائمتي» تحتها.
+  static const int _myHubTab = 3;
+
+  /// فهرس وجهة «حسابي» — الشاشة القائمة نفسها، آخِر مقعد في الشريط.
+  static const int _accountTab = 4;
+
+  /// وجهات الشريط الخمس بترتيبها من اليمين في RTL — بيانات عرضها لا سلوكها،
+  /// يقرؤها `_ShellNavBar` وحده. الفهرس الصريح من الثوابت أعلاه، فلا رقم
+  /// مكرَّر يفترق عن موضعه في `IndexedStack`.
+  static const List<_ShellTab> _tabs = [
+    _ShellTab(
+      index: AppServices.feedTabIndex,
+      label: 'المناسبات',
+      icon: Icons.celebration_outlined,
+      selectedIcon: Icons.celebration,
+    ),
+    _ShellTab(
+      index: _hubTab,
+      label: 'خدماتنا',
+      icon: Icons.apps_outlined,
+      selectedIcon: Icons.apps,
+    ),
+    _ShellTab(
+      index: _servicesTab,
+      label: 'خدمات الأعراس',
+      icon: Icons.handyman_outlined,
+      selectedIcon: Icons.handyman,
+    ),
+    _ShellTab(
+      index: _myHubTab,
+      label: 'مناسباتي',
+      icon: Icons.bookmark_border,
+      selectedIcon: Icons.bookmark,
+    ),
+    _ShellTab(
+      index: _accountTab,
+      label: 'حسابي',
+      icon: Icons.person_outline,
+      selectedIcon: Icons.person,
+    ),
+  ];
+
   int _index = 0;
   StreamSubscription<Map<String, dynamic>>? _broadcastSub;
   HomeTickerStore? _homeTicker;
@@ -231,6 +290,8 @@ class _HomeShellState extends State<HomeShell> {
           ),
           ServicesHubScreen(key: ValueKey('hub_$regionKey')),
           ServicesScreen(key: ValueKey('services_$regionKey')),
+          MyHubScreen(isActive: _index == _myHubTab),
+          AccountScreen(isActive: _index == _accountTab),
         ];
 
         return _shell(screens);
@@ -257,8 +318,8 @@ class _HomeShellState extends State<HomeShell> {
         bottom: false,
         child: Column(
           children: [
-            // ترويسة الهيكل فوق الوجهات الثلاث كلها: نسخة واحدة من الشعار لا
-            // ثلاث، وهي خارج `IndexedStack` فلا تُبنى مع كل تبديل وجهة.
+            // ترويسة الهيكل فوق الوجهات الخمس كلها: نسخة واحدة من الشعار لا
+            // خمس، وهي خارج `IndexedStack` فلا تُبنى مع كل تبديل وجهة.
             _brandBar(),
             if (broadcast != null)
               _BroadcastBanner(
@@ -280,29 +341,24 @@ class _HomeShellState extends State<HomeShell> {
         mainAxisSize: MainAxisSize.min,
         children: [
           _publishActions(),
-          NavigationBar(
+          _ShellNavBar(
             selectedIndex: _index,
-            onDestinationSelected: (value) => setState(() => _index = value),
-            destinations: const [
-              NavigationDestination(
-                icon: Icon(Icons.celebration_outlined),
-                selectedIcon: Icon(Icons.celebration),
-                label: 'المناسبات',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.apps_outlined),
-                selectedIcon: Icon(Icons.apps),
-                label: 'خدماتنا',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.handyman_outlined),
-                selectedIcon: Icon(Icons.handyman),
-                label: 'خدمات الأعراس',
-              ),
-            ],
+            onSelect: (index) => setState(() => _index = index),
+            onCenterTap: _openFeaturedHub,
           ),
         ],
       ),
+    );
+  }
+
+  /// يفتح ورقة «مميّز عندنا» من الزرّ الذهبي الأوسط.
+  ///
+  /// وبطاقتها الأولى («صمّم بطاقة دعوتك») تنقل إلى «مناسباتي» لاختيار المناسبة:
+  /// التصميم يحتاج مناسبةً بعينها، ومن هنا يصل المستخدم إلى كرتها.
+  Future<void> _openFeaturedHub() {
+    return showFeaturedHubSheet(
+      context,
+      onOpenMyHub: () => setState(() => _index = _myHubTab),
     );
   }
 
@@ -409,7 +465,7 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   /// ترويسة الهيكل: شعار «اعراسنا» على جهة البداية (يمين في RTL) فوق الوجهات
-  /// الثلاث، وبجانبه الترويسة الغنية (تذكرة #174): «أهلاً، الاسم» وكبسولة
+  /// الخمس، وبجانبه الترويسة الغنية (تذكرة #174): «أهلاً، الاسم» وكبسولة
   /// المحافظة، وقلب «قائمتي» وزرّ الأجندة على طرفها الآخر. الأصل المولَّد
   /// `mobile/assets/brand/mark-full.png` — طبقة `full` (بالكلمة) بمقاسها
   /// المنطقي ٧٢px، وهو حدّ القاعدة نفسه؛ و`2.0x`/`3.0x` يلتقطهما `Image.asset`
@@ -539,6 +595,233 @@ class _HomeShellState extends State<HomeShell> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// وجهة واحدة في الشريط السفلي — بيانات عرضها لا سلوكها.
+class _ShellTab {
+  const _ShellTab({
+    required this.index,
+    required this.label,
+    required this.icon,
+    required this.selectedIcon,
+  });
+
+  /// موضعها في `IndexedStack` — نفس ثوابت `_HomeShellState._*Tab`.
+  final int index;
+  final String label;
+
+  /// المجرَّدة حين لا تكون مختارة، والممتلئة حين تكون.
+  final IconData icon;
+  final IconData selectedIcon;
+}
+
+/// شريط التنقّل السفلي — خمس وجهات وخمسة مواضع، والزرّ الوسطي ليس وجهة.
+///
+/// بُني يدوياً بدل `NavigationBar`: الزرّ الوسطي المرتفع لا مكان له في
+/// `NavigationDestination`، وتثبيت مواضع الستّة في ٣٩٠dp يحتاج عرضاً أدنى
+/// صريحاً لكل موضع (`minSlot`) — وهو ما لا يضمنه الشريط الجاهز.
+///
+/// **العرض الكافي (٣٤٤dp = ٥×٥٦ + ٦٤):** صفٌّ بلا تمرير، الوجهات تتمدّد
+/// والزرّ الوسطي بعرضه الثابت وحده. **الأضيق:** صفٌّ بعرض ثابت داخل تمرير
+/// أفقي، والمختارة تُبقى مرئيّة عند تبديلها (`didUpdateWidget`).
+class _ShellNavBar extends StatefulWidget {
+  const _ShellNavBar({
+    required this.selectedIndex,
+    required this.onSelect,
+    required this.onCenterTap,
+  });
+
+  final int selectedIndex;
+  final ValueChanged<int> onSelect;
+
+  /// الزرّ الوسطي لا يختار وجهة — يفتح ورقة «مميّز عندنا».
+  final VoidCallback onCenterTap;
+
+  @override
+  State<_ShellNavBar> createState() => _ShellNavBarState();
+}
+
+class _ShellNavBarState extends State<_ShellNavBar> {
+  /// أدنى عرض لموضع وجهة، وعرض موضع الزرّ الوسطي — ومجموعهما ما يلزم الشريطَ
+  /// كي يظهر كاملاً بلا تمرير في هاتف ٣٩٠dp.
+  static const double minSlot = 56.0;
+  static const double centerSlot = 64.0;
+  static const double needed = 5 * minSlot + centerSlot;
+
+  /// مفتاح لكل وجهة — يُستعمل لإبقاء المختارة مرئيّة حين يُمرَّر الشريط.
+  final Map<int, GlobalKey> _tabKeys = {
+    for (final tab in _HomeShellState._tabs) tab.index: GlobalKey(),
+  };
+
+  @override
+  void didUpdateWidget(covariant _ShellNavBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.selectedIndex == oldWidget.selectedIndex) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final targetContext = _tabKeys[widget.selectedIndex]?.currentContext;
+      if (targetContext == null) return;
+      // الشريط الواسع لا `Scrollable` فيه أصلاً (`ensureVisible` بلا تمرير
+      // يرمي)، فلا يُنادى إلا حين يوجد ما يُمرَّر.
+      if (Scrollable.maybeOf(targetContext) == null) return;
+      Scrollable.ensureVisible(
+        targetContext,
+        duration: const Duration(milliseconds: 200),
+      );
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tabs = _HomeShellState._tabs;
+
+    return Material(
+      key: const Key('home_bottom_nav'),
+      color: context.c.surface,
+      elevation: 3,
+      child: SafeArea(
+        top: false,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // RTL هو ما يرتّب هذه القائمة من اليمين: أول عنصر في الصفّ أيمنها.
+            if (constraints.maxWidth >= needed) {
+              return Row(
+                children: [
+                  Expanded(child: _tab(context, tabs[0])),
+                  Expanded(child: _tab(context, tabs[1])),
+                  _centerSlot(context),
+                  Expanded(child: _tab(context, tabs[2])),
+                  Expanded(child: _tab(context, tabs[3])),
+                  Expanded(child: _tab(context, tabs[4])),
+                ],
+              );
+            }
+
+            return SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  SizedBox(width: minSlot, child: _tab(context, tabs[0])),
+                  SizedBox(width: minSlot, child: _tab(context, tabs[1])),
+                  _centerSlot(context),
+                  SizedBox(width: minSlot, child: _tab(context, tabs[2])),
+                  SizedBox(width: minSlot, child: _tab(context, tabs[3])),
+                  SizedBox(width: minSlot, child: _tab(context, tabs[4])),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  /// وجهة واحدة: أيقونة مجرَّدة/ممتلئة وتسمية بسطرين على الأكثر — بلا قطع
+  /// بنقاط، فالتسمية العربية قصيرة والمساحة تكفيها في العرض الكافي.
+  ///
+  /// ومفتاحها العام على المحتوى لا على `InkWell` (الذي يحمل `nav_tab_$i`):
+  /// `ensureVisible` يحتاج سياقاً داخل التمرير، وهذا هو.
+  Widget _tab(BuildContext context, _ShellTab tab) {
+    final c = context.c;
+    final selected = tab.index == widget.selectedIndex;
+
+    return Semantics(
+      selected: selected,
+      button: true,
+      child: InkWell(
+        key: Key('nav_tab_${tab.index}'),
+        onTap: () => widget.onSelect(tab.index),
+        child: Padding(
+          key: _tabKeys[tab.index],
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                selected ? tab.selectedIcon : tab.icon,
+                size: 24,
+                color: selected ? c.sky : c.inkSoft,
+              ),
+              const SizedBox(height: 2),
+              Text(
+                tab.label,
+                maxLines: 2,
+                softWrap: true,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: selected ? FontWeight.w800 : FontWeight.normal,
+                  color: selected ? c.sky : c.inkSoft,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// موضع الزرّ الوسطي — `Center` يحفظ للقرص مربّعه (٥٤×٥٤) داخل موضع أوسع:
+  /// `SizedBox` وحده يفرض عرضه على الطفل فتصير الدائرة بيضاوية والعلامة تحتها
+  /// مقصوصةً بشكلها أيضاً.
+  Widget _centerSlot(BuildContext context) {
+    return SizedBox(
+      width: centerSlot,
+      child: Center(child: _centerButton(context)),
+    );
+  }
+
+  /// الزرّ الذهبي الأوسط — شعار العلامة على قرص، مرتفعٌ عن الشريط بـ١٠px.
+  /// `Transform` لا يقصّ ولا يغيّر الحجم: الصعود فوق سطح الشريط بلا توسيع
+  /// موضعه، والإطار بلون السطح يفصله عن الحبّة الذهبية.
+  Widget _centerButton(BuildContext context) {
+    final c = context.c;
+
+    return Transform.translate(
+      offset: const Offset(0, -10),
+      child: Semantics(
+        button: true,
+        label: 'مميّز عندنا',
+        child: InkWell(
+          key: const Key('nav_center_button'),
+          customBorder: const CircleBorder(),
+          onTap: widget.onCenterTap,
+          child: Container(
+            width: 54,
+            height: 54,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: LinearGradient(
+                colors: [const Color(0xFFF4D57B), c.gold],
+              ),
+              border: Border.all(color: c.surface, width: 3),
+              boxShadow: [
+                BoxShadow(
+                  color: c.gold.withValues(alpha: 0.45),
+                  blurRadius: 14,
+                  offset: const Offset(0, 5),
+                ),
+              ],
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(6),
+              child: ClipOval(
+                // خلفية بيضاء تحت العلامة، كما في أيقونة التطبيق: الأصل
+                // مرسوم على أرضية بيضاء، والقرص الذهبي لا يُعاد تلوينه.
+                child: ColoredBox(
+                  color: Colors.white,
+                  child: Image.asset(
+                    'assets/brand/mark-full.png',
+                    fit: BoxFit.contain,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

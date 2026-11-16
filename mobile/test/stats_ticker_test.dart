@@ -204,10 +204,15 @@ void main() {
         },
       ],
     );
+    // الجلسة تُحمَّل كما يحمّلها `main.dart` قبل أول إطار: شاشة «حسابي» في
+    // `IndexedStack` (المقعد الأخير في الشريط) ترسم مؤشّر تحميل حتى تصير جاهزة،
+    // والمؤشّر الدائم يمنع `pumpAndSettle` أدناه من الاستقرار.
+    final auth = AuthStore(api);
+    await auth.load();
     await tester.pumpWidget(
       AppServices(
         api: api,
-        auth: AuthStore(api),
+        auth: auth,
         realtime: RealtimeService(),
         child: MaterialApp(
           theme: AppTheme.light(),
@@ -231,8 +236,7 @@ void main() {
     expect(find.text('المجموع 16'), findsNothing);
 
     // على وجهة أخرى: شريط الهيكل يقف مكانه — تبادلٌ لا اجتماع.
-    final navBar = find.byType(NavigationBar);
-    await tester.tap(find.descendant(of: navBar, matching: find.text('خدماتنا')));
+    await tester.tap(find.byKey(const Key('nav_tab_1')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('shell_broadcast_banner')), findsOneWidget,
         reason: 'على غير وجهة التغذية يرسم الهيكل التعميم من الحالة نفسها');
@@ -241,7 +245,7 @@ void main() {
 
     // عودة إلى «المناسبات»: الإغلاق من الشريط الجديد نفسه (بلا زرّ في الشاشة
     // وحدها ولا في الهيكل وحده — الحالة واحدة).
-    await tester.tap(find.descendant(of: navBar, matching: find.text('المناسبات')));
+    await tester.tap(find.byKey(const Key('nav_tab_0')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('home_broadcast_ticker_dismiss')));
     await tester.pumpAndSettle();

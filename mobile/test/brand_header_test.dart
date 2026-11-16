@@ -23,14 +23,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// تذكرة #174.
 ///
 /// ما يُثبَت هنا: الشعار أصلٌ مولَّد (`assets/brand/mark-full.png`، طبقة `full`
-/// بمقاسها المنطقي ٧٢px) ونسخة واحدة فوق الوجهات الثلاث؛ والنقر عليه من وجهة
+/// بمقاسها المنطقي ٧٢px) ونسخة واحدة فوق الوجهات الخمس؛ والنقر عليه من وجهة
 /// ثانية يعيد إلى «المناسبات»؛ وعلى «المناسبات» نفسها يصعد بالقائمة إلى أولها
 /// **بلا فلتر يتغيّر ولا تغذية تُجلب**. وحوله في الترويسة نفسها: «أهلاً، الاسم»
 /// للمسجَّل وحده، وكبسولة المحافظة التي تحمل اسمها من الخادم وتفتح ورقة
-/// المحافظة القائمة، وقلب «قائمتي»، وزرّ الأجندة — والشريط السفلي ثلاث وجهات.
+/// المحافظة القائمة، وقلب «قائمتي»، وزرّ الأجندة — والشريط السفلي خمس وجهات
+/// وزرٌّ وسطي بين الثالثة والرابعة.
 ///
-/// ولا شيء من هذا يمسّ «تفاصيل مناسبة» و«حسابي»: الشعار في الهيكل تحتها،
-/// والشاشات المدفوعة تغطّيها بخلفيتها و«رجوع + عنوان» كما هي.
+/// ولا شيء من هذا يمسّ «تفاصيل مناسبة»: الشعار في الهيكل تحتها، والشاشات
+/// المدفوعة تغطّيها بخلفيتها و«رجوع + عنوان» كما هي.
 
 Map<String, dynamic> _eventRow(int id, String day) => {
       'id': id,
@@ -127,10 +128,16 @@ Future<void> _pumpShell(
 
   SharedPreferences.setMockInitialValues({regionOnboardedKey: true, welcomeSeenKey: true});
 
+  // الجلسة تُحمَّل كما يحمّلها `main.dart` قبل أول إطار: شاشة «حسابي» في
+  // `IndexedStack` (المقعد الأخير في الشريط) ترسم مؤشّر تحميل حتى تصير الجلسة
+  // جاهزة، والمؤشّر الدائم يمنع `pumpAndSettle` من الاستقرار في هذا الملف كلّه.
+  final store = auth ?? AuthStore(api);
+  if (auth == null) await store.load();
+
   await tester.pumpWidget(
     AppServices(
       api: api,
-      auth: auth ?? AuthStore(api),
+      auth: store,
       realtime: RealtimeService(),
       child: MaterialApp(
         navigatorKey: navigatorKey,
@@ -160,6 +167,23 @@ Future<void> _pumpShell(
 int _feedRequests(List<Uri> requests) =>
     requests.where((uri) => uri.path.endsWith('/api/events')).length;
 
+/// الوجهة المختارة في الشريط السفلي — من لون عنوانها: `c.sky` للمختارة و
+/// `c.inkSoft` لغيرها. بديل `NavigationBar.selectedIndex`: الشريط صار يدوياً
+/// (`_ShellNavBar` في home_shell.dart) ولا واجهة `NavigationBar` بعد اليوم.
+int _selectedTab(WidgetTester tester) {
+  const labels = ['المناسبات', 'خدماتنا', 'خدمات الأعراس', 'مناسباتي', 'حسابي'];
+  for (var i = 0; i < labels.length; i++) {
+    final label = tester.widget<Text>(
+      find.descendant(
+        of: find.byKey(Key('nav_tab_$i')),
+        matching: find.text(labels[i]),
+      ),
+    );
+    if (label.style?.color == NegevPalette.light.sky) return i;
+  }
+  return -1;
+}
+
 void main() {
   group('شعار «اعراسنا» في ترويسة الهيكل (#157)', () {
     testWidgets(
@@ -168,9 +192,19 @@ void main() {
         await _pumpShell(tester, _shellApi(), statusBarPadding: 24);
 
         // الأصل المولَّد نفسه — لا رسم بكود Flutter ولا صورة شبكة — ونسخة
-        // واحدة فوق الوجهات الثلاث (لا نسخة لكل وجهة).
-        final logo = find.image(const AssetImage('assets/brand/mark-full.png'));
-        expect(logo, findsOneWidget, reason: 'الشعار من assets/brand/mark-full.png وحدها');
+        // واحدة داخل ترويسة الهيكل (لا نسخة لكل وجهة). والنسخة الثانية من
+        // الأصل نفسه في الزرّ الذهبي الأوسط للشريط بحسب التصميم، فهذا الفحص
+        // محصور في شريط العلامة وحده.
+        final bar = find.byKey(const Key('shell_brand_bar'));
+        final logo = find.descendant(
+          of: bar,
+          matching: find.image(const AssetImage('assets/brand/mark-full.png')),
+        );
+        expect(
+          logo,
+          findsOneWidget,
+          reason: 'شعار واحد في ترويسة الهيكل — لا في الزرّ الوسطي',
+        );
 
         // ما يُفحص هنا اسم الملف ومقاسه المنطقي فقط — لا محتوى بكسلاته: أنّ
         // الملف نفسه مولَّد بطبقة `full` (بالكلمة) يحرسه توليد brand-icons.js
@@ -191,7 +225,6 @@ void main() {
         // عندها والشعار بعد حشوته (٦)، ورأس التغذية تحته لا يُضيف حشوة ثانية
         // (`SafeArea` تقرأ صفراً) — وهو ما يُرى بمسافة أقل من ٢٤ بين الشريط
         // وأوّل عنصر في التغذية.
-        final bar = find.byKey(const Key('shell_brand_bar'));
         expect(tester.getTopLeft(bar).dy, 24);
         expect(tester.getTopLeft(logo).dy, 30);
         expect(
@@ -209,22 +242,19 @@ void main() {
         await _pumpShell(tester, _shellApi(requests: requests));
         await tester.pumpAndSettle();
 
-        final navBar = find.byType(NavigationBar);
-        await tester.tap(
-          find.descendant(of: navBar, matching: find.text('خدماتنا')),
-        );
+        await tester.tap(find.byKey(const Key('nav_tab_1')));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 400));
         expect(
-          tester.widget<NavigationBar>(navBar).selectedIndex,
+          _selectedTab(tester),
           1,
           reason: 'الاختبار يبدأ من وجهة ثانية فعلاً',
         );
-        // الشعار فوق الوجهات الثلاث كلها — لا يختفي بتبديلها.
+        // الشعار فوق الوجهات الخمس كلها — لا يختفي بتبديلها.
         expect(
           find.byKey(const Key('shell_brand_logo')),
           findsOneWidget,
-          reason: 'الترويسة مشتركة بين الوجهات الثلاث',
+          reason: 'الترويسة مشتركة بين الوجهات الخمس',
         );
 
         final before = _feedRequests(requests);
@@ -232,7 +262,7 @@ void main() {
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 400));
 
-        expect(tester.widget<NavigationBar>(navBar).selectedIndex, 0);
+        expect(_selectedTab(tester), 0);
         expect(
           _feedRequests(requests),
           before,
@@ -247,10 +277,10 @@ void main() {
         await _pumpShell(tester, _shellApi());
         await tester.pumpAndSettle();
 
-        final navBar = find.byType(NavigationBar);
-        for (final destination in const ['خدماتنا', 'خدمات الأعراس']) {
+        for (final destination
+            in const {1: 'خدماتنا', 2: 'خدمات الأعراس'}.entries) {
           await tester.tap(
-            find.descendant(of: navBar, matching: find.text(destination)),
+            find.byKey(Key('nav_tab_${destination.key}')),
           );
           await tester.pump();
           await tester.pump(const Duration(milliseconds: 400));
@@ -260,12 +290,12 @@ void main() {
           expect(
             find.byType(AppBar),
             findsNothing,
-            reason: 'وجهة «$destination»: شريط واحد لا شريطان',
+            reason: 'وجهة «${destination.value}»: شريط واحد لا شريطان',
           );
           expect(
             find.byKey(const Key('shell_brand_bar')),
             findsOneWidget,
-            reason: 'ترويسة الهيكل وحدها فوق وجهة «$destination»',
+            reason: 'ترويسة الهيكل وحدها فوق وجهة «${destination.value}»',
           );
         }
 
@@ -346,19 +376,16 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('مناسبات منطقتك'), findsOneWidget, reason: 'الدرج مفتوح فعلاً');
 
-        final navBar = find.byType(NavigationBar);
-        await tester.tap(
-          find.descendant(of: navBar, matching: find.text('خدماتنا')),
-        );
+        await tester.tap(find.byKey(const Key('nav_tab_1')));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 400));
-        expect(tester.widget<NavigationBar>(navBar).selectedIndex, 1);
+        expect(_selectedTab(tester), 1);
 
         final before = _feedRequests(requests);
         await tester.tap(find.byKey(const Key('shell_brand_logo')));
         await tester.pumpAndSettle();
 
-        expect(tester.widget<NavigationBar>(navBar).selectedIndex, 0);
+        expect(_selectedTab(tester), 0);
         expect(
           find.text('مناسبات منطقتك'),
           findsNothing,
@@ -578,14 +605,22 @@ void main() {
       await tester.pumpAndSettle();
     });
 
-    testWidgets('القلب يفتح «قائمتي» وزرّ الأجندة يفتح الأجندة، والشريط يبقى ثلاث وجهات', (tester) async {
+    testWidgets('القلب يفتح «قائمتي» وزرّ الأجندة يفتح الأجندة، والشريط خمس وجهات', (tester) async {
       await _pumpShell(tester, _shellApi());
       await tester.pumpAndSettle();
 
+      // خمس وجهات في الشريط، والزرّ الوسطي موضعٌ سادس لا وجهة.
+      for (var i = 0; i < 5; i++) {
+        expect(
+          find.byKey(Key('nav_tab_$i')),
+          findsOneWidget,
+          reason: 'الوجهة $i في الشريط السفلي',
+        );
+      }
       expect(
-        tester.widget<NavigationBar>(find.byType(NavigationBar)).destinations.length,
-        3,
-        reason: 'الشريط السفلي ثلاث وجهات كما كان',
+        find.byKey(const Key('nav_center_button')),
+        findsOneWidget,
+        reason: 'الزرّ الذهبي الأوسط بين «خدماتنا» و«خدمات الأعراس»',
       );
 
       await tester.tap(find.byKey(const Key('shell_header_my_list')));
@@ -612,15 +647,12 @@ void main() {
       navigatorKey.currentState!.pop();
       await tester.pumpAndSettle();
 
-      // والترويسة الغنية فوق الوجهات الثلاث كلها، لا على «المناسبات» وحدها.
-      final navBar = find.byType(NavigationBar);
-      await tester.tap(
-        find.descendant(of: navBar, matching: find.text('خدماتنا')),
-      );
+      // والترويسة الغنية فوق الوجهات الخمس كلها، لا على «المناسبات» وحدها.
+      await tester.tap(find.byKey(const Key('nav_tab_1')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
       expect(
-        tester.widget<NavigationBar>(navBar).selectedIndex,
+        _selectedTab(tester),
         1,
         reason: 'الاختبار يبدأ من وجهة ثانية فعلاً',
       );

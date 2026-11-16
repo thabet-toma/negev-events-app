@@ -1581,7 +1581,7 @@ void main() {
   });
 
   group('الشريط السفلي — «الخدمات» بدل «إضافة»، وزرّ عائم للنشر (wayfinder #21)', () {
-    testWidgets('ثلاث وجهات بلا "إضافة" ولا «حسابي»، و"الخدمات" ضمنها، ولا زرّ عائم',
+    testWidgets('خمس وجهات بلا "إضافة" ولا زرّ عائم، و«حسابي» آخِرها',
         (tester) async {
       final api = apiReturning({'success': true});
       final auth = AuthStore(api);
@@ -1608,28 +1608,36 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
 
-      final navBar = tester.widget<NavigationBar>(find.byType(NavigationBar));
-      // الشريط ثلاث وجهات: «حسابي» تُدفع شاشةً من زرّ الترويسة، و«قائمتي»
-      // و«النقوط» و«الخريطة» صارت بطاقات وصل سريع داخل شاشة الحساب.
-      expect(navBar.destinations, hasLength(3));
+      final navBar = find.byKey(const Key('home_bottom_nav'));
+      expect(navBar, findsOneWidget, reason: 'شريط الهيكل الجديد');
+      // الوجهات الخمس بترتيبها من اليمين في RTL، و«حسابي» آخِرها — كانت تُدفع
+      // شاشةً من زرّ الترويسة قبل إعادة تصميم الرئيسية.
       expect(
         [
-          for (final destination in navBar.destinations)
-            (destination as NavigationDestination).label,
+          for (var i = 0; i < 5; i++)
+            tester
+                .widget<Text>(
+                  find.descendant(
+                    of: find.byKey(Key('nav_tab_$i')),
+                    matching: find.byType(Text),
+                  ),
+                )
+                .data,
         ],
-        ['المناسبات', 'خدماتنا', 'خدمات الأعراس'],
+        ['المناسبات', 'خدماتنا', 'خدمات الأعراس', 'مناسباتي', 'حسابي'],
       );
 
-      // «إضافة» لم تعد وجهة في الشريط. وفي تبويب التغذية لا زرّ عائم إطلاقاً:
-      // نشره أيقونةٌ داخل رأس التغذية نفسه (`feed_publish_button`).
+      // «إضافة» لم تعد وجهة في الشريط، والزرّ الوسطي ورقةٌ لا وجهة. وفي تبويب
+      // التغذية لا زرّ عائم إطلاقاً: نشره أيقونةٌ داخل رأس التغذية نفسه
+      // (`feed_publish_button`).
       expect(
-        find.descendant(of: find.byType(NavigationBar), matching: find.text('إضافة')),
+        find.descendant(of: navBar, matching: find.text('إضافة')),
         findsNothing,
       );
       expect(
-        find.descendant(of: find.byType(NavigationBar), matching: find.text('حسابي')),
-        findsNothing,
-        reason: '«حسابي» لم تسكن الشريط السفلي: تُدفع من زرّ الترويسة',
+        find.byKey(const Key('nav_center_button')),
+        findsOneWidget,
+        reason: 'الزرّ الذهبي الأوسط بين «خدماتنا» و«خدمات الأعراس»',
       );
       expect(
         find.byType(FloatingActionButton),

@@ -535,7 +535,11 @@ void main() {
         findsOneWidget,
         reason: '«تخطّي» يذهب إلى ورقة المحافظة، لا إلى التغذية مباشرة',
       );
-      expect(find.byType(NavigationBar), findsOneWidget, reason: 'الشريط تحتها');
+      expect(
+        find.byKey(const Key('home_bottom_nav')),
+        findsOneWidget,
+        reason: 'الشريط تحتها',
+      );
       expect(await _welcomeSeenFlag(), isTrue);
       expect(await _savedFlag(), isNull, reason: 'ورقة المنطقة لم تُجب بعد');
 
@@ -550,7 +554,7 @@ void main() {
       await boot();
       expect(find.text(_welcomeTitle), findsNothing, reason: 'الترحيب مرة واحدة');
       expect(find.text(_title), findsNothing, reason: 'والمنطقة سُئلت بتخطّيها');
-      expect(find.byType(NavigationBar), findsOneWidget);
+      expect(find.byKey(const Key('home_bottom_nav')), findsOneWidget);
     });
 
     testWidgets('علم الترحيب وحده يمنعه، وورقة المنطقة تُعرض كما هي',
