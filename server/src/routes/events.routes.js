@@ -216,6 +216,29 @@ router.get('/events/trending', optionalAuthenticate, asyncHandler(async (req, re
 }));
 
 /**
+ * «الأعراس المميزة» — عام (`optionalAuthenticate`: المجهول يرى الشيء نفسه،
+ * والمسجَّل تصل محافظةُ حسابه كما في `/events` و`/events/trending`).
+ * يعيد `{ success: true, events }` للمناسبات المبرزة النشِطة التي لم تنتهِ
+ * بعد، مرتَّبةً تصاعدياً بـ`event_date ASC, id ASC` وبنفس شكل صفّ التغذية
+ * وtrending تماماً.
+ *
+ * **قبل `/events/:id` عمداً** بجانب `/events/trending`: بغير ذلك التقط `:id`
+ * كلمة `featured` فردّ عليها `parseId` بخطأ 400 عن معرّف مناسبة.
+ */
+router.get('/events/featured', optionalAuthenticate, asyncHandler(async (req, res) => {
+  const explicitRegionId = optionalId(req.query.region_id, 'المحافظة');
+  const allRegions = parseFlag(req.query.all_regions);
+  const regionId = explicitRegionId !== null
+    ? explicitRegionId
+    : await regionIdForRequest(req, { allRegions });
+
+  res.json({
+    success: true,
+    ...(await events.listFeaturedEvents({ regionId, legacyOnly: isLegacyClient(req) }))
+  });
+}));
+
+/**
  * تقويم الشهر (تذكرة #175) — عام، بلا مصادقة: `?month=YYYY-MM` إلزامي
  * و`?region_id=` اختياري. يعيد `{ days: [{ date, count }] }` لما فيه مناسبة
  * وحدها، بلا صفوف صفرية.

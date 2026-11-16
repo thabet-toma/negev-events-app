@@ -308,8 +308,8 @@ CREATE TABLE IF NOT EXISTS events (
   announced_at     DATETIME     DEFAULT NULL,
   -- «مناسبة كبرى» (تذكرة #171): تاريخ ينتهي عنده الإبراز الذي يضبطه الأدمن، بلا
   -- دفع. NULL = غير مبرزة، و«النشِطة» = `featured_until IS NOT NULL AND
-  -- featured_until >= CURDATE()` — الشرط في events.service.js وحده، وسقفه في
-  -- `FEATURED_EVENTS_MAX_PER_REGION` بـconstants.js. عمود DATE لا DATETIME: ما
+  -- featured_until >= CURDATE()` — الشرط في events.service.js وحده، وبلا سقف
+  -- للعدد في المحافظة. عمود DATE لا DATETIME: ما
   -- يحدّده الأدمن يومٌ («حتى هذا اليوم»)، لا لحظة.
   featured_until   DATE         DEFAULT NULL,
   created_by       INT UNSIGNED DEFAULT NULL,
@@ -328,7 +328,7 @@ CREATE TABLE IF NOT EXISTS events (
   KEY idx_events_occasion_type (occasion_type_id),
   KEY idx_events_village (village_id),
   KEY idx_events_region_date (region_id, event_date),
-  -- فهرس الإبراز (تذكرة #171): عدّاد السقف في المحافظة الواحدة وترتيب تغذيتها
+  -- فهرس الإبراز (تذكرة #171): ترتيب التغذية وقائمة «الأعراس المميزة»
   -- كلاهما يقطع بـ`(region_id, featured_until)`، فلا يُمسح الجدول كاملاً لهما.
   KEY idx_events_featured (region_id, featured_until),
   CONSTRAINT fk_events_creator FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,

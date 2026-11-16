@@ -11,7 +11,7 @@ const albums = require('./albums.service');
 const people = require('./people.service');
 const cloudinary = require('./cloudinary.service');
 const logger = require('../utils/logger');
-const { REACTION_TYPES, CONGRATULATION_REPORT_THRESHOLD, DUPLICATE_DATE_WINDOW_DAYS, TRENDING_WINDOW_DAYS, VILLAGES_TOWN, FEATURED_EVENTS_MAX_PER_REGION } = require('../constants');
+const { REACTION_TYPES, CONGRATULATION_REPORT_THRESHOLD, DUPLICATE_DATE_WINDOW_DAYS, TRENDING_WINDOW_DAYS, VILLAGES_TOWN, FEATURED_EVENTS_LIST_LIMIT } = require('../constants');
 const { withAbsoluteMedia, absoluteMediaUrl } = require('../utils/mediaUrl');
 const { haversineDistanceKm } = require('../utils/geo');
 const { nameKey, nameTokens, comparePersonNames } = require('../utils/arabicName');
@@ -201,10 +201,10 @@ const EVENT_FEED_WINDOW_SQL_EVENTS =
  * بـ`CURDATE()` (يوم قاعدة البيانات) لا بساعة العميل — الإبراز «حتى هذا اليوم»
  * كما كتبه الأدمن في القدس، وساعة الحائط لا منطقة لها في عمود DATE أصلاً.
  *
- * تُستعمل في موضعين: عمود `is_featured` في تغذية `listPublicEvents` (وعليه
- * يُبنى ترتيبها)، وعدّاد السقف في `setEventFeatured`. **ولا تُعمَّم** على
- * الخريطة ولا البحث ولا `related`/`sitemap` — التذكرة نصّت على التغذية وحدها،
- * والإبراز كلامُ تغذيةٍ لا وسمٌ لكل قراءة.
+ * تُستعمل في مواضع الإبراز: عمود `is_featured` في `listPublicEvents`
+ * و`listTrendingEvents` و`setEventFeatured`، وشرط الاختيار في
+ * `listFeaturedEvents` (`GET /api/events/featured`). **ولا تُعمَّم** على
+ * الخريطة ولا البحث ولا `related`/`sitemap`.
  */
 const EVENT_FEATURED_ACTIVE_SQL_EVENTS =
   '(events.featured_until IS NOT NULL AND events.featured_until >= CURDATE())';
@@ -1423,64 +1423,13 @@ async function listPublicEvents({
 
 /**
  * «مناسبة كبرى» (تذكرة #171): يضبط الأدمن تاريخ انتهاء الإبراز على صفّ واحد،
- * أو يلغيه بـ`null`. النطاق (404 خارج بلدات الأدمن) والحقّ الإداري يُفحصان في
- * طبقة المسار قبل الوصول إلى هنا (`adminScope.assertEventInScope`)، والتحقق من
- * شكل التاريخ في `middleware/validate.js` — هذه الدالة تحكم **السقف** وحده.
- *
- * السقف: الرابعة النشِطة في المحافظة نفسها تُردّ 409 عربية. العدّاد مقيَّد
- * بـ`region_id` (فمحافظة أخرى لا تتأثّر) ويستثني الصفّ نفسه (فتمديد إبراز
- * قائم أو إعادة كتابة تاريخه لا يُحسب صفّاً رابعاً)، ويعدّ **النشِطة وحدها**
- * (`EVENT_FEATURED_ACTIVE_SQL_EVENTS`) فلا يحجز مقعداً إبرازٌ انتهى تاريخه.
- *
- * **والعدّ والكتابة معاملة واحدة مسلسَلة على المحافظة:** قفل صفّ المحافظة
- * (`SELECT … FOR UPDATE`، وهو القفل نفسه الذي تُقفل به
- * `notifications.service.js` المحافظةَ قبل قراءة حصّتها) يجعل الطلب الثاني
- * ينتظر إفراج الأول، فيعدّ بعده ويرى المقعد محجوزاً فيُردّ 409. وبدونه كان
- * طلبان على مناسبتين مختلفتين يقرآن العدد نفسه ثم يكتبان معاً فتصير المحافظة
- * بأربع نشِطة.
- *
- * **والسقف يحرس الانتقال إلى «نشِط» لا الكتابة نفسها:** لا يُفرض إلا إذا كانت
- * القيمة الجديدة تجعل الصفّ نشِطاً (`>= CURDATE()`). تاريخ منقضٍ — و`null` —
- * لا يزيد النشِط في المحافظة أبداً، فلا يجوز أن يُردّ 409 مهما امتلأت: وإلا
- * لتعذّر على الأدمن سحب إبرازٍ منتهٍ أو كتابة تاريخ ماضٍ في محافظة كاملة،
- * وهي عملية **تنقص** ولا تضيف. و«نشِطة» للقيمة الجديدة تُحسب بساعة القاعدة
- * (`SELECT (? >= CURDATE())`) لا بساعة Node، فالحكمان هنا وفي التغذية
- * (`EVENT_FEATURED_ACTIVE_SQL_EVENTS`) لا يفترقان عند منتصف الليل.
+ * أو يلغيه بـ`null` — بلا سقف لعدد المبرزات في المحافظة. النطاق (404 خارج
+ * بلدات الأدمن) والحقّ الإداري يُفحصان في طبقة المسار قبل الوصول إلى هنا
+ * (`adminScope.assertEventInScope`)، والتحقق من شكل التاريخ في
+ * `middleware/validate.js`.
  */
 async function setEventFeatured(event, featuredUntil) {
-  // `null` لا يمرّ بالفحص أصلاً، والقيمة غير الفارغة تسأل القاعدة أولاً:
-  // هل تجعل الصفّ نشِطاً؟ تاريخ ماضٍ جوابه «لا»، فيمرّ بلا عدّ ولا 409.
-  const becomesActive = featuredUntil !== null
-    && Number((await db.queryOne('SELECT (? >= CURDATE()) AS active', [featuredUntil])).active) === 1;
-
-  await db.transaction(async connection => {
-    if (becomesActive) {
-      // صفّ المحافظة هو القفل المشترك لسقفها: قفل صفّ المناسبة وحده لا يرتّب
-      // مناسبتين مختلفتين في محافظة واحدة، فطلبان متزامنان يقرآن العدد نفسه
-      // ثم يكتبان معاً، فتصير المحافظة بأربع نشِطة والسقف ثلاثة.
-      await connection.execute('SELECT id FROM regions WHERE id = ? FOR UPDATE', [event.region_id]);
-
-      // العدّ بعد القفل لا قبله: لقطة المعاملة تُنشأ عند أول قراءة عادية فيها،
-      // وهي هنا بعد انتظار القفل — أما `FOR UPDATE` فقراءة حالّة لا تُنشئها —
-      // فيرى الطلب الثاني ما التزم به الأول ولا يحسب المقعد الحرّ نفسه.
-      const [countRows] = await connection.execute(
-        `SELECT COUNT(*) AS total FROM events
-          WHERE events.region_id = ? AND events.id <> ?
-            AND ${EVENT_FEATURED_ACTIVE_SQL_EVENTS}`,
-        [event.region_id, event.id]
-      );
-
-      if (Number(countRows[0].total) >= FEATURED_EVENTS_MAX_PER_REGION) {
-        throw ApiError.conflict(
-          `لا يمكن إبراز أكثر من ${FEATURED_EVENTS_MAX_PER_REGION} مناسبات في المحافظة الواحدة — ألغِ إبراز مناسبة قائمة أولاً`
-        );
-      }
-    }
-
-    // الكتابة داخل المعاملة نفسها: الإفراج عن القفل قبل `UPDATE` يعيد فتح
-    // النافذة التي أُقفلت، فالفحص بلا كتابة ذرّية معه لا يمنع شيئاً.
-    await connection.execute('UPDATE events SET featured_until = ? WHERE id = ?', [featuredUntil, event.id]);
-  });
+  await db.execute('UPDATE events SET featured_until = ? WHERE id = ?', [featuredUntil, event.id]);
 
   // الصفّ يُقرأ ثانيةً بعد الكتابة كي يصل `is_featured` محسوباً بالقاعدة نفسها
   // التي تحسبه في التغذية — لا بحساب JS ثانٍ يخالفها بعد منتصف الليل.
@@ -1815,6 +1764,81 @@ async function listTrendingEvents({ regionId = null, legacyOnly = false } = {}) 
   const withRsvpCounters = await attachRsvpCounters(withReminderState);
 
   return { events: withRsvpCounters, window_days: TRENDING_WINDOW_DAYS };
+}
+
+/**
+ * «الأعراس المميزة» — المناسبات المبرزة النشِطة (`EVENT_FEATURED_ACTIVE_SQL_EVENTS`)
+ * التي لم تنتهِ بعد (`EVENT_SPAN_END_SQL_EVENTS >= CURDATE()`), عبر بوابة
+ * الظهور العام (`PUBLIC_EVENT_VISIBLE_SQL_EVENTS` بساعة `publishNowClock()`).
+ *
+ * الترتيب `events.event_date ASC, events.id ASC` بحدّ تقني
+ * `FEATURED_EVENTS_LIST_LIMIT` لحماية حجم الردّ (لا سقف إبراز). وتُشكَّل
+ * الصفوف بنفس شكل صفوف `listTrendingEvents` تماماً، و`is_featured: true`
+ * على كل صفّ.
+ */
+async function listFeaturedEvents({ regionId = null, legacyOnly = false } = {}) {
+  const conditions = [
+    EVENT_FEATURED_ACTIVE_SQL_EVENTS,
+    PUBLIC_EVENT_VISIBLE_SQL_EVENTS,
+    `${EVENT_SPAN_END_SQL_EVENTS} >= CURDATE()`
+  ];
+  const params = [publishNowClock()];
+
+  if (regionId !== null && regionId !== undefined) {
+    conditions.push('events.region_id = ?');
+    params.push(regionId);
+  }
+
+  const typeFilterIds = await resolveTypeFilterIds({ legacyOnly, occasionTypeIds: null });
+  if (typeFilterIds && !typeFilterIds.length) {
+    return { events: [] };
+  }
+  if (typeFilterIds) {
+    conditions.push(`events.occasion_type_id IN (${typeFilterIds.map(() => '?').join(',')})`);
+    params.push(...typeFilterIds);
+  }
+
+  const rows = await db.query(
+    `SELECT ${LIST_COLUMNS}, villages.name AS village_name,
+            (${EVENT_SPAN_END_SQL_EVENTS}) AS span_end_order,
+            (${EVENT_SPAN_END_SQL_EVENTS} < CURDATE()) AS is_ended,
+            (${EVENT_FEATURED_ACTIVE_SQL_EVENTS}) AS is_featured
+       FROM events
+       LEFT JOIN villages ON villages.id = events.village_id
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY events.event_date ASC, events.id ASC
+      LIMIT ?`,
+    [...params, FEATURED_EVENTS_LIST_LIMIT]
+  );
+
+  const eventIds = rows.map(e => e.id);
+  const [reactionMap, congratsMap, withRelations] = await Promise.all([
+    reactionsForEvents(eventIds),
+    congratulationsForEvents(eventIds),
+    attachHonoreesAndTypes(rows.map(withAbsoluteMedia))
+  ]);
+
+  const events = withRelations.map(event => {
+    const shaped = {
+      ...event,
+      reactions: reactionMap[event.id] || EMPTY_REACTIONS(),
+      is_ended: Boolean(event.is_ended),
+      is_featured: Boolean(event.is_featured)
+    };
+
+    if (event.occasion_type?.show_congratulations_count !== false) {
+      const congrats = congratsMap[event.id] || { congratulations_count: 0, latest_congratulation: null };
+      shaped.congratulations_count = congrats.congratulations_count;
+      shaped.latest_congratulation = congrats.latest_congratulation;
+    }
+
+    return shaped;
+  });
+
+  const withReminderState = await attachReminderState(events, null);
+  const withRsvpCounters = await attachRsvpCounters(withReminderState);
+
+  return { events: withRsvpCounters };
 }
 
 /**
@@ -3381,6 +3405,7 @@ module.exports = {
   listMapPoints,
   listCalendarDays,
   listTrendingEvents,
+  listFeaturedEvents,
   checkTownMismatch,
   createEvent,
   familyClanFor,

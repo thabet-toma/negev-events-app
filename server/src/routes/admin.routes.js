@@ -190,7 +190,7 @@ router.patch('/admin/events/:id/owner', asyncHandler(async (req, res) => {
  * أولاً، فمناسبة خارج بلدات الأدمن تُردّ 404 لا 403 — لا يُؤكَّد وجودُ ما لا
  * يملكه (نفس قاعدة `/status` و`/owner` و`/amendments`). ثم يُتحقَّق من شكل
  * التاريخ في `validate.js` (`requireDate`) لا يدوياً، و`null` (أو نصّ فارغ)
- * إلغاءٌ صريح. والسقف (409) وحده في الخدمة.
+ * إلغاءٌ صريح. والكتابة وإعادة حساب `is_featured` في الخدمة.
  */
 router.patch('/admin/events/:id/featured', asyncHandler(async (req, res) => {
   const eventId = parseId(req.params.id, 'معرّف المناسبة');

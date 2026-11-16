@@ -18876,7 +18876,7 @@ async function run() {
     [inviteOwner.id, inviteStranger.id, inviteAdminInTown.id, inviteAdminOutOfTown.id]
   );
 
-  console.log('\n«مناسبة كبرى» — الإبراز حتى تاريخ، وسقف المحافظة، وترتيب التغذية (#171)');
+  console.log('\n«مناسبة كبرى» — الإبراز حتى تاريخ، بلا سقف، وترتيب التغذية، وGET /api/events/featured (#171)');
 
   /**
    * قسم #171: محافظة ثانية وبلدة فيها وأدمن مقيَّد بها، ومناسبات مبرزة في
@@ -18989,7 +18989,7 @@ async function run() {
     );
   });
 
-  await test('الرابعة النشِطة في المحافظة نفسها 409 عربية، والرابعة في محافظة أخرى تُقبل', async () => {
+  await test('الرابعة النشِطة في المحافظة نفسها تُقبل بلا سقف، ومبرزة محافظة أخرى لا تدخل تغذية هذه المحافظة', async () => {
     for (const id of featuredIds.slice(0, 2)) {
       const res = await api('PATCH', `/api/admin/events/${id}/featured`, {
         token: superAdminToken,
@@ -18997,29 +18997,30 @@ async function run() {
       });
       assert.strictEqual(res.status, 200, `featured ${id}: ${res.body.message}`);
     }
-    const activeRows = await db.query(
-      `SELECT id FROM events
-        WHERE region_id = ? AND featured_until IS NOT NULL AND featured_until >= CURDATE()
-          AND id IN (?, ?, ?)`,
-      [defaultRegionId, ...featuredIds]
-    );
-    assert.strictEqual(activeRows.length, 3, 'three active featured rows now sit in this governorate');
 
     featuredFourthId = await publishFeaturedEvent({ dayOffset: 8, label: 'الرابعة' });
-    const refused = await api('PATCH', `/api/admin/events/${featuredFourthId}/featured`, {
+    const fourth = await api('PATCH', `/api/admin/events/${featuredFourthId}/featured`, {
       token: superAdminToken,
       body: { featured_until: featuredUntil }
     });
-    assert.strictEqual(refused.status, 409, 'a fourth active featured event in one governorate is refused');
-    assert.ok(/[\u0600-\u06FF]/.test(refused.body.message), `the refusal is Arabic: ${refused.body.message}`);
-    assert.ok(refused.body.message.includes('مناسبات'), 'and names what hit its ceiling');
+    assert.strictEqual(fourth.status, 200, 'a fourth active featured event in one governorate is now accepted');
+    assert.strictEqual(fourth.body.event.featured_until, featuredUntil, 'the route answers with the stored date');
+    assert.strictEqual(fourth.body.event.is_featured, true, 'and with is_featured: true');
     assert.strictEqual(
       (await db.queryOne('SELECT featured_until FROM events WHERE id = ?', [featuredFourthId])).featured_until,
-      null,
-      'and nothing was written for the refused event'
+      featuredUntil,
+      'and featured_until is written in the database'
     );
 
-    // محافظة أخرى لا تتأثّر بسقف هذه: الإبراز فيها يمرّ.
+    const activeRows = await db.query(
+      `SELECT id FROM events
+        WHERE region_id = ? AND featured_until IS NOT NULL AND featured_until >= CURDATE()
+          AND id IN (?, ?, ?, ?)`,
+      [defaultRegionId, ...featuredIds, featuredFourthId]
+    );
+    assert.strictEqual(activeRows.length, 4, 'four active featured rows now sit in this governorate');
+
+    // محافظة أخرى لا تدخل تغذية هذه المحافظة.
     featuredOtherRegionEventId = await publishFeaturedEvent({
       dayOffset: 9, town: featuredOtherTown, label: 'محافظة أخرى'
     });
@@ -19027,7 +19028,7 @@ async function run() {
       token: superAdminToken,
       body: { featured_until: featuredUntil }
     });
-    assert.strictEqual(accepted.status, 200, 'another governorate is not affected by this one\'s ceiling');
+    assert.strictEqual(accepted.status, 200, accepted.body.message);
 
     const regionAFeed = await featuredFeed();
     assert.ok(
@@ -19036,7 +19037,7 @@ async function run() {
     );
   });
 
-  await test('إلغاء الإبراز بـnull يعيد الصفّ لمكانه ويُفرّغ مقعد السقف', async () => {
+  await test('إلغاء الإبراز بـnull يعيد الصفّ لمكانه في التغذية', async () => {
     // الملغى هو **الأقدم** (`featuredIds[0]`، وأول التغذية قبل الإلغاء)، لا
     // الأخير: إلغاء الأخير يجعله آخراً في ترتيب التاريخ وحده، فيبقى الشرط
     // صحيحاً في ثلاثة عوالم — الإلغاء يعمل، أو ترتيب الإبراز مفقود، أو الإلغاء
@@ -19057,12 +19058,6 @@ async function run() {
       cancelledAt > stillFeaturedAt,
       `the cancelled leading event must fall behind the still-featured one — got ${cancelledAt} vs ${stillFeaturedAt}`
     );
-
-    const freed = await api('PATCH', `/api/admin/events/${featuredFourthId}/featured`, {
-      token: superAdminToken,
-      body: { featured_until: featuredUntil }
-    });
-    assert.strictEqual(freed.status, 200, 'the seat freed by the cancel accepts the fourth');
   });
 
   await test('تاريخ انتهى (أمس) لا يُبرز: is_featured false والصفّ لا يتصدّر', async () => {
@@ -19161,92 +19156,264 @@ async function run() {
     assert.strictEqual(first.body.events[0].is_featured, true, 'the featured row still leads page one');
   });
 
-  await test('السقف يحرس الانتقال إلى نشِط وحده: تاريخ مستقبلي لصفّ غير مبرز 409، وتاريخ منقضٍ له 200', async () => {
-    // هذه المحافظة كاملة الآن بثلاثة نشِطة (f1، f2، f4)، و`featuredIds[0]` غير
-    // مبرز (تاريخه أمس من التأكيد السابق). السقف يجب أن يفرق بين الحالتين:
-    // تاريخ مستقبلي **يزيد** النشِط رابعاً فيُردّ، وتاريخ منقضٍ **لا يزيد**
-    // شيئاً فيمرّ — وإلا لتعذّر على الأدمن سحب إبرازٍ أو كتابة تاريخ ماضٍ في
-    // محافظة ممتلئة. فرضُ السقف على كل قيمة غير `null` يُسقط هذا التأكيد عند
-    // طلب التاريخ المنقضي بـ409.
+  await test('تاريخ مستقبلي أو منقضٍ يُقبلان بلا سقف، والمنقضي يبقى is_featured: false', async () => {
     const notFeaturedId = featuredIds[0];
-    const activeNow = await db.queryOne(
-      `SELECT COUNT(*) AS total FROM events
-        WHERE region_id = ? AND featured_until IS NOT NULL AND featured_until >= CURDATE()
-          AND id IN (?, ?, ?, ?)`,
-      [defaultRegionId, ...featuredIds, featuredFourthId]
-    );
-    assert.strictEqual(Number(activeNow.total), 3, 'the governorate is full before this check');
-
-    const before = (await db.queryOne('SELECT featured_until FROM events WHERE id = ?', [notFeaturedId])).featured_until;
     const future = await api('PATCH', `/api/admin/events/${notFeaturedId}/featured`, {
       token: superAdminToken,
       body: { featured_until: addDaysToDate(schedulerToday, 25) }
     });
-    assert.strictEqual(future.status, 409, 'a future date on a non-featured row would be a fourth active one');
-    assert.strictEqual(
-      (await db.queryOne('SELECT featured_until FROM events WHERE id = ?', [notFeaturedId])).featured_until,
-      before,
-      'and nothing was written for the refused row'
-    );
+    assert.strictEqual(future.status, 200, 'a future date is accepted without any ceiling');
+    assert.strictEqual(future.body.event.is_featured, true);
 
     const expiredDate = addDaysToDate(schedulerToday, -3);
     const expired = await api('PATCH', `/api/admin/events/${notFeaturedId}/featured`, {
       token: superAdminToken,
       body: { featured_until: expiredDate }
     });
-    assert.strictEqual(expired.status, 200, 'a past date adds nothing to the active set, so the ceiling cannot refuse it');
+    assert.strictEqual(expired.status, 200, 'a past date is accepted');
     assert.strictEqual(expired.body.event.featured_until, expiredDate, 'and the picked day is stored as given');
     assert.strictEqual(expired.body.event.is_featured, false, 'while the computed flag stays false');
   });
 
-  await test('طلبان متزامنان لإبراز مناسبتين مختلفتين بمقعد حرّ واحد: أحدهما 200 والآخر 409، والنشِطة لا تتجاوز السقف', async () => {
-    // العيب المسمّى في تذكرة #171: العدّ ثم `UPDATE` كانا معاملتين منفصلتين،
-    // فطلبان متزامنان على مناسبتين مختلفتين في المحافظة نفسها يقرآن العدد
-    // نفسه (2 هنا) فيمرّان معاً — فتصير المحافظة بأربع نشِطة والسقف ثلاثة.
-    // القفل على صفّ المحافظة هو ما يجعل الفحص والكتابة وحدة واحدة، فينتظر
-    // الثاني إفراج الأول ثم يعدّ فيرى المقعد محجوزاً ويُردّ 409.
-    //
-    // المقعد الحرّ الواحد يُصنع بإلغاء `featuredIds[1]`: النشِط الباقي بعد
-    // الإلغاء `featuredIds[2]` و`featuredFourthId` (اثنان)، فيبقى مقعد واحد.
-    const seatFreed = await api('PATCH', `/api/admin/events/${featuredIds[1]}/featured`, {
-      token: superAdminToken,
-      body: { featured_until: null }
-    });
-    assert.strictEqual(seatFreed.status, 200, seatFreed.body.message);
-
+  await test('طلبان متزامنان لإبراز مناسبتين مختلفتين في المحافظة نفسها ينجحان معاً (200 و200)', async () => {
     const racers = [
       await publishFeaturedEvent({ dayOffset: 10, label: 'المتسابقة الأولى' }),
       await publishFeaturedEvent({ dayOffset: 11, label: 'المتسابقة الثانية' })
     ];
 
-    const activeQuery = `SELECT id FROM events
-        WHERE region_id = ? AND featured_until IS NOT NULL AND featured_until >= CURDATE()
-          AND id IN (?, ?, ?, ?, ?, ?)`;
-    const activeParams = [defaultRegionId, ...featuredIds, featuredFourthId, ...racers];
-
-    const before = await db.query(activeQuery, activeParams);
-    assert.strictEqual(before.length, 2, 'مقعد واحد حرّ في المحافظة قبل السباق');
-
-    // الطلبان يُطلقان معاً (لا واحداً بعد الآخر): هذا هو التوازي الذي كان
-    // الاختبار السابق — طلباً بعد طلب — لا يستطيع كشفه.
     const [first, second] = await Promise.all(racers.map(id => api('PATCH', `/api/admin/events/${id}/featured`, {
       token: superAdminToken,
       body: { featured_until: featuredUntil }
     })));
 
     assert.deepStrictEqual(
-      [first.status, second.status].sort((a, b) => a - b),
-      [200, 409],
-      `واحد فقط يأخذ المقعد الحرّ والآخر 409: ${first.status} / ${second.status}`
+      [first.status, second.status],
+      [200, 200],
+      `both concurrent feature writes succeed without ceiling conflict: ${first.status} / ${second.status}`
     );
-    assert.ok(/[\u0600-\u06FF]/.test((first.status === 409 ? first : second).body.message), 'ورفض السباق عربي كالقائم');
-
-    const activeRows = await db.query(activeQuery, activeParams);
-    assert.ok(
-      activeRows.length <= 3,
-      `السباق لا يتجاوز سقف المحافظة: ${activeRows.length} نشِطة — ${JSON.stringify(activeRows)}`
-    );
+    assert.strictEqual(first.body.event.is_featured, true);
+    assert.strictEqual(second.body.event.is_featured, true);
   });
+
+  // ---- اختبارات المسار العام الجديد GET /api/events/featured ----
+  const featuredEndpointRegionIds = [];
+  const featuredEndpointEventIds = [];
+  const featuredEndpointUserIds = [];
+  const featuredEngagementType = await db.queryOne("SELECT id FROM occasion_types WHERE name = 'خطوبة'");
+
+  const insertFeaturedListRegion = async suffix => {
+    const { insertId } = await db.execute(
+      `INSERT INTO regions (name, latitude, longitude, map_zoom, position, is_active)
+       VALUES (?, 31.8, 35.1, 9, 98, 1)`,
+      [`محافظة المميزة ${suffix} ${Date.now()}`]
+    );
+    featuredEndpointRegionIds.push(insertId);
+    return insertId;
+  };
+
+  const insertFeaturedListEvent = async ({
+    date, endDate = null, regionId, typeId = weddingType.id, status = 'approved',
+    visibility = 'public', publishAt = null, featuredUntilDate = null,
+    posterUrl = null, title = 'عرس مميز للاختبار'
+  }) => {
+    const { insertId } = await db.execute(
+      `INSERT INTO events
+         (title, groom_name, family_clan, occasion_type_id, town, region_id, location_name,
+          event_date, event_end_date, status, visibility, publish_at, featured_until, poster_url)
+       VALUES (?, ?, ?, ?, 'رهط', ?, 'قاعة الأعراس المميزة', ?, ?, ?, ?, ?, ?, ?)`,
+      [title, 'عريس مميز', 'عائلة مميزة', typeId, regionId, date, endDate, status, visibility, publishAt, featuredUntilDate, posterUrl]
+    );
+    featuredEndpointEventIds.push(insertId);
+    return insertId;
+  };
+
+  try {
+    const activeFeaturedUntil = addDaysToDate(schedulerToday, 30);
+    const expiredFeaturedUntil = addDaysToDate(schedulerToday, -1);
+
+    await test('GET /api/events/featured لا يلتقطه مسار /events/:id', async () => {
+      const { status, body } = await api('GET', '/api/events/featured');
+      assert.strictEqual(status, 200, `expected 200, got ${status}: ${body.message}`);
+      assert.strictEqual(body.success, true);
+      assert.ok(Array.isArray(body.events), 'events must be an array');
+    });
+
+    const emptyRegionId = await insertFeaturedListRegion('فارغة');
+    await insertFeaturedListEvent({
+      date: '2095-03-15', regionId: emptyRegionId, featuredUntilDate: null
+    });
+
+    await test('GET /api/events/featured يعيد events: [] عندما لا توجد مناسبات مبرزة نشِطة', async () => {
+      const { status, body } = await api('GET', `/api/events/featured?region_id=${emptyRegionId}`);
+      assert.strictEqual(status, 200);
+      assert.strictEqual(body.success, true);
+      assert.deepStrictEqual(body.events, []);
+    });
+
+    const orderRegionId = await insertFeaturedListRegion('ترتيب');
+    // ندرج المتأخرة أولاً ثم اثنتين بالتاريخ نفسه للتحقق من ترتيب `event_date ASC, id ASC`
+    const featLate = await insertFeaturedListEvent({
+      date: '2095-06-20', regionId: orderRegionId, featuredUntilDate: activeFeaturedUntil
+    });
+    const featEarly1 = await insertFeaturedListEvent({
+      date: '2095-06-05', regionId: orderRegionId, featuredUntilDate: activeFeaturedUntil,
+      posterUrl: '/uploads/featured-sample.jpg'
+    });
+    const featEarly2 = await insertFeaturedListEvent({
+      date: '2095-06-05', regionId: orderRegionId, featuredUntilDate: activeFeaturedUntil
+    });
+    const featMid = await insertFeaturedListEvent({
+      date: '2095-06-12', regionId: orderRegionId, featuredUntilDate: activeFeaturedUntil
+    });
+    await db.execute("INSERT INTO reactions (event_id, reaction_type) VALUES (?, 'coffee')", [featEarly1]);
+    await db.execute(
+      "INSERT INTO congratulations (event_id, sender_name, message, status) VALUES (?, 'مهنئ مميز', 'ألف مبروك', 'approved')",
+      [featEarly1]
+    );
+
+    await test('GET /api/events/featured يعيد المبرزة النشِطة مرتّبةً بـevent_date ASC, id ASC وبنفس شكل صفّ trending ووسائط مطلقة', async () => {
+      const { status, body } = await api('GET', `/api/events/featured?region_id=${orderRegionId}`);
+      assert.strictEqual(status, 200, body.message);
+      assert.strictEqual(body.success, true);
+      assert.deepStrictEqual(
+        body.events.map(e => e.id),
+        [featEarly1, featEarly2, featMid, featLate],
+        'four active featured events returned in chronological (event_date ASC, id ASC) order'
+      );
+
+      const first = body.events[0];
+      assert.strictEqual(first.is_featured, true, 'is_featured must be true on every row');
+      assert.strictEqual(first.is_ended, false, 'is_ended must be false on active upcoming rows');
+      assert.ok(Array.isArray(first.honorees), 'row includes honorees array');
+      assert.ok(Array.isArray(first.extra_days), 'row includes extra_days array');
+      assert.ok(first.occasion_type && typeof first.occasion_type.id === 'number', 'row includes occasion_type');
+      assert.ok(first.reactions && first.reactions.coffee === 1, 'row includes reactions counts');
+      assert.strictEqual(first.congratulations_count, 1, 'row includes congratulations_count');
+      assert.ok(first.latest_congratulation && first.latest_congratulation.message === 'ألف مبروك', 'row includes latest_congratulation');
+      assert.strictEqual(typeof first.is_reminded, 'boolean', 'row includes is_reminded');
+      assert.strictEqual(typeof first.followers_count, 'number', 'row includes followers_count');
+      assert.strictEqual(typeof first.interested_count, 'number', 'row includes interested_count');
+      assert.strictEqual(typeof first.rsvp_going_count, 'number', 'row includes rsvp_going_count');
+      assert.strictEqual(
+        first.poster_url,
+        absoluteMediaUrl('/uploads/featured-sample.jpg'),
+        'relative media URL is resolved to absolute'
+      );
+      assert.ok(body.events.every(e => e.is_featured === true), 'every row carries is_featured: true');
+    });
+
+    const filterRegionId = await insertFeaturedListRegion('استبعاد');
+    const validControl = await insertFeaturedListEvent({
+      date: '2095-07-10', regionId: filterRegionId, featuredUntilDate: activeFeaturedUntil
+    });
+    const expiredFeaturedEvent = await insertFeaturedListEvent({
+      date: '2095-07-10', regionId: filterRegionId, featuredUntilDate: expiredFeaturedUntil
+    });
+    const endedEvent = await insertFeaturedListEvent({
+      date: '2020-05-01', endDate: '2020-05-02', regionId: filterRegionId, featuredUntilDate: activeFeaturedUntil
+    });
+    const spannedOngoingEvent = await insertFeaturedListEvent({
+      date: '2020-05-01', endDate: '2095-07-20', regionId: filterRegionId, featuredUntilDate: activeFeaturedUntil
+    });
+    const pendingFeatured = await insertFeaturedListEvent({
+      date: '2095-07-10', regionId: filterRegionId, status: 'pending', featuredUntilDate: activeFeaturedUntil
+    });
+    const rejectedFeatured = await insertFeaturedListEvent({
+      date: '2095-07-10', regionId: filterRegionId, status: 'rejected', featuredUntilDate: activeFeaturedUntil
+    });
+    const linkOnlyFeatured = await insertFeaturedListEvent({
+      date: '2095-07-10', regionId: filterRegionId, visibility: 'link_only', featuredUntilDate: activeFeaturedUntil
+    });
+    const scheduledFeatured = await insertFeaturedListEvent({
+      date: '2095-07-10', regionId: filterRegionId, publishAt: '2095-01-01 00:00:00', featuredUntilDate: activeFeaturedUntil
+    });
+
+    await test('GET /api/events/featured يستبعد منتهي الإبراز والمنتهية نفسها وغير المعتمدة والمحجوبة والمجدولة', async () => {
+      const { status, body } = await api('GET', `/api/events/featured?region_id=${filterRegionId}`);
+      assert.strictEqual(status, 200);
+      const ids = body.events.map(e => e.id);
+      assert.ok(ids.includes(validControl), 'approved, upcoming, active featured event is returned');
+      assert.ok(ids.includes(spannedOngoingEvent), 'event whose EVENT_SPAN_END is still >= CURDATE() is kept');
+      assert.ok(!ids.includes(expiredFeaturedEvent), 'expired featured_until is excluded');
+      assert.ok(!ids.includes(endedEvent), 'ended event (even with active featured_until) is excluded');
+      assert.ok(!ids.includes(pendingFeatured), 'pending event is excluded');
+      assert.ok(!ids.includes(rejectedFeatured), 'rejected event is excluded');
+      assert.ok(!ids.includes(linkOnlyFeatured), 'link_only event is excluded');
+      assert.ok(!ids.includes(scheduledFeatured), 'future publish_at event is excluded');
+    });
+
+    const otherFeaturedRegionId = await insertFeaturedListRegion('أخرى');
+    const otherRegionFeat = await insertFeaturedListEvent({
+      date: '2095-08-01', regionId: otherFeaturedRegionId, featuredUntilDate: activeFeaturedUntil
+    });
+    const featuredScopeUser = await createDirectUser('مستخدم محافظة المميزة');
+    featuredEndpointUserIds.push(featuredScopeUser.id);
+    await db.execute('UPDATE users SET region_id = ? WHERE id = ?', [orderRegionId, featuredScopeUser.id]);
+
+    await test('GET /api/events/featured يقصّ بـregion_id ومحافظة الحساب، ويوسّع مع all_regions=1، ويرفض region_id=abc بـ400 عربية', async () => {
+      const byExplicit = await api('GET', `/api/events/featured?region_id=${orderRegionId}`);
+      assert.strictEqual(byExplicit.status, 200);
+      assert.ok(byExplicit.body.events.some(e => e.id === featEarly1));
+      assert.ok(!byExplicit.body.events.some(e => e.id === otherRegionFeat));
+
+      const byOther = await api('GET', `/api/events/featured?region_id=${otherFeaturedRegionId}`);
+      assert.strictEqual(byOther.status, 200);
+      assert.deepStrictEqual(byOther.body.events.map(e => e.id), [otherRegionFeat]);
+
+      const byUserRegion = await api('GET', '/api/events/featured', { token: featuredScopeUser.token });
+      assert.strictEqual(byUserRegion.status, 200);
+      assert.ok(byUserRegion.body.events.some(e => e.id === featEarly1));
+      assert.ok(!byUserRegion.body.events.some(e => e.id === otherRegionFeat));
+
+      const widened = await api('GET', '/api/events/featured?all_regions=1', { token: featuredScopeUser.token });
+      assert.strictEqual(widened.status, 200);
+      assert.ok(widened.body.events.some(e => e.id === featEarly1), 'all_regions=1 keeps first region');
+      assert.ok(widened.body.events.some(e => e.id === otherRegionFeat), 'all_regions=1 includes other region');
+
+      const badRegion = await api('GET', '/api/events/featured?region_id=abc');
+      assert.strictEqual(badRegion.status, 400, 'region_id=abc returns 400');
+      assert.ok(/[\u0600-\u06FF]/.test(badRegion.body.message || ''), `expected Arabic error, got: ${badRegion.body.message}`);
+      assert.ok((badRegion.body.message || '').includes('المحافظة'), `expected المحافظة in error, got: ${badRegion.body.message}`);
+    });
+
+    const legacyFeaturedRegionId = await insertFeaturedListRegion('قديم');
+    const legacyFeaturedWedding = await insertFeaturedListEvent({
+      date: '2095-09-01', regionId: legacyFeaturedRegionId, featuredUntilDate: activeFeaturedUntil
+    });
+    const legacyFeaturedEngagement = await insertFeaturedListEvent({
+      date: '2095-09-02', regionId: legacyFeaturedRegionId, typeId: featuredEngagementType.id,
+      featuredUntilDate: activeFeaturedUntil
+    });
+
+    await test('GET /api/events/featured يحترم ترويسة X-App-Version كالتغذية وtrending', async () => {
+      const modern = await api('GET', `/api/events/featured?region_id=${legacyFeaturedRegionId}`);
+      assert.strictEqual(modern.status, 200);
+      assert.deepStrictEqual(modern.body.events.map(e => e.id), [legacyFeaturedWedding, legacyFeaturedEngagement]);
+
+      const legacy = await api('GET', `/api/events/featured?region_id=${legacyFeaturedRegionId}`, { legacy: true });
+      assert.strictEqual(legacy.status, 200);
+      assert.deepStrictEqual(legacy.body.events.map(e => e.id), [legacyFeaturedWedding]);
+    });
+  } finally {
+    if (featuredEndpointEventIds.length) {
+      await db.execute(
+        `DELETE FROM events WHERE id IN (${featuredEndpointEventIds.map(() => '?').join(', ')})`,
+        featuredEndpointEventIds
+      );
+    }
+    if (featuredEndpointUserIds.length) {
+      await db.execute(
+        `DELETE FROM users WHERE id IN (${featuredEndpointUserIds.map(() => '?').join(', ')})`,
+        featuredEndpointUserIds
+      );
+    }
+    if (featuredEndpointRegionIds.length) {
+      await db.execute(
+        `DELETE FROM regions WHERE id IN (${featuredEndpointRegionIds.map(() => '?').join(', ')})`,
+        featuredEndpointRegionIds
+      );
+    }
+  }
 
   // تنظيف قسم الإبراز: المناسبات، ثم المستخدمون (وadmin_towns معهم)، ثم البلدة
   // ثم المحافظة — بترتيب المفاتيح الأجنبية.
