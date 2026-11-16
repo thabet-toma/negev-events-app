@@ -204,10 +204,15 @@ let tickerExpanded = false;
 let tickerTextExpanded = false;
 let tickerPrimaryBroadcastId = null;
 
-// شريط الإحصائيات (#172) — آخر ردّ من GET /api/stats/ticker كما وصل، أو null
-// قبل أول ردّ أو بعد فشله (فلا شريط أرقام كاذب). لا حساب في هذا الملف: العدّ
-// والكاش و«حُدّث» كلها على الخادم.
-let statsTickerData = null;
+// حالة البطاقة الإعلانية الكبيرة وقسم الأعراس المميزة وورقة «مميّز عندنا»
+let promoCarouselIndex = 0;
+let promoCarouselTimer = null;
+let drawerPromoCarouselIndex = 0;
+let drawerPromoCarouselTimer = null;
+let featuredCarouselIndex = 0;
+let featuredCarouselTimer = null;
+let featuredMenuOpen = false;
+let featuredMenuReturnFocusEl = null;
 
 // المصدر الحقيقي الوحيد لهذا التعداد هو تعليق عمود broadcasts.tone في
 // server/src/db/schema.sql — لا استيراد ممكن هنا (web/ بلا خطوة بناء)، فهذه
@@ -322,15 +327,12 @@ document.addEventListener('DOMContentLoaded', () => {
   if (!initWelcome()) initInstallHint();
   fetchNotifications();
   fetchLiveBroadcasts();
-  // شريط الإحصائيات (#172) يُجلب معهما عند الإقلاع لا عند فتح تبويب: إن كان
-  // هناك تعميم حيّ غاب الشريط وحده (renderStatsTicker)، لا أنه لم يُطلب — وترتيب
-  // وصول الردّين لا يهمّ: الأرقام لا تُرسم قبل أن تُعرف حالة التعاميم.
-  fetchStatsTicker();
   fetchLiveStatus();
   initSupportEntry();
   initNotificationsPush();
   initServiceWorker();
   initUrlNavigation();
+  document.addEventListener('visibilitychange', handleHomeCarouselsVisibilityChange);
   window.addEventListener('popstate', handleEventPagePopstate);
   window.addEventListener('hashchange', handleAlbumsHashChange);
   handleAlbumsHashChange();
@@ -338,10 +340,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initFeedAudio();
   refreshSessionFromServer();
   fetchEvents();
-  // «الأكثر تفاعلاً هذا الأسبوع» (تذكرة #177) — أول جلب للتغذية هو موضعه:
-  // القسم يقرأ محافظة الاكتشاف نفسها، ولا يُجلب في أي مكان آخر إلا تبديلُ
-  // المحافظة والتوسيع (`reloadDiscoverySurfacesForRegion`).
-  loadTrending();
+  // «الأعراس المميزة» — من GET /api/events/featured لمحافظة الاكتشاف الحالية.
+  loadFeaturedEvents();
   fetchStories();
   renderStickerCanvas();
   recordAnalyticsEvent('app_opened');
@@ -788,8 +788,6 @@ function renderBroadcastTicker() {
     tickerPrimaryBroadcastId = null;
     tickerExpanded = false;
     tickerTextExpanded = false;
-    // لا تعميم ظاهر ⇒ شريط الإحصائيات يعود إن كان له رقم (#172).
-    renderStatsTicker();
     return;
   }
 
@@ -854,9 +852,6 @@ function renderBroadcastTicker() {
       expandedList.innerHTML = '';
     }
   }
-
-  // تعميم ظاهر الآن ⇒ شريط الإحصائيات يغيب (#172): الاثنان لا يجتمعان.
-  renderStatsTicker();
 }
 
 /**
@@ -907,84 +902,6 @@ async function dismissBroadcastById(broadcastId) {
     }
   } else {
     rememberBroadcastDismissedLocally(broadcastId);
-  }
-}
-
-// شريط الإحصائيات (#172) — عدد المناسبات القادمة في كل محافظة، والمجموع،
-// و«حُدّث HH:MM». يُجلب من GET /api/stats/ticker مرّة عند فتح الصفحة، ويحلّ
-// التعميم الحيّ محلّه: الاثنان لا يظهران معاً (renderBroadcastTicker ينادي
-// renderStatsTicker عند كل تغيير لقائمة التعاميم، وهذه تقرأ القائمة نفسها).
-// وكل الأرقام تأتي من الخادم كما هي — لا جمع ولا تصفية هنا.
-
-/** «حُدّث 09:07» — بالساعة المحلية للزائر من لحظة حساب الخادم. */
-function formatStatsUpdatedAt(isoString) {
-  const date = new Date(isoString);
-  if (Number.isNaN(date.getTime())) return '';
-  const two = (value) => String(value).padStart(2, '0');
-  return `حُدّث ${two(date.getHours())}:${two(date.getMinutes())}`;
-}
-
-/**
- * يرسم الشريط أو يخفيه. **يُخفى دائماً حين يوجد تعميم حيّ غير مُغلَق** — أي
- * تعميم يراه الزائر على شريط التعاميم نفسه — وحين لا يوجد رقم بعد، وحين لم
- * تُعرف حالة التعاميم بعد أصلاً (الردّ الأول لم يصل). ولا يستدعي
- * renderBroadcastTicker بالمقابل: الاتجاه واحد، فالنداء المتبادل كان سيدور بلا
- * نهاية عند كل رسم.
- */
-function renderStatsTicker() {
-  const el = document.getElementById('statsTicker');
-  if (!el) return;
-
-  const hasVisibleBroadcast = liveBroadcasts.some(b => !isBroadcastDismissedLocally(b.id));
-  const regions = statsTickerData && Array.isArray(statsTickerData.regions) ? statsTickerData.regions : [];
-  // `!liveBroadcastsKnown` أولاً: قبل معرفة التعاميم لا رقم — لا «تعاميم فارغة»
-  // افتراضية. طلب التعاميم وطلب الإحصاء يطلقان معاً في الإقلاع، ووصول الإحصاء
-  // أولاً ثم تعميم حيّ كان يعرض رقماً ثم يخفيه (#172، الجولة ٢).
-  if (!liveBroadcastsKnown || hasVisibleBroadcast || !regions.length) {
-    el.hidden = true;
-    return;
-  }
-
-  const container = document.getElementById('statsTickerRegions');
-  if (container) {
-    container.innerHTML = '';
-    regions.forEach(region => {
-      const chip = document.createElement('span');
-      chip.className = 'stats-region';
-
-      const name = document.createElement('span');
-      name.className = 'stats-region-name';
-      name.textContent = region.name || '';
-
-      const count = document.createElement('span');
-      count.className = 'stats-region-count';
-      count.textContent = String(region.upcoming_count);
-
-      chip.appendChild(name);
-      chip.appendChild(count);
-      container.appendChild(chip);
-    });
-  }
-
-  const total = document.getElementById('statsTickerTotal');
-  if (total) total.textContent = `المجموع ${String(statsTickerData.total)}`;
-
-  const updated = document.getElementById('statsTickerUpdated');
-  if (updated) updated.textContent = formatStatsUpdatedAt(statsTickerData.updated_at);
-
-  el.hidden = false;
-}
-
-async function fetchStatsTicker() {
-  try {
-    const res = await apiFetch('/api/stats/ticker');
-    const data = await res.json();
-    if (data.success && Array.isArray(data.regions)) {
-      statsTickerData = { regions: data.regions, total: data.total, updated_at: data.updated_at };
-      renderStatsTicker();
-    }
-  } catch (e) {
-    console.error('Stats ticker error:', e);
   }
 }
 
@@ -1090,6 +1007,9 @@ function closeSupportModal() {
  * `placement` (ردّ قديم أو كاش) يعني `bar` — الشكل الذي كان قبل #173.
  */
 function storiesForPlacement(placement) {
+  if (placement === 'promo') {
+    return [...storiesForPlacement('carousel'), ...storiesForPlacement('bar')];
+  }
   return allStories.filter(story => (story.placement || 'bar') === placement);
 }
 
@@ -1109,7 +1029,6 @@ async function fetchStories() {
       // حين يغيب المفتاح (ردّ قديم أو كاش).
       const interval = Number(data.feed_ad_interval);
       feedAdInterval = Number.isFinite(interval) && interval > 0 ? Math.floor(interval) : 8;
-      renderStoriesStrip();
       renderStoryCarousel();
       renderDrawerStoryCarousel();
       // إعلانات «بين الكروت» وصلت بعد رسم التغذية (أو تغيّرت): تُعاد من
@@ -1133,75 +1052,305 @@ function storyCtaLabel(story) {
   return story.is_ad ? 'زيارة' : 'شاهد الفيديو';
 }
 
-/**
- * بطاقة بانر واحدة لستوري موضع `carousel`: الصورة تفتح العارض (فمشاهدة
- * الثانيتين تُسجَّل كما في الشريط)، وزرّها يسجّل النقرة ثم يفتح الرابط — فلا
- * يضيع أي من القياسين في هذا الموضع (تذكرة #173).
- */
-function storyBannerHtml(story, index, placement) {
-  const image = story.image
-    ? `<img class="story-banner-img" src="${escapeHtml(story.image)}" alt="${escapeHtml(story.title || '')}" loading="lazy">`
-    : '<span class="story-banner-img story-banner-img-empty" aria-hidden="true"></span>';
+function prefersReducedMotion() {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+function isTopChromeDrawerOpen() {
+  const drawer = document.getElementById('topChromeDrawer');
+  return !!(drawer && drawer.style.display === 'flex');
+}
+
+/** هل توجد نافذة أو صفحة تغطي الرئيسية الآن؟ */
+function isHomeCarouselCovered() {
+  if (typeof document === 'undefined') return false;
+  if (featuredMenuOpen) return true;
+  if (typeof isEventPageOpen === 'function' && isEventPageOpen()) return true;
+  if (typeof isLiveSectionOpen === 'function' && isLiveSectionOpen()) return true;
+  const storyOverlay = document.getElementById('storyViewerOverlay');
+  if (storyOverlay && storyOverlay.style.display === 'flex') return true;
+  const archiveViewer = document.getElementById('archiveViewer');
+  if (archiveViewer && !archiveViewer.hidden) return true;
+  const newsScreen = document.getElementById('newsScreen');
+  if (newsScreen && !newsScreen.hidden) return true;
+  const albumsPage = document.getElementById('albumsPage');
+  if (albumsPage && !albumsPage.hidden) return true;
+  const modals = [...document.querySelectorAll('.modal-overlay')];
+  if (modals.some(m => !m.hidden && m.style.display && m.style.display !== 'none')) return true;
+  return false;
+}
+
+function shouldAutoAdvanceHomeCarousels() {
+  if (typeof document === 'undefined') return false;
+  if (prefersReducedMotion()) return false;
+  if (document.hidden) return false;
+  const homeTab = document.getElementById('tabHome');
+  if (!homeTab || !homeTab.classList.contains('active-tab')) return false;
+  if (isHomeCarouselCovered()) return false;
+  return true;
+}
+
+function buildLiveFloatingPillHtml() {
+  const active = isLiveNow(liveState);
+  const cls = active ? 'is-live' : 'is-off';
+  const label = active ? '● مباشر · البث المباشر' : 'البث المباشر';
+  return `
+    <button type="button" class="live-floating-pill ${cls}" onclick="openLiveSection(); event.stopPropagation();" aria-label="البث المباشر">
+      <span class="live-dot" aria-hidden="true"></span>
+      <span>${label}</span>
+    </button>
+  `;
+}
+
+function syncLiveCapsulesState(active) {
+  const clsLive = Boolean(active);
+  document.querySelectorAll('.live-floating-pill').forEach(pill => {
+    pill.classList.toggle('is-live', clsLive);
+    pill.classList.toggle('is-off', !clsLive);
+    const spans = pill.querySelectorAll('span');
+    if (spans[1]) spans[1].textContent = clsLive ? '● مباشر · البث المباشر' : 'البث المباشر';
+  });
+  document.querySelectorAll('.live-chip').forEach(chip => {
+    chip.classList.toggle('is-live', clsLive);
+    chip.classList.toggle('is-off', !clsLive);
+    const tag = chip.querySelector('.live-tag');
+    if (tag) tag.hidden = !clsLive;
+  });
+}
+
+function promoSlideHtml(story) {
+  const safeImg = story.image ? escapeHtml(story.image) : '';
+  const title = escapeHtml(story.title || '');
   const target = isSafeHttpUrl(story.target_url);
   return `
-    <article class="story-banner-card" data-story-id="${Number(story.id)}">
-      <button type="button" class="story-banner-media" onclick="openStoryViewer(${index}, '${placement}')" aria-label="${escapeHtml(story.title || 'قصة')}">${image}</button>
-      <div class="story-banner-body">
-        <span class="story-banner-chip">${story.is_ad ? 'إعلان' : 'مميّز'}</span>
-        <strong class="story-banner-title">${escapeHtml(story.title || '')}</strong>
-        ${target ? `<button type="button" class="story-banner-cta" onclick="handleStoryCtaById(${Number(story.id)})">${escapeHtml(storyCtaLabel(story))}</button>` : ''}
+    <div class="carousel-slide" data-story-id="${Number(story.id)}">
+      ${safeImg ? `<img src="${safeImg}" alt="${title}" loading="lazy">` : '<div class="img-fallback" style="display:flex;"><span>' + title + '</span></div>'}
+      <div class="ad-overlay">
+        <div class="ad-title">${title}</div>
+        ${target ? `<button type="button" class="ad-cta" onclick="event.stopPropagation(); handleStoryCtaById(${Number(story.id)})">${escapeHtml(storyCtaLabel(story))}</button>` : ''}
       </div>
-    </article>`;
+    </div>
+  `;
+}
+
+function renderBigPromoSurface({ sectionId, boxId, dotsId, chipId, isDrawer = false }) {
+  const section = document.getElementById(sectionId);
+  const box = document.getElementById(boxId);
+  const dots = document.getElementById(dotsId);
+  const chip = chipId ? document.getElementById(chipId) : null;
+  if (!section || !box) return;
+
+  const stories = storiesForPlacement('promo');
+  if (isDrawer) {
+    if (drawerPromoCarouselTimer) { clearInterval(drawerPromoCarouselTimer); drawerPromoCarouselTimer = null; }
+  } else {
+    if (promoCarouselTimer) { clearInterval(promoCarouselTimer); promoCarouselTimer = null; }
+  }
+
+  if (!stories.length) {
+    section.hidden = true;
+    box.innerHTML = '';
+    if (dots) { dots.innerHTML = ''; dots.hidden = true; }
+    if (chip) chip.hidden = false;
+    syncLiveCapsulesState(isLiveNow(liveState));
+    return;
+  }
+
+  if (chip) chip.hidden = true;
+  section.hidden = false;
+
+  let index = isDrawer ? drawerPromoCarouselIndex : promoCarouselIndex;
+  if (index >= stories.length || index < 0) index = 0;
+  if (isDrawer) drawerPromoCarouselIndex = index;
+  else promoCarouselIndex = index;
+
+  const slidesHtml = stories.map(promoSlideHtml).join('');
+  box.innerHTML = `
+    ${buildLiveFloatingPillHtml()}
+    <div class="carousel-viewport">
+      <div class="carousel-track" style="transform: translateX(-${index * 100}%);">
+        ${slidesHtml}
+      </div>
+    </div>
+  `;
+
+  if (dots) {
+    if (stories.length > 1) {
+      dots.hidden = false;
+      dots.innerHTML = stories.map((_, i) => `
+        <button type="button" class="carousel-dot ${i === index ? 'is-active' : ''}" data-slide="${i}" aria-label="شريحة ${i + 1}"></button>
+      `).join('');
+    } else {
+      dots.hidden = true;
+      dots.innerHTML = '';
+    }
+  }
+
+  const viewport = box.querySelector('.carousel-viewport');
+  const track = box.querySelector('.carousel-track');
+  if (!viewport || !track) return;
+
+  const applyPos = (nextIdx) => {
+    const wrapped = (nextIdx + stories.length) % stories.length;
+    if (isDrawer) drawerPromoCarouselIndex = wrapped;
+    else promoCarouselIndex = wrapped;
+    track.classList.remove('is-dragging');
+    track.style.transform = `translateX(-${wrapped * 100}%)`;
+    if (dots) {
+      dots.querySelectorAll('.carousel-dot').forEach((dot, i) => {
+        dot.classList.toggle('is-active', i === wrapped);
+      });
+    }
+  };
+
+  const stopTimer = () => {
+    if (isDrawer) {
+      if (drawerPromoCarouselTimer) { clearInterval(drawerPromoCarouselTimer); drawerPromoCarouselTimer = null; }
+    } else {
+      if (promoCarouselTimer) { clearInterval(promoCarouselTimer); promoCarouselTimer = null; }
+    }
+  };
+
+  const startTimer = () => {
+    stopTimer();
+    if (stories.length <= 1 || prefersReducedMotion()) return;
+    const tick = () => {
+      if (isDrawer) {
+        if (!isTopChromeDrawerOpen() || document.hidden || prefersReducedMotion()) return;
+      } else {
+        if (!shouldAutoAdvanceHomeCarousels()) return;
+      }
+      const cur = isDrawer ? drawerPromoCarouselIndex : promoCarouselIndex;
+      applyPos(cur + 1);
+    };
+    const timer = setInterval(tick, 4000);
+    if (isDrawer) drawerPromoCarouselTimer = timer;
+    else promoCarouselTimer = timer;
+  };
+
+  if (dots && stories.length > 1) {
+    dots.querySelectorAll('.carousel-dot').forEach(dot => {
+      dot.addEventListener('click', () => {
+        const nextIdx = Number(dot.dataset.slide) || 0;
+        applyPos(nextIdx);
+        startTimer();
+      });
+    });
+  }
+
+  let dragging = false;
+  let startX = 0;
+  let deltaX = 0;
+  let moved = false;
+  let handledPointerTap = false;
+
+  viewport.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('.ad-cta') || e.target.closest('.live-floating-pill')) return;
+    dragging = true;
+    startX = e.clientX;
+    deltaX = 0;
+    moved = false;
+    handledPointerTap = false;
+    stopTimer();
+    if (stories.length > 1) track.classList.add('is-dragging');
+    if (viewport.setPointerCapture) {
+      try { viewport.setPointerCapture(e.pointerId); } catch (_) {}
+    }
+  });
+
+  viewport.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    deltaX = e.clientX - startX;
+    if (Math.abs(deltaX) > 6) moved = true;
+    if (stories.length > 1) {
+      const cur = isDrawer ? drawerPromoCarouselIndex : promoCarouselIndex;
+      track.style.transform = `translateX(calc(-${cur * 100}% + ${deltaX}px))`;
+    }
+  });
+
+  const finishDrag = () => {
+    if (!dragging) return;
+    dragging = false;
+    track.classList.remove('is-dragging');
+    const cur = isDrawer ? drawerPromoCarouselIndex : promoCarouselIndex;
+    if (moved && stories.length > 1 && Math.abs(deltaX) > 40) {
+      handledPointerTap = true;
+      applyPos(deltaX < 0 ? cur + 1 : cur - 1);
+    } else {
+      applyPos(cur);
+      if (!moved) {
+        handledPointerTap = true;
+        if (isDrawer) toggleTopChrome(false);
+        openStoryViewer(cur, 'promo');
+      }
+    }
+    startTimer();
+  };
+
+  viewport.addEventListener('pointerup', finishDrag);
+  viewport.addEventListener('pointercancel', finishDrag);
+  viewport.addEventListener('click', (e) => {
+    if (e.target.closest('.ad-cta') || e.target.closest('.live-floating-pill')) return;
+    if (handledPointerTap) {
+      handledPointerTap = false;
+      return;
+    }
+    if (!moved && !dragging) {
+      const cur = isDrawer ? drawerPromoCarouselIndex : promoCarouselIndex;
+      if (isDrawer) toggleTopChrome(false);
+      openStoryViewer(cur, 'promo');
+    }
+  });
+
+  startTimer();
 }
 
 /**
- * كاروسيل البانرات أعلى التغذية (تذكرة #173): ستوريات موضع `carousel` وحدها.
- * بلا ستوريات كاروسيل يبقى القسم `hidden` ولا يُرسم شيء.
+ * البطاقة الإعلانية الكبيرة أعلى التغذية: ستوريات `carousel` ثم `bar`.
  */
 function renderStoryCarousel() {
-  const section = document.getElementById('storyCarouselSection');
-  const rail = document.getElementById('storyCarousel');
-  if (!section || !rail) return;
-  const stories = storiesForPlacement('carousel');
-  section.hidden = stories.length === 0;
-  rail.innerHTML = stories.map((story, index) => storyBannerHtml(story, index, 'carousel')).join('');
+  renderBigPromoSurface({
+    sectionId: 'storyCarouselSection',
+    boxId: 'storyCarouselBox',
+    dotsId: 'storyCarouselDots',
+    chipId: 'liveFilterChip',
+    isDrawer: false
+  });
   updateFeedDimensions();
 }
 
 /**
- * سطح كاروسيل البانرات في الدرج العلوي للهاتف/PWA: يبقى خارج تغذية الالتقاط
- * بملء الشاشة، ويستخدم قائمة `carousel` نفسها ومؤشرها نفسه اللذين يستخدمهما
- * الكاروسيل أعلى التغذية. بلا ستوريات لا يرسم شيئاً ويبقى مخفياً.
+ * نسخة الدرج العلوي للهاتف/PWA: تُعامل بالمنطق نفسه (ستوريات `carousel` ثم `bar`)
+ * لأن تغذية الموبايل الثابتة تحجب `#storyCarouselSection`.
  */
 function renderDrawerStoryCarousel() {
-  const section = document.getElementById('drawerStoryCarouselSection');
-  const rail = document.getElementById('drawerStoryCarousel');
-  if (!section || !rail) return;
-  const stories = storiesForPlacement('carousel');
-  section.hidden = stories.length === 0;
-  rail.innerHTML = stories.map((story, index) => storyBannerHtml(story, index, 'carousel')).join('');
+  renderBigPromoSurface({
+    sectionId: 'drawerStoryCarouselSection',
+    boxId: 'drawerStoryCarouselBox',
+    dotsId: 'drawerStoryCarouselDots',
+    chipId: 'drawerLiveFilterChip',
+    isDrawer: true
+  });
 }
 
-/**
- * يبني شريط القصص في الموضعين (الصفحة والدرج العلوي) من ستوريات موضع `bar`
- * وحدها — `openStoryViewer(i)` يعتمد على i كفهرس في تلك القائمة تحديداً،
- * و`bar` هو الموضع الافتراضي للعارض فالشريط لا يمرّر موضعاً.
- */
-function renderStoriesStrip() {
-  const container = document.getElementById('storiesContainer');
-  const drawerContainer = document.getElementById('drawerStoriesContainer');
-  const stories = storiesForPlacement('bar');
-  const html = stories.map((s, i) => `
-    <div class="story-item" onclick="openStoryViewer(${i}); toggleTopChrome(false);">
-      <div class="story-avatar-ring ${s.isLive ? 'live' : ''}">
-        <img src="${s.image}" class="story-avatar-img" alt="${escapeHtml(s.title)}">
-      </div>
-      <span class="story-title">${escapeHtml(s.title)}</span>
-    </div>
-  `).join('');
-  if (container) container.innerHTML = html;
-  if (drawerContainer) drawerContainer.innerHTML = html;
-  updateFeedDimensions();
+function stopHomeCarouselTimers() {
+  if (promoCarouselTimer) { clearInterval(promoCarouselTimer); promoCarouselTimer = null; }
+  if (drawerPromoCarouselTimer) { clearInterval(drawerPromoCarouselTimer); drawerPromoCarouselTimer = null; }
+  if (featuredCarouselTimer) { clearInterval(featuredCarouselTimer); featuredCarouselTimer = null; }
+}
+
+function handleHomeCarouselsVisibilityChange() {
+  if (document.hidden) {
+    stopHomeCarouselTimers();
+  } else {
+    if (storiesForPlacement('promo').length > 1) {
+      renderStoryCarousel();
+      if (isTopChromeDrawerOpen()) renderDrawerStoryCarousel();
+    }
+    startFeaturedAutoAdvance();
+  }
 }
 
 /**
@@ -1311,6 +1460,7 @@ function updateLiveEntryBadge() {
   if (floatingBtn) floatingBtn.classList.toggle('is-live', active);
   if (headerBadge) headerBadge.hidden = !active;
   if (floatingBadge) floatingBadge.hidden = !active;
+  syncLiveCapsulesState(active);
 
   clearTimeout(liveBadgeTimer);
   liveBadgeTimer = null;
@@ -3902,7 +4052,7 @@ function updateMyListNavBadge() {
   badge.hidden = todayCount <= 0;
 }
 
-/** يقرّر ما يراه زائر التبويب: بطاقة الدخول لغير المسجَّل، والقائمة للمسجَّل. */
+/** يقرّر ما يراه زائر التبويب: بطاقة الدخول لغير المسجَّل، وصفحة «مناسباتي» للمسجَّل. */
 function loadMyListView() {
   const lockedView = document.getElementById('myListLockedView');
   const unlockedView = document.getElementById('myListUnlockedView');
@@ -3916,6 +4066,7 @@ function loadMyListView() {
 
   lockedView.style.display = 'none';
   unlockedView.style.display = 'block';
+  fetchMyEvents();
   loadMyList();
   loadSavedProviders();
 }
@@ -5045,25 +5196,17 @@ function expandFeedToAllRegions() {
 }
 
 /*
- * «الأكثر تفاعلاً هذا الأسبوع» (تذكرة #177) — أعلى ستّ مناسبات بمجموع
- * إشاراتها في نافذة السبعة أيام. الخادم وحده يحسب المجموع والترتيب والحدّ
- * (`GET /api/events/trending`)، والعميل يرسم `events` كما وصلت. البطاقة نفسها
- * بطاقة التغذية المضغوطة: نفس العنوان ونفس سطر التاريخ/المكان ونفس الفتح
- * (`openEventPage`)، فلا شكل بيانات ثانٍ بين القسم والتغذية.
+ * «الأعراس المميزة» — من GET /api/events/featured لمحافظة الاكتشاف الحالية.
+ * شريط بطاقات كبيرة بـscroll-snap وإطار ذهبي وبوستر كامل (object-fit: contain).
+ * يتقدّم ذاتياً كل ٤ ثوانٍ ويتوقف عند اللمس وعند إخفاء الصفحة أو تغطيتها
+ * أو تفضيل تقليل الحركة.
  */
-let trendingRequestSeq = 0;
+let featuredRequestSeq = 0;
 
-/**
- * نسختا الشريط اللتان تُرسمان من ردٍّ واحد: نسخة التغذية في التدفق
- * (`#trendingSection`)، ونسخة الدرج العلوي لسطح الهاتف/PWA
- * (`#drawerTrendingSection`) — وهناك التغذية طبقة `fixed` بملء الشاشة تحجب ما
- * فوقها فلا يُرى القسم في التدفق إطلاقاً، على سابقة كاروسيل البانرات (#173).
- * ولا طلب ثانٍ: النداء الواحد يملأ الاثنتين أو يُخفيهما معاً.
- */
-function trendingTargets() {
+function featuredTargets() {
   return [
-    { sectionId: 'trendingSection', rowId: 'trendingRow' },
-    { sectionId: 'drawerTrendingSection', rowId: 'drawerTrendingRow' }
+    { sectionId: 'featuredEventsSection', rowId: 'featuredEventsTrack' },
+    { sectionId: 'drawerFeaturedEventsSection', rowId: 'drawerFeaturedEventsTrack' }
   ]
     .map(({ sectionId, rowId }) => ({
       section: document.getElementById(sectionId),
@@ -5072,17 +5215,54 @@ function trendingTargets() {
     .filter(target => target.section && target.row);
 }
 
-/**
- * يُفرغ الصفوف **ويخفي الأقسام قبل الطلب** لا بعده (درس #175): لا تبقى بطاقات
- * محافظة سابقة معروضة فوق تغذية محافظة جديدة أثناء انتظار الردّ — في النسختين
- * معاً. وردٌّ متأخر (`seq` مختلف) يُهمَل فلا يستطيع ردّ محافظةٍ قديمة أن يرسم
- * فوق الجديدة، وقائمة فارغة أو غير مصفوفة تُبقي القسمين مخفيين، وفشل الشبكة
- * يُخفيهما بلا رسالة — «لا نتيجة» هي الحالة الطبيعية لهذا القسم لا خطأ يُعرض.
- */
-async function loadTrending() {
-  const seq = ++trendingRequestSeq;
-  const targets = trendingTargets();
+function stopFeaturedAutoAdvance() {
+  if (featuredCarouselTimer) {
+    clearInterval(featuredCarouselTimer);
+    featuredCarouselTimer = null;
+  }
+}
+
+function startFeaturedAutoAdvance() {
+  stopFeaturedAutoAdvance();
+  if (prefersReducedMotion()) return;
+  const track = document.getElementById('featuredEventsTrack');
+  if (!track) return;
+  const cards = track.querySelectorAll('.featured-event-card');
+  if (cards.length <= 1) return;
+
+  featuredCarouselTimer = setInterval(() => {
+    if (!shouldAutoAdvanceHomeCarousels()) return;
+    const liveCards = track.querySelectorAll('.featured-event-card');
+    if (liveCards.length <= 1) return;
+    featuredCarouselIndex = (featuredCarouselIndex + 1) % liveCards.length;
+    const target = liveCards[featuredCarouselIndex];
+    if (!target || typeof track.scrollBy !== 'function') return;
+    const containerRect = track.getBoundingClientRect();
+    const cardRect = target.getBoundingClientRect();
+    if (containerRect.width > 0) {
+      const delta = cardRect.right - (containerRect.right - 12);
+      track.scrollBy({ left: delta, behavior: 'smooth' });
+    }
+  }, 4000);
+}
+
+function bindFeaturedTrackInteraction(track) {
+  if (!track || track.dataset.featuredBound === '1') return;
+  track.dataset.featuredBound = '1';
+  track.addEventListener('pointerdown', stopFeaturedAutoAdvance);
+  track.addEventListener('touchstart', stopFeaturedAutoAdvance, { passive: true });
+  track.addEventListener('pointerup', startFeaturedAutoAdvance);
+  track.addEventListener('pointercancel', startFeaturedAutoAdvance);
+  track.addEventListener('touchend', startFeaturedAutoAdvance, { passive: true });
+}
+
+async function loadFeaturedEvents() {
+  const seq = ++featuredRequestSeq;
+  const targets = featuredTargets();
   if (!targets.length) return;
+
+  stopFeaturedAutoAdvance();
+  featuredCarouselIndex = 0;
 
   targets.forEach(({ section, row }) => {
     row.innerHTML = '';
@@ -5097,42 +5277,44 @@ async function loadTrending() {
 
   let data = null;
   try {
-    const res = await apiFetch(`/api/events/trending${query ? `?${query}` : ''}`, { allRegions: feedAllRegions });
+    const res = await apiFetch(`/api/events/featured${query ? `?${query}` : ''}`, { allRegions: feedAllRegions });
     data = await res.json();
   } catch (e) {
     data = null;
   }
 
-  // محافظة أخرى اختيرت بينما هذا الطلب في الطريق: ردّه لا يخصّ ما يُعرض الآن.
-  if (seq !== trendingRequestSeq) return;
+  if (seq !== featuredRequestSeq) return;
 
   const events = data && Array.isArray(data.events) ? data.events : [];
   if (!events.length) return;
 
-  const html = events.map(renderTrendingCardHtml).join('');
+  const html = events.map(renderFeaturedCardHtml).join('');
   targets.forEach(({ section, row }) => {
     row.innerHTML = html;
     section.hidden = false;
   });
+
+  bindFeaturedTrackInteraction(document.getElementById('featuredEventsTrack'));
+  startFeaturedAutoAdvance();
 }
 
-/** بطاقة الشريط الواحدة — العنوان وسطر «التاريخ — البلدة» من مُهيّئات الكرت القائم. */
-function renderTrendingCardHtml(evt) {
+/** بطاقة «الأعراس المميزة» — بوستر كامل، عنوان، وسطر «التاريخ — البلدة» من مُهيّئات الكرت. */
+function renderFeaturedCardHtml(evt) {
   const headline = eventCardHeadline(evt);
   const place = eventPlaceName(evt);
   const meta = [formatEventDayLong(evt), place].filter(Boolean).join(' — ');
   const poster = evt.poster_url ? cardImageUrl(evt.poster_url) : '';
-  // `alt=""` مقصود: الصورة مصغّرة زخرفية بجانب عنوان البطاقة نفسه، فوصفها
-  // بصوت عالٍ يكرّر ما يقرؤه قارئ الشاشة من الزرّ.
   const shot = poster
-    ? `<img class="trending-card-img" src="${escapeHtml(poster)}" alt="" loading="lazy">`
-    : '<span class="trending-card-img trending-card-img-empty" aria-hidden="true"><i class="fa-solid fa-champagne-glasses"></i></span>';
+    ? `<img class="featured-event-img" src="${escapeHtml(poster)}" alt="" loading="lazy">`
+    : '<span class="featured-event-img featured-event-img-empty" aria-hidden="true"><i class="fa-solid fa-champagne-glasses"></i></span>';
 
   return `
-    <button type="button" class="trending-card" data-event-id="${evt.id}" onclick="openEventPage(${evt.id})">
-      ${shot}
-      <span class="trending-card-title card-clamp-1-line">${escapeHtml(headline)}</span>
-      <span class="trending-card-meta card-clamp-1-line">${escapeHtml(meta)}</span>
+    <button type="button" class="featured-event-card" data-event-id="${evt.id}" onclick="openEventPage(${evt.id})">
+      <div class="featured-event-shot">${shot}</div>
+      <div class="featured-event-body">
+        <span class="featured-event-name card-clamp-1-line">${escapeHtml(headline)}</span>
+        <span class="featured-event-meta card-clamp-1-line">${escapeHtml(meta)}</span>
+      </div>
     </button>`;
 }
 
@@ -5160,10 +5342,8 @@ function reloadDiscoverySurfacesForRegion() {
   // شريط الستوريات ظاهر دائماً أعلى التغذية.
   fetchStories();
 
-  // «الأكثر تفاعلاً» (تذكرة #177) أسفل الكاروسيل وفوق التغذية، فمحافظته تتبع
-  // المحافظة الجديدة كبقية الأسطح — وإلا بقي الشريط يعرض بطاقات محافظة غير
-  // المحافظة المعروضة تحته.
-  loadTrending();
+  // «الأعراس المميزة» تتبع محافظة الاكتشاف الحالية.
+  loadFeaturedEvents();
 
   // الخريطة إن كانت قد فُتحت — initLeafletMap نفسها تزيل الدبابيس القديمة
   // وتعيد التمركز على محافظة الاكتشاف الجديدة (تذكرة #124).
@@ -5458,19 +5638,20 @@ async function sendReaction(eventId, type, btnElement) {
 // التبويبات) تبقى مفتوحة بلا حساب (#20 step 9). طلب الدخول يحفظ النيّة
 // (pendingIntent) ليعود الزائر لهذا التبويب نفسه بعد الدخول، لا أن يضيع طلبه.
 //
-// الشريط السفلي ثلاث وجهات بالترتيب الذي في index.html — والمفتاح أدناه هو
-// ربط المعرّف بموضعه. «حسابي» غادر الشريط ويُفتح من زرّه في الترويسة وحده،
-// فصفحاته وبطاقاته (tabAccount/tabMap/tabMyList/tabNokoot) بلا زرّ نشِط في
-// الشريط إطلاقاً؛ وtabAdd وtabStickers وباقي الصفحات كذلك. مفتاح غير معرَّف
-// هنا = لا زرّ يُضاء في الأسفل.
+// الشريط السفلي بست خانات (من اليمين في RTL):
+// المناسبات · خدماتنا · [زرّ الوسط الذهبي — ليس تبويباً] · خدمات الأعراس · مناسباتي · حسابي.
+// زرّ الوسط يفتح ورقة «مميّز عندنا»؛ أزرار التبويب الخمسة تملك الصنف `.nav-btn`.
 const BOTTOM_NAV_INDEX = {
   tabHome: 0,
   tabOurServices: 1,
-  tabServices: 2
+  tabServices: 2,
+  tabMyList: 3,
+  tabAccount: 4
 };
 
 function switchTab(tabId) {
   if (tabId === 'tabAdd' && !requireAuth({ type: 'publish' })) return;
+  closeFeaturedMenu({ restoreFocus: false });
 
   const homeTab = document.getElementById('tabHome');
   const wasOnHome = !!(homeTab && homeTab.classList.contains('active-tab'));
@@ -5485,7 +5666,14 @@ function switchTab(tabId) {
 
   const navIndex = BOTTOM_NAV_INDEX[tabId];
   const navBtns = document.querySelectorAll('.bottom-navbar .nav-btn');
-  if (navIndex !== undefined && navBtns[navIndex]) navBtns[navIndex].classList.add('active');
+  if (navIndex !== undefined && navBtns[navIndex]) {
+    const activeBtn = navBtns[navIndex];
+    activeBtn.classList.add('active');
+    const navBar = activeBtn.parentElement;
+    if (navBar && navBar.scrollWidth > navBar.clientWidth && typeof activeBtn.scrollIntoView === 'function') {
+      activeBtn.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
+    }
+  }
 
   if (feedToRestore) window.scrollTo(0, feedToRestore.page);
   else window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -5499,8 +5687,13 @@ function switchTab(tabId) {
     const feed = document.getElementById('eventsContainer');
     if (feedToRestore && feed) feed.scrollTop = feedToRestore.feed;
     feedScrollMemory = null;
+    if (storiesForPlacement('promo').length > 1) renderStoryCarousel();
+    startFeaturedAutoAdvance();
+  } else {
+    stopHomeCarouselTimers();
   }
-  else if (tabId === 'tabNokoot') loadNokootView();
+
+  if (tabId === 'tabNokoot') loadNokootView();
   else if (tabId === 'tabMyList') loadMyListView();
   else if (tabId === 'tabAccount') loadAccountView();
   else if (tabId === 'tabStickers') renderStickerCanvas();
@@ -5531,6 +5724,175 @@ function openAddEventModal() {
  */
 function openOurServices() {
   switchTab('tabOurServices');
+}
+
+// 10a. ورقة «مميّز عندنا» (S1: ورقة سفلية من زرّ الوسط الذهبي)
+const STORES_PLATFORM_URL = 'https://kolshee.ktra-pro.tech/';
+const SPECIAL_MENU_ITEMS = [
+  { id: 'card', title: 'صمّم بطاقة دعوتك', desc: '١٢ قالباً جاهزاً، شاركها بالواتساب', icon: '💌', hero: true },
+  { id: 'gold', title: 'حاسبة الذهب', desc: 'سعر الغرام اليوم', icon: '🪙', hero: false },
+  { id: 'fx', title: 'محوّل العملات', desc: 'شيكل، دولار، دينار، يورو', icon: '💱', hero: false },
+  { id: 'albums', title: 'ألبومات الأعراس', desc: 'صور وفيديوهات أعراس بلدك', icon: '📸', hero: false },
+  { id: 'live', title: 'البث المباشر', desc: 'شاهد البث والحلقات السابقة', icon: '📡', hero: false },
+  { id: 'news', title: 'آخر خبر', desc: 'أخبار محافظتك', icon: '📰', hero: false },
+  { id: 'stores', title: 'متاجرنا', desc: 'منصّة كترا للمتاجر', icon: '🛍️', hero: false },
+  { id: 'nokoot', title: 'دفتر النقوط', desc: 'سجّل النقوط اللي عليك واللي إلك', icon: '📒', hero: false }
+];
+
+function renderSheetGrid() {
+  const panel = document.getElementById('featuredMenuPanel');
+  if (!panel) return;
+  const hero = SPECIAL_MENU_ITEMS[0];
+  const others = SPECIAL_MENU_ITEMS.slice(1);
+
+  panel.innerHTML = `
+    <div class="featured-sheet-head" id="featuredMenuDragHandle">
+      <div class="featured-sheet-handle" aria-hidden="true"></div>
+      <div class="featured-sheet-title-row">
+        <h2 class="featured-sheet-title" id="featuredMenuTitle">مميّز عندنا</h2>
+        <button type="button" class="featured-sheet-close" onclick="closeFeaturedMenu()" aria-label="إغلاق">×</button>
+      </div>
+    </div>
+    <button type="button" class="featured-hero-card" data-special-id="${hero.id}" onclick="selectSpecialMenuItem('${hero.id}')">
+      <div class="featured-hero-icon" aria-hidden="true">${hero.icon}</div>
+      <div class="featured-hero-text">
+        <div class="featured-hero-title">${hero.title}</div>
+        <div class="featured-hero-desc">${hero.desc}</div>
+      </div>
+    </button>
+    <div class="featured-sheet-grid">
+      ${others.map(item => `
+        <button type="button" class="featured-grid-item" data-special-id="${item.id}" onclick="selectSpecialMenuItem('${item.id}')">
+          <span class="featured-grid-icon" aria-hidden="true">${item.icon}</span>
+          <span class="featured-grid-title">${item.title}</span>
+          <span class="featured-grid-desc">${item.desc}</span>
+        </button>
+      `).join('')}
+    </div>
+  `;
+}
+
+function initFeaturedSheetDrag() {
+  const handle = document.getElementById('featuredMenuDragHandle');
+  const panel = document.getElementById('featuredMenuPanel');
+  if (!handle || !panel) return;
+
+  let dragging = false;
+  let startY = 0;
+  let deltaY = 0;
+
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('.featured-sheet-close')) return;
+    dragging = true;
+    startY = e.clientY;
+    deltaY = 0;
+    panel.style.transition = 'none';
+    if (handle.setPointerCapture) {
+      try { handle.setPointerCapture(e.pointerId); } catch (_) {}
+    }
+  });
+
+  handle.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    deltaY = Math.max(0, e.clientY - startY);
+    panel.style.transform = `translateY(${deltaY}px)`;
+  });
+
+  const endDrag = () => {
+    if (!dragging) return;
+    dragging = false;
+    panel.style.transition = 'transform 0.2s ease';
+    if (deltaY > 75) {
+      closeFeaturedMenu();
+    } else {
+      panel.style.transform = '';
+    }
+  };
+
+  handle.addEventListener('pointerup', endDrag);
+  handle.addEventListener('pointercancel', endDrag);
+}
+
+function handleFeaturedMenuKeydown(e) {
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeFeaturedMenu();
+  }
+}
+
+function openFeaturedMenu() {
+  const backdrop = document.getElementById('featuredMenuBackdrop');
+  const panel = document.getElementById('featuredMenuPanel');
+  const trigger = document.getElementById('navBtnFeaturedMenu');
+  if (!backdrop || !panel) return;
+
+  featuredMenuReturnFocusEl = (typeof document !== 'undefined' && document.activeElement) || trigger;
+  featuredMenuOpen = true;
+  renderSheetGrid();
+  backdrop.hidden = false;
+  panel.style.transform = '';
+  if (trigger) trigger.setAttribute('aria-expanded', 'true');
+  document.addEventListener('keydown', handleFeaturedMenuKeydown);
+  initFeaturedSheetDrag();
+
+  const closeBtn = panel.querySelector('.featured-sheet-close');
+  if (closeBtn && typeof closeBtn.focus === 'function') closeBtn.focus();
+  else if (typeof panel.focus === 'function') panel.focus();
+}
+
+function closeFeaturedMenu({ restoreFocus = true } = {}) {
+  const backdrop = document.getElementById('featuredMenuBackdrop');
+  const panel = document.getElementById('featuredMenuPanel');
+  const trigger = document.getElementById('navBtnFeaturedMenu');
+  const wasOpen = featuredMenuOpen || (backdrop && !backdrop.hidden);
+  featuredMenuOpen = false;
+  if (backdrop) backdrop.hidden = true;
+  if (panel) panel.style.transform = '';
+  if (trigger) trigger.setAttribute('aria-expanded', 'false');
+  document.removeEventListener('keydown', handleFeaturedMenuKeydown);
+
+  if (wasOpen && restoreFocus) {
+    const target = (featuredMenuReturnFocusEl && typeof featuredMenuReturnFocusEl.focus === 'function')
+      ? featuredMenuReturnFocusEl
+      : trigger;
+    if (target && typeof target.focus === 'function') target.focus();
+  }
+  featuredMenuReturnFocusEl = null;
+}
+
+function scrollPricesSectionIntoView(panelId) {
+  const target = document.getElementById(panelId) || document.getElementById('pricesToolsSection');
+  if (target && typeof target.scrollIntoView === 'function') {
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
+function selectSpecialMenuItem(itemId) {
+  closeFeaturedMenu({ restoreFocus: false });
+
+  if (itemId === 'card') {
+    switchTab('tabMyList');
+    if (!(currentUser && authToken)) requireAuth({ type: 'my_list' });
+  } else if (itemId === 'gold') {
+    openOurServices();
+    openPricesTool('gold');
+    scrollPricesSectionIntoView('pricesPanelGold');
+  } else if (itemId === 'fx') {
+    openOurServices();
+    openPricesTool('fx');
+    scrollPricesSectionIntoView('pricesPanelFx');
+  } else if (itemId === 'albums') {
+    openAlbumsPage();
+  } else if (itemId === 'live') {
+    openLiveSection();
+  } else if (itemId === 'news') {
+    openNewsScreen();
+  } else if (itemId === 'stores') {
+    window.open(STORES_PLATFORM_URL, '_blank', 'noopener');
+  } else if (itemId === 'nokoot') {
+    switchTab('tabNokoot');
+    if (!(currentUser && authToken)) requireAuth({ type: 'nokoot' });
+  }
 }
 
 // 10b. حاسبات «خدماتنا» (تذكرة #190) — خمس حاسبات تعمل في الجهاز وحده:
@@ -6925,8 +7287,11 @@ function resumePendingIntent() {
       || (eventPageEvent && eventPageEvent.id === intent.eventId ? eventPageEvent : null);
     if (!(known && known.is_reminded)) toggleReminder(intent.eventId, false, null);
   } else if (intent.type === 'my_list') {
-    // بطاقة الدخول في تبويب «قائمتي» — يعود إليه بعد الدخول لا إلى التغذية.
+    // بطاقة الدخول في تبويب «مناسباتي» — يعود إليه بعد الدخول لا إلى التغذية.
     switchTab('tabMyList');
+  } else if (intent.type === 'nokoot') {
+    // بطاقة «دفتر النقوط» في ورقة «مميّز عندنا» — يعود إليه بعد الدخول.
+    switchTab('tabNokoot');
   } else if (intent.type === 'provider_favorite') {
     // «احفظ المزوّد» ضُغط قبل الدخول (تذكرة #185): تُفتح نافذة المزوّد نفسها
     // بعد الدخول، فيكمل المستخدم الفعل الذي أراده بزرّه هو — لا حفظ صامت.
@@ -7473,8 +7838,7 @@ function toggleTopChrome(show) {
     drawer.style.display = 'flex';
     backdrop.style.display = 'block';
 
-    // سطرا الستوريات في الدرج يُعاد رسمهما معاً، فلا تبقى بانرات carousel قديمة.
-    renderStoriesStrip();
+    // إعادة رسم البطاقة الإعلانية الكبيرة في الدرج بالبيانات الحالية.
     renderDrawerStoryCarousel();
 
     const drawerSearch = document.getElementById('drawerSearchInput');
@@ -7495,6 +7859,10 @@ function toggleTopChrome(show) {
   } else {
     drawer.style.display = 'none';
     backdrop.style.display = 'none';
+    if (drawerPromoCarouselTimer) {
+      clearInterval(drawerPromoCarouselTimer);
+      drawerPromoCarouselTimer = null;
+    }
   }
 }
 
@@ -10973,17 +11341,26 @@ async function handleEventSubmit(e) {
 // 14. "مناسباتي" — ownership & editing (#20 step 9)
 const MY_EVENT_STATUS_LABELS = { approved: 'منشورة', pending: 'قيد المراجعة', rejected: 'مرفوضة' };
 
-async function fetchMyEvents() {
-  const container = document.getElementById('myEventsList');
-  if (!container || !currentUser || !authToken) return;
+function myEventsContainers() {
+  return ['myEventsList', 'accountMyEventsList', 'myPublishedEventsList']
+    .map(id => document.getElementById(id))
+    .filter(Boolean);
+}
 
-  container.innerHTML = '<div class="loading-spinner"><div class="spinner"></div><p>جاري جلب مناسباتك...</p></div>';
+async function fetchMyEvents() {
+  const containers = myEventsContainers();
+  if (!containers.length || !currentUser || !authToken) return;
+
+  if (!myEventsCache.length) {
+    const loadingHtml = '<div class="loading-spinner"><div class="spinner"></div><p>جاري جلب مناسباتك...</p></div>';
+    containers.forEach(c => { c.innerHTML = loadingHtml; });
+  }
 
   try {
     const res = await apiFetch('/api/my-events', { auth: true });
     const data = await res.json();
     if (!data.success) {
-      container.innerHTML = '<div class="empty-state"><p>تعذر جلب مناسباتك</p></div>';
+      containers.forEach(c => { c.innerHTML = '<div class="empty-state"><p>تعذر جلب مناسباتك</p></div>'; });
       return;
     }
     myEventsCache = data.events;
@@ -10994,20 +11371,24 @@ async function fetchMyEvents() {
     if (eventPageEvent && isEventPageOpen()) renderEventPage(eventPageEvent);
   } catch (e) {
     console.error('My events error:', e);
-    container.innerHTML = '<div class="empty-state"><p>تعذر جلب مناسباتك</p></div>';
+    containers.forEach(c => { c.innerHTML = '<div class="empty-state"><p>تعذر جلب مناسباتك</p></div>'; });
   }
 }
 
 function renderMyEvents(events) {
-  const containers = [
-    document.getElementById('myEventsList'),
-    document.getElementById('accountMyEventsList')
-  ].filter(Boolean);
+  const containers = myEventsContainers();
 
   if (!containers.length) return;
 
   if (!events || !events.length) {
-    const emptyHtml = '<div class="empty-state"><p>لم تنشر أي مناسبة بعد</p></div>';
+    const emptyHtml = `
+      <div class="empty-state my-events-empty">
+        <i class="fa-solid fa-calendar-plus" aria-hidden="true"></i>
+        <p>ما نشرت مناسبات بعد</p>
+        <button type="button" class="gold-action-btn" onclick="openAddEventModal()">
+          <i class="fa-solid fa-plus" aria-hidden="true"></i> أضف عرسك
+        </button>
+      </div>`;
     containers.forEach(c => { c.innerHTML = emptyHtml; });
     return;
   }
@@ -14241,15 +14622,8 @@ function updateAuthUI() {
 
   const loggedIn = !!(currentUser && authToken);
   const firstName = loggedIn ? String(currentUser.full_name || '').split(' ')[0] : '';
-  const title = loggedIn && firstName ? `${firstName} — حسابي` : 'حسابي';
-
-  const label = document.getElementById('userAuthLabel');
-  const btn = document.getElementById('userAuthBtn');
-  if (label) label.textContent = 'حسابي';
-  if (btn) btn.title = title;
 
   // «أهلاً، الاسم» في الترويسة الغنية (تذكرة #174): المسجَّل وحده يراه،
-  // والاسم الأول هو نفسه الذي في `title` — لا نسخة ثانية من منطق التسمية.
   // وموضعان: الترويسة العريضة (سطح المكتب) والصفّ الغني في الشريط العائم
   // (الهاتف/PWA)، فالكتابة في العقدتين معاً كما في منتقي المحافظة.
   [['headerGreeting', 'headerGreetingName'], ['floatingHeaderGreeting', 'floatingHeaderGreetingName']].forEach(([wrapId, nameId]) => {
@@ -14258,11 +14632,6 @@ function updateAuthUI() {
     if (greetingName) greetingName.textContent = firstName;
     if (greeting) greeting.hidden = !(loggedIn && firstName);
   });
-
-  const floatingLabel = document.getElementById('floatingAuthLabel');
-  const floatingBtn = document.getElementById('floatingAuthBtn');
-  if (floatingLabel) floatingLabel.textContent = 'حسابي';
-  if (floatingBtn) floatingBtn.title = title;
 
   const adminBtn = document.getElementById('adminPanelBtn');
   if (adminBtn) {

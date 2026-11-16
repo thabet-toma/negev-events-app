@@ -344,10 +344,9 @@ function buildFetchStub() {
     if (requestPath === '/api/events/calendar') {
       return jsonResponse({ success: true, days: [] });
     }
-    // «الأكثر تفاعلاً هذا الأسبوع» (تذكرة #177) — فارغ افتراضياً: اختبارات
-    // القسم هي التي تصنع ردّه، فلا يحمل قسمٌ في اختبار آخر بطاقاتٍ من العدم.
-    if (requestPath === '/api/events/trending') {
-      return jsonResponse({ success: true, events: [], window_days: 7 });
+    // «الأعراس المميزة» — فارغ افتراضياً: اختبارات القسم هي التي تصنع ردّه.
+    if (requestPath === '/api/events/featured') {
+      return jsonResponse({ success: true, events: [] });
     }
     if (requestPath === '/api/stories') return jsonResponse({ success: true, stories: [] });
     if (requestPath === '/api/notifications') return jsonResponse({ success: true, notifications: [] });
@@ -2007,10 +2006,10 @@ async function run() {
     await dom.window.fetchStories();
     dom.window.toggleTopChrome(true);
     assert.strictEqual(doc.querySelector('.tiktok-live-item'), null, 'the story-strip bubble is gone for good');
-    const items = doc.querySelectorAll('#storiesContainer .story-item');
-    assert.strictEqual(items.length, 1, 'the strip holds the real stories only');
-    assert.ok(items[0].getAttribute('onclick').includes('openStoryViewer(0)'), 'the first real story keeps index 0');
-    assert.strictEqual(doc.querySelectorAll('#drawerStoriesContainer .story-item').length, 1, 'the drawer strip mirrors the main one');
+    assert.strictEqual(doc.getElementById('storiesContainer'), null, 'circle story strip is removed');
+    assert.strictEqual(doc.getElementById('drawerStoriesContainer'), null, 'drawer circle story strip is removed');
+    assert.strictEqual(doc.querySelectorAll('#storyCarouselSection .carousel-slide').length, 1, 'bar story appears in the big promo card');
+    assert.ok(doc.querySelector('#storyCarouselSection .live-floating-pill'), 'live capsule floats over the big promo card');
   });
 
   await test('every story with an http(s) target gets a CTA — not only ads — and a javascript: link gets none', () => {
@@ -3013,19 +3012,62 @@ async function run() {
     return dom;
   }
 
-  await test('the strip holds bar stories only, and the carousel holds carousel stories only', async () => {
+  await test('no circle stories strip exists; the big promo card renders carousel stories then bar stories, never feed stories', async () => {
     const dom = await bootWithPlacements(placementStories());
     const doc = dom.window.document;
 
-    const stripItems = [...doc.querySelectorAll('#storiesContainer .story-item')];
-    assert.strictEqual(stripItems.length, 1, 'the strip is the bar position, nothing else');
-    assert.ok(stripItems[0].textContent.includes('ستوري الشريط'), 'the bar story is the one in the strip');
+    assert.strictEqual(doc.getElementById('storiesContainer'), null, 'circle stories strip must not exist');
+    assert.strictEqual(doc.querySelectorAll('.story-item').length, 0, 'no circle story bubbles anywhere');
 
     const section = doc.getElementById('storyCarouselSection');
-    assert.strictEqual(section.hasAttribute('hidden'), false, 'a carousel story must un-hide the carousel section');
-    const cards = [...doc.querySelectorAll('#storyCarousel .story-banner-card')];
-    assert.deepStrictEqual(cards.map(card => card.dataset.storyId), ['12'], 'the carousel holds the carousel story alone');
-    assert.strictEqual(doc.querySelectorAll('#storyCarousel .story-banner-card').length, 1, 'no feed story leaks into the carousel');
+    assert.strictEqual(section.hasAttribute('hidden'), false, 'promo stories must un-hide the big promo card');
+    const slides = [...doc.querySelectorAll('#storyCarouselBox .carousel-slide')];
+    assert.deepStrictEqual(
+      slides.map(slide => slide.dataset.storyId),
+      ['12', '11'],
+      'the big promo card renders carousel stories first (12), then bar stories (11), and never feed stories'
+    );
+    const dots = [...doc.querySelectorAll('#storyCarouselDots .carousel-dot')];
+    assert.strictEqual(dots.length, 2, 'two slides show two dots');
+    assert.ok(dots[0].classList.contains('is-active'), 'the first dot is active initially');
+    assert.strictEqual(doc.getElementById('liveFilterChip').hidden, true, 'when stories exist, the live chip stays hidden in favor of the floating pill');
+    const pill = doc.querySelector('#storyCarouselBox .live-floating-pill');
+    assert.ok(pill, 'the floating live capsule sits over the big promo card');
+  });
+
+  await test('single promo story shows no dots; zero stories hides the promo card and moves the live capsule to the chips row', async () => {
+    const singleDom = await bootWithPlacements({
+      success: true,
+      feed_ad_interval: 8,
+      stories: [{ id: 21, title: 'ستوري وحيد', image: 'https://example.test/one.jpg', placement: 'carousel', target_url: 'https://example.test/go' }]
+    });
+    const sDoc = singleDom.window.document;
+    assert.strictEqual(sDoc.getElementById('storyCarouselSection').hidden, false);
+    assert.strictEqual(sDoc.querySelectorAll('#storyCarouselDots .carousel-dot').length, 0, 'single story must render no dots');
+    assert.strictEqual(sDoc.getElementById('storyCarouselDots').hidden, true);
+
+    const emptyDom = await bootWithPlacements({ success: true, feed_ad_interval: 8, stories: [] });
+    const eDoc = emptyDom.window.document;
+    assert.strictEqual(eDoc.getElementById('storyCarouselSection').hidden, true, 'zero stories must hide the big promo card');
+    const liveChip = eDoc.getElementById('liveFilterChip');
+    assert.strictEqual(liveChip.hidden, false, 'zero stories moves the live capsule to the first chip in .filter-chips-row');
+    assert.strictEqual(eDoc.querySelector('.filter-chips-row').firstElementChild, liveChip, 'live chip is the first chip');
+
+    // Live state updates floating pill & chip and clicking opens openLiveSection()
+    emptyDom.window.fetch = buildLiveHubFetchStub({
+      live: {
+        success: true,
+        profile_url: LIVE_CHANNEL_URL,
+        live_channel_url: LIVE_CHANNEL_URL,
+        live: LIVE_ACTIVE,
+        embed_url: LIVE_EMBED_URL
+      },
+      hub: buildLiveHubFixture()
+    }).fetchFn;
+    await emptyDom.window.fetchLiveStatus();
+    assert.ok(liveChip.classList.contains('is-live'), 'live chip reflects active live state');
+    liveChip.click();
+    assert.strictEqual(eDoc.getElementById('liveModal').style.display, 'flex', 'clicking live chip opens the live section');
   });
 
   await test('the carousel sits inside the home tab and above the feed container, so it is the top of the feed', async () => {
@@ -3134,7 +3176,7 @@ async function run() {
     );
   });
 
-  await test('the carousel banner opens the carousel list, and its CTA posts that story\'s click', async () => {
+  await test('the big promo card opens the promo story list (carousel then bar), and its CTA posts that story\'s click', async () => {
     const dom = buildEnv();
     await flushBoot();
     const stub = buildLiveHubFetchStub({ stories: placementStories() });
@@ -3143,28 +3185,25 @@ async function run() {
     await dom.window.fetchStories();
 
     const doc = dom.window.document;
-    const card = doc.querySelector('#storyCarousel .story-banner-card');
-    const media = card.querySelector('.story-banner-media');
-    assert.ok(
-      media.getAttribute('onclick').includes("openStoryViewer(0, 'carousel')"),
-      'the banner opens the viewer on the carousel list'
-    );
-
-    dom.window.openStoryViewer(0, 'carousel');
-    assert.strictEqual(doc.getElementById('storyViewerTitle').textContent, 'بانر الكاروسيل', 'the banner opens its own story');
+    const viewport = doc.querySelector('#storyCarouselBox .carousel-viewport');
+    assert.ok(viewport, 'expected .carousel-viewport inside #storyCarouselBox');
+    viewport.click();
+    assert.strictEqual(doc.getElementById('storyViewerOverlay').style.display, 'flex', 'tapping image opens the story viewer');
+    assert.strictEqual(doc.getElementById('storyViewerTitle').textContent, 'بانر الكاروسيل', 'starts on the first carousel story');
+    assert.strictEqual(doc.querySelectorAll('#storyProgressRow .story-progress-bar').length, 2, 'viewer runs carousel + bar stories');
     dom.window.closeStoryViewer();
 
-    const cta = card.querySelector('.story-banner-cta');
+    const cta = doc.querySelector('#storyCarouselBox .carousel-slide[data-story-id="12"] .ad-cta');
     assert.ok(cta, 'a story with a target carries a CTA outside the viewer too');
     cta.click();
     await waitFor(() => stub.calls.some(call => call.path === '/api/stories/12/click'));
     assert.ok(
       stub.calls.some(call => call.path === '/api/stories/12/click' && call.method === 'POST'),
-      'the carousel CTA records the click from the carousel position'
+      'the promo CTA records the click'
     );
   });
 
-  await test('the drawer carousel holds carousel banners alone, opens that list, and records its CTA click', async () => {
+  await test('the drawer promo card mirrors carousel then bar stories, opens that list, and records its CTA click', async () => {
     const dom = buildEnv();
     await flushBoot();
     const stub = buildLiveHubFetchStub({ stories: placementStories() });
@@ -3174,109 +3213,94 @@ async function run() {
 
     const doc = dom.window.document;
     const section = doc.getElementById('drawerStoryCarouselSection');
-    const rail = doc.getElementById('drawerStoryCarousel');
-    assert.ok(section && rail, 'the top drawer owns a dedicated carousel rail; removing it fails this assertion');
-    assert.strictEqual(section.hasAttribute('hidden'), false, 'a carousel story makes the drawer carousel visible');
-    const cards = [...rail.querySelectorAll('.story-banner-card')];
-    assert.deepStrictEqual(cards.map(card => card.dataset.storyId), ['12'], 'the drawer rail renders carousel stories alone — never bar or feed');
-    assert.ok(!rail.textContent.includes('ستوري الشريط'), 'a bar story does not leak into the drawer carousel');
-    assert.ok(!rail.textContent.includes('إعلان أول'), 'a feed story does not leak into the drawer carousel');
+    const box = doc.getElementById('drawerStoryCarouselBox');
+    assert.ok(section && box, 'the top drawer owns a dedicated promo box');
+    assert.strictEqual(section.hasAttribute('hidden'), false, 'promo stories make the drawer promo card visible');
+    const slides = [...box.querySelectorAll('.carousel-slide')];
+    assert.deepStrictEqual(slides.map(s => s.dataset.storyId), ['12', '11'], 'the drawer renders carousel then bar — never feed');
+    assert.ok(!box.textContent.includes('إعلان أول'), 'a feed story does not leak into the drawer promo card');
 
-    const card = cards[0];
-    const media = card.querySelector('.story-banner-media');
-    assert.ok(
-      media.getAttribute('onclick').includes("openStoryViewer(0, 'carousel')"),
-      'the drawer banner index belongs to the carousel list'
-    );
-    dom.window.openStoryViewer(0, 'carousel');
-    assert.strictEqual(doc.getElementById('storyViewerTitle').textContent, 'بانر الكاروسيل', 'the drawer opens the carousel story, not the bar list');
-    assert.strictEqual(doc.querySelectorAll('#storyProgressRow .story-progress-bar').length, 1, 'the drawer viewer runs the carousel list alone');
-    dom.window.closeStoryViewer();
-
-    const cta = card.querySelector('.story-banner-cta');
-    assert.ok(cta, 'the drawer carousel keeps the banner CTA');
+    const cta = box.querySelector('.carousel-slide[data-story-id="12"] .ad-cta');
+    assert.ok(cta, 'the drawer promo keeps the story CTA');
     cta.click();
     await waitFor(() => stub.calls.some(call => call.path === '/api/stories/12/click'));
     assert.ok(
       stub.calls.some(call => call.path === '/api/stories/12/click' && call.method === 'POST'),
-      'the drawer carousel CTA records the carousel story click'
+      'the drawer promo CTA records the story click'
     );
   });
 
-  console.log('\n«الأكثر تفاعلاً هذا الأسبوع» — القسم واختفاؤه (تذكرة #177)');
+  console.log('\n«الأعراس المميزة» — من GET /api/events/featured واختفاؤه عند الفراغ');
 
-  /**
-   * الشريط أسفل كاروسيل البانرات وفوق التغذية، وشقيقٌ لـ`#eventsContainer` لا
-   * ابنٌ له (اختبارات أخرى تقرأ أبناءه كأنهم كروت مناسبات). وردّه بشكل كرت
-   * التغذية نفسه، فالعميل لا يعرف نموذجاً ثانياً.
-   */
-  const TRENDING_TYPE_FIXTURE = {
+  const FEATURED_TYPE_FIXTURE = {
     id: 1, name: 'عرس', icon: '💍', color: '#8f6a20', tone: 'festive',
     show_congratulations_count: 1, show_followers_count: 1, reactions: ['coffee']
   };
 
-  const trendingCardEvents = () => ([
+  const featuredCardEvents = () => ([
     {
       id: 1201, title: 'مناسبة أولى', groom_name: 'سالم', family_clan: 'آل سالم', town: 'رهط',
       event_date: '2026-12-01', honorees: [{ name: 'سالم النباري', role: 'العريس' }],
-      occasion_type: TRENDING_TYPE_FIXTURE, reactions: {}, is_ended: false, is_featured: false
+      occasion_type: FEATURED_TYPE_FIXTURE, reactions: {}, is_ended: false, is_featured: true,
+      poster_url: 'https://example.test/p1.jpg'
     },
     {
       id: 1202, title: 'مناسبة ثانية', groom_name: 'خالد', family_clan: 'آل خالد', town: 'حورة',
       event_date: '2026-12-03', honorees: [{ name: 'هند أبو خالد', role: 'العروس' }],
-      occasion_type: { ...TRENDING_TYPE_FIXTURE, id: 3, name: 'خطوبة' }, reactions: {}, is_ended: false, is_featured: false
+      occasion_type: { ...FEATURED_TYPE_FIXTURE, id: 3, name: 'خطوبة' }, reactions: {}, is_ended: false, is_featured: true
     }
   ]);
 
-  /** buildEnv يتحكّم في ردّ `/api/events/trending` وحده، وكل شيء آخر على `buildFetchStub`. */
-  const buildTrendingEnv = trendingResponse => buildEnv({
+  /** buildEnv يتحكّم في ردّ `/api/events/featured` وحده، وكل شيء آخر على `buildFetchStub`. */
+  const buildFeaturedEnv = featuredResponse => buildEnv({
     onBeforeEval: (w) => {
       const base = buildFetchStub();
       w.fetch = async (url, opts = {}) => (
-        String(url).split('?')[0] === '/api/events/trending'
-          ? trendingResponse(url, opts)
+        String(url).split('?')[0] === '/api/events/featured'
+          ? featuredResponse(url, opts)
           : base(url, opts)
       );
     }
   });
 
-  const TRENDING_SECOND_REGION = {
+  const FEATURED_SECOND_REGION = {
     id: 2, name: 'طولكرم', latitude: 32.31, longitude: 35.03, map_zoom: 10, position: 2, towns: ['طولكرم']
   };
-  // المحافظة المزروعة نفسها (`constants.SEED_REGION`) لا نسخةٌ منها مكتوبة
-  // هنا، وهي مستوردةٌ في هذا القسم لأن استيراد أعلى الملف لا يشملها.
-  const { SEED_REGION: TRENDING_SEED_REGION } = require('../src/constants');
-  const TRENDING_TOWNS_FIXTURE = {
+  const { SEED_REGION: FEATURED_SEED_REGION } = require('../src/constants');
+  const FEATURED_TOWNS_FIXTURE = {
     success: true,
     towns: TOWNS,
     town_coordinates: TOWN_COORDINATES,
     villages: [],
-    regions: [{ id: 1, ...TRENDING_SEED_REGION, position: 1, towns: TOWNS }, TRENDING_SECOND_REGION],
+    regions: [{ id: 1, ...FEATURED_SEED_REGION, position: 1, towns: TOWNS }, FEATURED_SECOND_REGION],
     regions_soon: [],
     stats: []
   };
 
-  await test('a trending reply draws its cards above the feed, in the server order, and a card opens the event page (تذكرة #177)', async () => {
-    const dom = buildTrendingEnv(() => jsonResponse({ success: true, events: trendingCardEvents(), window_days: 7 }));
+  await test('«الأعراس المميزة» تُرسم من /api/events/featured فوق التغذية بإطار ذهبي وبوستر كامل وتفتح صفحة المناسبة', async () => {
+    const dom = buildFeaturedEnv(() => jsonResponse({ success: true, events: featuredCardEvents() }));
     const win = dom.window;
     await flushBoot();
-    await waitFor(() => win.document.querySelectorAll('#trendingRow .trending-card').length === 2);
+    await waitFor(() => win.document.querySelectorAll('#featuredEventsTrack .featured-event-card').length === 2);
 
     const doc = win.document;
-    const section = doc.getElementById('trendingSection');
-    assert.ok(section, 'expected #trendingSection in web/index.html');
-    assert.strictEqual(section.hidden, false, 'two trending events must show the section');
-    assert.strictEqual(
-      section.querySelector('.trending-title').textContent.trim(), 'الأكثر تفاعلاً هذا الأسبوع',
-      'the heading is the one the ticket names'
+    const section = doc.getElementById('featuredEventsSection');
+    assert.ok(section, 'expected #featuredEventsSection in web/index.html');
+    assert.strictEqual(section.hidden, false, 'two featured events must show the section');
+    assert.ok(
+      section.querySelector('.featured-events-title').textContent.includes('الأعراس المميزة'),
+      'the heading is «الأعراس المميزة»'
     );
+    assert.ok(section.querySelector('.featured-star-gold'), 'carries the gold star');
     assert.strictEqual(section.closest('#eventsContainer'), null, 'the strip is a sibling of the feed, never a child of it');
     assert.ok(
       section.compareDocumentPosition(doc.getElementById('eventsContainer')) & win.Node.DOCUMENT_POSITION_FOLLOWING,
-      'the strip precedes the feed in document order — it is the top of the feed'
+      'the section precedes the feed in document order'
     );
+    assert.match(STYLES_CSS, /\.featured-event-img\s*\{[^}]*object-fit:\s*contain/, 'featured poster uses object-fit: contain');
+    assert.match(STYLES_CSS, /\.featured-event-card\s*\{[^}]*border:\s*1\.5px solid var\(--card-gold\)/, 'featured card has gold border');
 
-    const cards = [...doc.querySelectorAll('#trendingRow .trending-card')];
+    const cards = [...doc.querySelectorAll('#featuredEventsTrack .featured-event-card')];
     assert.deepStrictEqual(cards.map(card => card.dataset.eventId), ['1201', '1202'], 'the server order is kept as it came');
     assert.ok(cards[0].textContent.includes('عرس سالم النباري'), 'the card headline is the feed card\'s own headline');
     assert.ok(cards[0].textContent.includes('رهط'), 'and the place line comes from the same helper');
@@ -3284,114 +3308,106 @@ async function run() {
     cards[0].click();
     const page = doc.getElementById('eventPage');
     await waitFor(() => !page.hidden);
-    assert.strictEqual(page.hidden, false, 'tapping a trending card opens the event page');
+    assert.strictEqual(page.hidden, false, 'tapping a featured card opens the event page');
   });
 
-  await test('the phone drawer gets the same cards from the same reply, and is emptied and hidden with the feed copy (تذكرة #177)', async () => {
-    let reply = { success: true, events: trendingCardEvents(), window_days: 7 };
+  await test('the phone drawer gets the same featured cards from the same reply, and is emptied and hidden with the feed copy', async () => {
+    let reply = { success: true, events: featuredCardEvents() };
     let calls = 0;
-    const dom = buildTrendingEnv(() => { calls += 1; return jsonResponse(reply); });
+    const dom = buildFeaturedEnv(() => { calls += 1; return jsonResponse(reply); });
     const win = dom.window;
     await flushBoot();
-    await waitFor(() => win.document.querySelectorAll('#trendingRow .trending-card').length === 2);
+    await waitFor(() => win.document.querySelectorAll('#featuredEventsTrack .featured-event-card').length === 2);
 
     const doc = win.document;
-    const drawerSection = doc.getElementById('drawerTrendingSection');
-    const drawerRow = doc.getElementById('drawerTrendingRow');
-    assert.ok(
-      drawerSection && drawerRow,
-      'the phone drawer owns its own copy — under 768px the in-flow one is display:none behind the fixed feed'
-    );
-    assert.ok(drawerSection.closest('#topChromeDrawer'), 'and that copy lives in the top drawer, outside the fixed feed layer');
+    const drawerSection = doc.getElementById('drawerFeaturedEventsSection');
+    const drawerRow = doc.getElementById('drawerFeaturedEventsTrack');
+    assert.ok(drawerSection && drawerRow, 'the phone drawer owns its own copy');
+    assert.ok(drawerSection.closest('#topChromeDrawer'), 'and that copy lives in the top drawer');
     assert.strictEqual(drawerSection.hidden, false, 'a reply with events shows the drawer copy too');
     assert.deepStrictEqual(
-      [...drawerRow.querySelectorAll('.trending-card')].map(card => card.dataset.eventId),
+      [...drawerRow.querySelectorAll('.featured-event-card')].map(card => card.dataset.eventId),
       ['1201', '1202'],
       'the drawer holds the very same cards, in the same server order'
     );
 
     const callsBeforeEmpty = calls;
-    reply = { success: true, events: [], window_days: 7 };
-    await win.loadTrending();
-    assert.strictEqual(calls, callsBeforeEmpty + 1, 'one request per call feeds both copies — the drawer one is never a second fetch');
+    reply = { success: true, events: [] };
+    await win.loadFeaturedEvents();
+    assert.strictEqual(calls, callsBeforeEmpty + 1, 'one request per call feeds both copies');
     assert.strictEqual(drawerSection.hidden, true, 'an empty reply hides the drawer copy with the feed copy');
     assert.strictEqual(drawerRow.children.length, 0, 'and empties its row with it');
   });
 
-  await test('an empty trending reply leaves the section hidden and the row empty — and the previous reply cannot outlive the new request (تذكرة #177)', async () => {
-    let reply = { success: true, events: trendingCardEvents(), window_days: 7 };
-    const dom = buildTrendingEnv(() => jsonResponse(reply));
+  await test('an empty /api/events/featured reply leaves the section hidden and the row empty', async () => {
+    let reply = { success: true, events: featuredCardEvents() };
+    const dom = buildFeaturedEnv(() => jsonResponse(reply));
     const win = dom.window;
     await flushBoot();
-    await waitFor(() => win.document.querySelectorAll('#trendingRow .trending-card').length === 2);
+    await waitFor(() => win.document.querySelectorAll('#featuredEventsTrack .featured-event-card').length === 2);
 
-    reply = { success: true, events: [], window_days: 7 };
-    const pending = win.loadTrending();
-    // الإفراغ قبل الطلب لا بعده: لا تبقى بطاقات الردّ السابق لحظة انتظار الجديد.
-    assert.strictEqual(win.document.getElementById('trendingSection').hidden, true,
+    reply = { success: true, events: [] };
+    const pending = win.loadFeaturedEvents();
+    assert.strictEqual(win.document.getElementById('featuredEventsSection').hidden, true,
       'the section hides before the new request answers');
-    assert.strictEqual(win.document.getElementById('trendingRow').children.length, 0, 'and its row is emptied with it');
+    assert.strictEqual(win.document.getElementById('featuredEventsTrack').children.length, 0, 'and its row is emptied with it');
     await pending;
 
-    assert.strictEqual(win.document.getElementById('trendingSection').hidden, true, 'an empty list is no section at all');
-    assert.strictEqual(win.document.getElementById('trendingRow').children.length, 0, 'and the row stays empty');
+    assert.strictEqual(win.document.getElementById('featuredEventsSection').hidden, true, 'an empty list hides the section');
+    assert.strictEqual(win.document.getElementById('featuredEventsTrack').children.length, 0, 'and the row stays empty');
   });
 
-  await test('a late reply from the previous governorate never paints over the newer one (تذكرة #177)', async () => {
-    const [staleEvent, freshEvent] = trendingCardEvents();
+  await test('a late /api/events/featured reply from the previous governorate never paints over the newer one', async () => {
+    const [staleEvent, freshEvent] = featuredCardEvents();
     let releaseStale = null;
-    // طلب الإقلاع يُعلَّق حتى يصل طلبٌ أحدث ويُرسم — ردٌّ متأخر حقيقي، لا وهمي.
     const staleGate = new Promise(resolve => { releaseStale = resolve; });
     let calls = 0;
-    const dom = buildTrendingEnv(() => {
+    const dom = buildFeaturedEnv(() => {
       calls += 1;
       return calls === 1
-        ? staleGate.then(() => jsonResponse({ success: true, events: [staleEvent], window_days: 7 }))
-        : jsonResponse({ success: true, events: [freshEvent], window_days: 7 });
+        ? staleGate.then(() => jsonResponse({ success: true, events: [staleEvent] }))
+        : jsonResponse({ success: true, events: [freshEvent] });
     });
     const win = dom.window;
     await flushBoot();
     await waitFor(() => calls === 1);
 
-    const drawnIds = () => [...win.document.querySelectorAll('#trendingRow .trending-card')]
+    const drawnIds = () => [...win.document.querySelectorAll('#featuredEventsTrack .featured-event-card')]
       .map(card => card.dataset.eventId);
 
-    await win.loadTrending();
+    await win.loadFeaturedEvents();
     assert.deepStrictEqual(drawnIds(), ['1202'], 'the newer reply is what the row shows');
 
     releaseStale();
     await delay(30);
-    assert.deepStrictEqual(
-      drawnIds(), ['1202'],
-      'the older reply lands after the newer one and must not repaint the row with its own event'
-    );
+    assert.deepStrictEqual(drawnIds(), ['1202'], 'the older reply must not repaint the row');
   });
 
-  await test('a failing trending request hides the section silently instead of throwing (تذكرة #177)', async () => {
-    let reply = jsonResponse({ success: true, events: trendingCardEvents(), window_days: 7 });
-    const dom = buildTrendingEnv(() => reply);
+  await test('a failing /api/events/featured request hides the section silently instead of throwing', async () => {
+    let reply = jsonResponse({ success: true, events: featuredCardEvents() });
+    const dom = buildFeaturedEnv(() => reply);
     const win = dom.window;
     await flushBoot();
-    await waitFor(() => win.document.querySelectorAll('#trendingRow .trending-card').length === 2);
+    await waitFor(() => win.document.querySelectorAll('#featuredEventsTrack .featured-event-card').length === 2);
 
     reply = jsonResponse({ success: false, message: 'حدث خطأ' }, { status: 500 });
-    await win.loadTrending(); // must resolve, not reject
+    await win.loadFeaturedEvents();
 
-    assert.strictEqual(win.document.getElementById('trendingSection').hidden, true, 'a failed request is «no result», not an error box');
-    assert.strictEqual(win.document.getElementById('trendingRow').children.length, 0, 'and the row is left empty');
+    assert.strictEqual(win.document.getElementById('featuredEventsSection').hidden, true, 'a failed request hides silently');
+    assert.strictEqual(win.document.getElementById('featuredEventsTrack').children.length, 0, 'and the row is left empty');
   });
 
-  await test('choosing another governorate carries region_id=2 into the next trending request (تذكرة #177)', async () => {
-    const trendingCalls = [];
+  await test('choosing another governorate carries region_id=2 into the next /api/events/featured request', async () => {
+    const featuredCalls = [];
     const dom = buildEnv({
       onBeforeEval: (w) => {
         const base = buildFetchStub();
         w.fetch = async (url, opts = {}) => {
           const requestPath = String(url).split('?')[0];
-          if (requestPath === '/api/towns') return jsonResponse(TRENDING_TOWNS_FIXTURE);
-          if (requestPath === '/api/events/trending') {
-            trendingCalls.push(String(url));
-            return jsonResponse({ success: true, events: [], window_days: 7 });
+          if (requestPath === '/api/towns') return jsonResponse(FEATURED_TOWNS_FIXTURE);
+          if (requestPath === '/api/events/featured') {
+            featuredCalls.push(String(url));
+            return jsonResponse({ success: true, events: [] });
           }
           return base(url, opts);
         };
@@ -3404,12 +3420,50 @@ async function run() {
 
     const regionIdOf = url => new URLSearchParams(url.split('?')[1] || '').get('region_id');
     await win.selectRegion(2);
-    await waitFor(() => trendingCalls.some(url => regionIdOf(url) === '2'));
+    await waitFor(() => featuredCalls.some(url => regionIdOf(url) === '2'));
 
     assert.ok(
-      trendingCalls.some(url => regionIdOf(url) === '2'),
-      'the strip follows the chosen governorate like the feed under it'
+      featuredCalls.some(url => regionIdOf(url) === '2'),
+      'featured events follow the chosen governorate'
     );
+  });
+
+  await test('التقدّم التلقائي يتوقف مع prefers-reduced-motion وdocument.hidden وعند فتح نافذة أو صفحة مناسبة', async () => {
+    let reducedMotion = false;
+    const dom = buildEnv({
+      onBeforeEval: (w) => {
+        const origMatchMedia = w.matchMedia;
+        w.matchMedia = (q) => (/prefers-reduced-motion:\s*reduce/.test(q)
+          ? { matches: reducedMotion, media: q, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} }
+          : origMatchMedia(q));
+      }
+    });
+    await flushBoot();
+    const win = dom.window;
+    const doc = win.document;
+
+    Object.defineProperty(doc, 'hidden', { value: false, configurable: true });
+    assert.strictEqual(win.shouldAutoAdvanceHomeCarousels(), true, 'auto-advance allowed on active visible home tab');
+
+    reducedMotion = true;
+    assert.strictEqual(win.shouldAutoAdvanceHomeCarousels(), false, 'prefers-reduced-motion disables auto-advance');
+    reducedMotion = false;
+
+    Object.defineProperty(doc, 'hidden', { value: true, configurable: true });
+    assert.strictEqual(win.shouldAutoAdvanceHomeCarousels(), false, 'document.hidden pauses auto-advance');
+    Object.defineProperty(doc, 'hidden', { value: false, configurable: true });
+
+    win.openFeaturedMenu();
+    assert.strictEqual(win.shouldAutoAdvanceHomeCarousels(), false, 'opening featured menu sheet pauses auto-advance');
+    win.closeFeaturedMenu({ restoreFocus: false });
+    assert.strictEqual(win.shouldAutoAdvanceHomeCarousels(), true);
+
+    doc.getElementById('eventPage').hidden = false;
+    assert.strictEqual(win.shouldAutoAdvanceHomeCarousels(), false, 'opening event page pauses auto-advance');
+    doc.getElementById('eventPage').hidden = true;
+
+    win.switchTab('tabServices');
+    assert.strictEqual(win.shouldAutoAdvanceHomeCarousels(), false, 'leaving tabHome pauses auto-advance');
   });
 
   console.log('\nألبوم بلا مناسبة — ألبوم باسم العريس (event_id NULL, web/)');
@@ -4219,17 +4273,13 @@ async function run() {
     assert.match(iconRule, /height:\s*44px/, 'and 44px tall');
     assert.ok(!/min-(?:width|height):\s*0/.test(iconRule), 'no opt-out may keep it below the general 44px base');
 
-    const authRule = ruleBody('.floating-auth-btn');
-    assert.match(authRule, /(?:min-)?height:\s*44px/, 'the account button is a 44px target too');
-    assert.ok(!/min-(?:width|height):\s*0/.test(authRule), 'and does not opt out of the base');
-
     const smallFloating = rules.filter((rule) =>
-      rule.selectors.some((selector) => /\.floating-(?:icon|auth)-btn(?:\b|[:.[])/.test(selector))
+      rule.selectors.some((selector) => /\.floating-icon-btn(?:\b|[:.[])/.test(selector))
       && /(?:^|[;\s])(?:min-)?(?:width|height):\s*(?:[0-3]?\d)px/.test(rule.body));
     assert.deepStrictEqual(
       smallFloating.map((rule) => rule.selectors.join(', ')),
       [],
-      'no other floating-bar rule may shrink an icon/account target below 44px'
+      'no other floating-bar rule may shrink an icon target below 44px'
     );
 
     const brandRule = ruleBody('.floating-brand-btn');
@@ -4248,17 +4298,14 @@ async function run() {
     assert.match(
       body,
       /\.floating-actions-box \{[^}]*flex:\s*1 1 100%/,
-      'the actions pill takes its own full-width row, so the account button is never clipped'
+      'the actions pill takes its own full-width row, so the filter stays unclipped'
     );
     assert.match(body, /\.floating-actions-box \{[^}]*flex-wrap:\s*wrap/, 'and wraps again if a 320px viewport still cannot fit it');
-    assert.ok(!/\.floating-(?:icon|auth)-btn \{[^}]*width:\s*(?:[0-3]?\d)px/.test(body), 'the narrow block must not shrink any button below 44px');
+    assert.ok(!/\.floating-icon-btn \{[^}]*width:\s*(?:[0-3]?\d)px/.test(body), 'the narrow block must not shrink any button below 44px');
 
     const dotRule = STYLES_CSS_RAW.match(/\.floating-filter-dot \{([^}]*)\}/);
     assert.ok(dotRule && /flex-shrink:\s*0/.test(dotRule[1]), 'the dot must not shrink with a truncated label');
 
-    // Every bar function still exists in the DOM with its handler. The ≤29px
-    // budget existed because these seven actions plus the brand crowded one
-    // row; the re-flow above is what lets them all stay.
     const expected = [
       ['floatingFilterBtn', 'toggleTopChrome(true)'],
       [null, 'openAgendaModal()'],
@@ -4266,15 +4313,10 @@ async function run() {
       [null, 'handleSupportClick()'],
       ['floatingLiveEntryBtn', 'openLiveSection()'],
       ['floatingNotifBtn', 'toggleNotificationsPanel()'],
-      ['floatingSoundBtn', 'toggleSoundMuted()'],
-      ['floatingAuthBtn', "switchTab('tabAccount')"]
+      ['floatingSoundBtn', 'toggleSoundMuted()']
     ];
-    // الشريط نفسه صار يحمل صفّاً غنياً ثانياً (#174) بأزراره الثلاثة (كبسولة
-    // المحافظة والقلب والأجندة). تُعدّ هنا أزرار صفّ الشريط القائم وحده — وهو
-    // موضع هذه الثمانية — وأزرار الصفّ الغني تُعدّ وتُتحقّق في اختبارها أدناه،
-    // فلا يُضعف التقليص شيئاً: الثمانية ما زالت كلها مطلوبة بأسمائها.
     const buttons = [...bar.querySelectorAll('.floating-top-inner button')];
-    assert.strictEqual(buttons.length, expected.length, 'no floating-bar button may be removed to win the space');
+    assert.strictEqual(buttons.length, expected.length, 'no floating-bar button may be removed except the duplicate account button');
     for (const [id, handler] of expected) {
       const button = id ? bar.querySelector(`#${id}`) : buttons.find(b => (b.getAttribute('onclick') || '').includes(handler));
       assert.ok(button, `expected the button wired to ${handler}`);
@@ -4283,11 +4325,7 @@ async function run() {
     const brand = bar.querySelector('.floating-brand-btn');
     assert.ok(brand, 'the phone brand must survive the re-flow');
     assert.strictEqual(brand.getAttribute('href'), '#tabHome');
-
-    assert.ok(
-      !bar.querySelector('.floating-actions-box #floatingAuthBtn'),
-      'the account button must leave the actions pill for the first row — that is what keeps it visible at 360px'
-    );
+    assert.strictEqual(bar.querySelector('#floatingAuthBtn'), null, 'duplicate header account button is removed');
   });
 
   await test('on the feed itself, the header brand scrolls back to the top of the list', async () => {
@@ -8379,216 +8417,37 @@ async function run() {
     return () => { win.Date = RealDate; };
   }
 
-  /** stub يعيد جسم الشريط على GET /api/stats/ticker فوق القاعدة العامة، ويعدّ طلباته. */
-  function buildStatsFetchStub(tickerBody = STATS_TICKER_FIXTURE) {
-    const statsCalls = [];
-    const fetchStub = async (url, options = {}) => {
-      if (String(url).split('?')[0] === '/api/stats/ticker') {
-        statsCalls.push(String(url));
-        return jsonResponse(tickerBody);
-      }
-      return buildFetchStub()(url, options);
-    };
-    return { fetchStub, statsCalls };
-  }
-
-  /** نافذة تعرف الشريطين: الشريط على مساره، والتعاميم على مسارها فوقه. */
-  async function buildBothTickersEnv({ broadcasts = [] } = {}) {
-    const dom = buildEnv();
-    // الإقلاع التلقائي يُكمل أولاً على stub الـ buildEnv (قاعدة `flushBoot`
-    // في أعلى الملف): بدونه تتسابق نداءات الإقلاع مع النداءات الصريحة التي
-    // تبني عليها كل حالة أدناه — فيصل التعميم أو الرقم قبل أن تبدأ الحالة.
-    await flushBoot();
-    const stats = buildStatsFetchStub();
-    const broadcast = buildBroadcastsFetchStub(broadcasts);
-    dom.window.fetch = async (url, options = {}) => (
-      String(url).split('?')[0] === '/api/broadcasts/live'
-        ? broadcast.fetchStub(url, options)
-        : stats.fetchStub(url, options)
-    );
-    return { dom, stats, broadcast };
-  }
-
-  await test('الشريط يحمل صفّ المحافظة وعددها كما وصلا، والمجموع، و«حُدّث HH:MM» بالساعة المحلية', async () => {
-    const { dom } = await buildBothTickersEnv({ broadcasts: [] });
-    const restoreClock = installStatsLocalClock(dom.window, { utcIso: STATS_UPDATED_ISO, hours: 9, minutes: 7 });
-
-    try {
-      // التعاميم أولاً: «لا تعميم» وحدها تسمح بالشريط، والأرقام لا تُرسم قبلها.
-      await dom.window.fetchLiveBroadcasts();
-      await dom.window.fetchStatsTicker();
-    } finally {
-      restoreClock();
-    }
-
-    const ticker = dom.window.document.getElementById('statsTicker');
-    assert.strictEqual(ticker.hidden, false, 'رقم وصل ⇒ الشريط ظاهر');
-
-    const chips = [...ticker.querySelectorAll('.stats-region')];
-    assert.deepStrictEqual(
-      chips.map(chip => chip.querySelector('.stats-region-name').textContent),
-      ['النقب', 'محافظة طولكرم'],
-      'محافظة لكل صفّ، بترتيب الخادم'
-    );
-    assert.deepStrictEqual(
-      chips.map(chip => chip.querySelector('.stats-region-count').textContent),
-      ['12', '3'],
-      'كل محافظة بعددها كما وصل — لا جمع في العميل'
-    );
-    assert.strictEqual(
-      dom.window.document.getElementById('statsTickerTotal').textContent, 'المجموع 16',
-      'total يُعرض كما أعاده الخادم — لو جمعه العميل من الصفّين لصار 15 وسقط هذا'
-    );
-    assert.strictEqual(
-      dom.window.document.getElementById('statsTickerUpdated').textContent, STATS_UPDATED_TEXT,
-      '«حُدّث HH:MM» من updated_at بالساعة المحلية (06:07 هي الـUTC هنا — تُسقط أي قراءة عالمية)'
-    );
-  });
-
-  await test('بلا رقم بعد لا شريط إطلاقاً — لا أصفار كاذبة قبل وصول الخادم', async () => {
-    const { dom } = await buildBothTickersEnv({ broadcasts: [] });
-    // «لا تعميم» محسومة هنا، فالمخفيّ بعده غيابُ رقم لا انتظارُ تعاميم.
-    await dom.window.fetchLiveBroadcasts();
-
-    assert.strictEqual(
-      dom.window.document.getElementById('statsTicker').hidden, true,
-      'لا رقم بعد: الشريط مخفيّ حتى يصل العدّ'
-    );
-
-    await dom.window.fetchStatsTicker();
-    assert.strictEqual(
-      dom.window.document.getElementById('statsTicker').hidden, false,
-      'وبعد وصوله ظهر — الغياب أعلاه كان غياب رقم لا خللاً دائماً'
-    );
-  });
-
-  await test('شريط واحد فقط: الرقم لا يظهر قبل حسم التعاميم، والتعميم الحيّ يحلّ محلّه بعدها', async () => {
-    // (أ) الرقم يصل أولاً، والتعاميم لم تُعرف بعد ⇒ لا ومضة: الشريط يبقى
-    // مخفياً. ثم يصل جواب «لا تعميم» فيظهر الرقم — لا لأنه وصل، بل لأن الحالة
-    // حُسمت. هذا هو الفرق بين «لم تُعرف» و«لا تعميم» (#172، الجولة ٢).
-    const numberFirst = await buildBothTickersEnv({ broadcasts: [] });
-    await numberFirst.dom.window.fetchStatsTicker();
-    assert.strictEqual(
-      numberFirst.dom.window.document.getElementById('statsTicker').hidden, true,
-      'رقم وصل قبل معرفة التعاميم ⇒ لا شريط: عرضه ثم إخفاءه ومضة لا معنى لها'
-    );
-
-    await numberFirst.dom.window.fetchLiveBroadcasts();
-    assert.strictEqual(
-      numberFirst.dom.window.document.getElementById('broadcastTicker').hidden, true,
-      'وردّ التعاميم فارغ: لا تعميم حيّ'
-    );
-    assert.strictEqual(
-      numberFirst.dom.window.document.getElementById('statsTicker').hidden, false,
-      'وبعد «لا تعميم» ظهر الرقم بالأرقام التي وصلت سابقاً — النافذة كانت انتظاراً لا إخفاءً دائماً'
-    );
-    assert.strictEqual(
-      numberFirst.dom.window.document.getElementById('statsTickerTotal').textContent, 'المجموع 16',
-      'والأرقام نفسها هي ما عُرض بعد الحسم، لا نسخة ثانية من الشبكة'
-    );
-
-    // (ب) تعميم حيّ يصل بعد الرقم: الرقم لم يظهر في النافذة ابتداءً، والتعميم
-    // وحده يُعرض — لا رقمان ثم تعميم، ولا شريطان معاً.
-    const broadcastAfter = await buildBothTickersEnv({ broadcasts: [TICKER_INFO] });
-    await broadcastAfter.dom.window.fetchStatsTicker();
-    assert.strictEqual(
-      broadcastAfter.dom.window.document.getElementById('statsTicker').hidden, true,
-      'الرقم لم يظهر في نافذة انتظار التعاميم'
-    );
-
-    await broadcastAfter.dom.window.fetchLiveBroadcasts();
-    assert.strictEqual(
-      broadcastAfter.dom.window.document.getElementById('broadcastTicker').hidden, false,
-      'التعميم الحيّ ظاهر على شريطه'
-    );
-    assert.strictEqual(
-      broadcastAfter.dom.window.document.getElementById('statsTicker').hidden, true,
-      'والشريط غاب: التعميم حلّ محلّه لا شاركه'
-    );
-
-    // (ج) التعاميم أولاً (واحد حيّ) ثم الرقم: لا شريطين ولا رقم تحته.
-    const broadcastFirst = await buildBothTickersEnv({ broadcasts: [TICKER_INFO] });
-    await broadcastFirst.dom.window.fetchLiveBroadcasts();
-    await broadcastFirst.dom.window.fetchStatsTicker();
-    assert.strictEqual(
-      broadcastFirst.dom.window.document.getElementById('broadcastTicker').hidden, false,
-      'التعميم معروض'
-    );
-    assert.strictEqual(
-      broadcastFirst.dom.window.document.getElementById('statsTicker').hidden, true,
-      'والرقم لا يُعرض معه — شريط واحد في الموضع نفسه'
-    );
-  });
-
-  await test('إغلاق التعميم يعيد الشريط، والتعميم المُغلَق سابقاً لا يمنعه', async () => {
-    // (أ) إغلاق التعميم المعروض ⇒ يعود الشريط فوراً بلا طلب شبكة جديد.
-    const live = await buildBothTickersEnv({ broadcasts: [TICKER_INFO] });
-    await live.dom.window.fetchLiveBroadcasts();
-    await live.dom.window.fetchStatsTicker();
-    assert.strictEqual(live.dom.window.document.getElementById('statsTicker').hidden, true, 'التعميم يحلّ محلّه الآن');
-
-    live.dom.window.dismissActiveBroadcast();
-    assert.strictEqual(live.dom.window.document.getElementById('broadcastTicker').hidden, true, 'التعميم أُغلق');
-    assert.strictEqual(
-      live.dom.window.document.getElementById('statsTicker').hidden, false,
-      'والشريط عاد: الإخفاء حالة التعميم الحالية لا أثر دائم'
-    );
-
-    // (ب) زائر أغلق التعميم في زيارة سابقة: شريط التعاميم يستبعده (الفلتر
-    // المحلي)، فالشريط يجب أن يستبعده بالفلتر نفسه — وإلا رأى لا هذا ولا ذاك.
-    const dismissed = await buildBothTickersEnv({ broadcasts: [TICKER_INFO] });
-    dismissed.dom.window.localStorage.setItem('negev_dismissed_broadcasts', JSON.stringify([TICKER_INFO.id]));
-    await dismissed.dom.window.fetchLiveBroadcasts();
-    await dismissed.dom.window.fetchStatsTicker();
-
-    assert.strictEqual(
-      dismissed.dom.window.document.getElementById('broadcastTicker').hidden, true,
-      'تعميم مُغلَق محلياً لا يظهر على شريط التعاميم'
-    );
-    assert.strictEqual(
-      dismissed.dom.window.document.getElementById('statsTicker').hidden, false,
-      'ولا يمنع الشريط: القاعدة «التعميم الظاهر يحلّ محلّه» لا «أي تعميم يحلّ محلّه»'
-    );
-  });
-
-  await test('الشريط يُطلب مرّة واحدة عند فتح الصفحة، لا عند فتح تبويب', async () => {
-    let bootCalls = 0;
+  await test('لا شريط أرقام (#statsTicker) بعد الآن، والتعميم الحيّ (#broadcastTicker) لا يزال يظهر', async () => {
+    let statsRequested = false;
     const dom = buildEnv({
       onBeforeEval: (w) => {
-        const base = w.fetch;
+        const base = buildFetchStub();
         w.fetch = async (url, options = {}) => {
-          if (String(url).split('?')[0] === '/api/stats/ticker') bootCalls += 1;
+          const requestPath = String(url).split('?')[0];
+          if (requestPath === '/api/stats/ticker') {
+            statsRequested = true;
+            return jsonResponse(STATS_TICKER_FIXTURE);
+          }
+          if (requestPath === '/api/broadcasts/live') {
+            return jsonResponse({ success: true, broadcasts: [TICKER_INFO] });
+          }
           return base(url, options);
         };
       }
     });
     await flushBoot();
 
-    assert.strictEqual(bootCalls, 1, 'نداء واحد مع الإقلاع (fetchStatsTicker في DOMContentLoaded) — لا نداء ثانٍ ولا صفر');
+    const doc = dom.window.document;
+    assert.strictEqual(doc.getElementById('statsTicker'), null, '#statsTicker must be removed from the DOM');
+    assert.strictEqual(typeof dom.window.renderStatsTicker, 'undefined', 'renderStatsTicker must be removed');
+    assert.strictEqual(typeof dom.window.fetchStatsTicker, 'undefined', 'fetchStatsTicker must be removed');
+    assert.strictEqual(statsRequested, false, 'startup must no longer call GET /api/stats/ticker');
 
-    // والاسم يُختبر فعلاً: نفتح تبويباً آخر ثم نعود إلى «المناسبات»، وهي اللحظة
-    // التي كان يمكن أن يطلب فيها الشريط نفسه ثانيةً. لا طلب جديد — لا عند
-    // المغادرة ولا عند العودة.
-    dom.window.switchTab('tabMyList');
-    dom.window.switchTab('tabHome');
-    await delay(30);
-
-    assert.strictEqual(
-      bootCalls, 1,
-      'فتح تبويب ثم العودة إلى الرئيسية لم يطلب الشريط مرّة أخرى'
-    );
-  });
-
-  await test('قاعدة CSS تُبقي [hidden] غالباً على display:flex — وإلا ظهر الشريط رغم إخفائه', async () => {
-    assert.ok(
-      /\.stats-ticker\s*{[^}]*display:\s*flex/.test(STYLES_CSS_RAW),
-      'الشريط صفّ أفقي فعلاً (display:flex) — وهي العلّة التي تستدعي القاعدة التالية'
-    );
-    assert.ok(
-      /\.stats-ticker\[hidden\]\s*{\s*display:\s*none\s*;?\s*}/.test(STYLES_CSS_RAW),
-      'display:flex يتغلّب على [hidden] الافتراضي، فالقاعدة الصريحة هي ما يُبقي الإخفاء يعمل — '
-      + 'وjsdom بلا تخطيط لا يكشف ذلك، فالتأكيد على نصّ الورقة'
-    );
+    const ticker = doc.getElementById('broadcastTicker');
+    assert.ok(ticker, 'live broadcast ticker remains');
+    await waitFor(() => !ticker.hidden);
+    assert.strictEqual(ticker.hidden, false, 'live broadcast still appears when active');
+    assert.ok(ticker.textContent.includes(TICKER_INFO.title));
   });
 
   console.log('\nWeb Push & Notification Centre (issue #85 batch 6c, stories 12-18)');
@@ -8930,10 +8789,9 @@ async function run() {
         dismissCalled = true;
         return jsonResponse({ success: true });
       }
-      // `/api/events/trending` مسارُ قائمةٍ عام (تذكرة #177) لا مناسبة؛ يُجلب
-      // عند الإقلاع قبل النقر، وعدّه «فتحَ مناسبة» يجعل هذا التأكيد يسقط
-      // لسببٍ لا يخصّ التعميم إطلاقاً.
-      if (requestPath.startsWith('/api/events/') && requestPath !== '/api/events/trending') {
+      // `/api/events/featured` مسارُ قائمةٍ عام لا مناسبة؛ يُجلب
+      // عند الإقلاع قبل النقر، وعدّه «فتحَ مناسبة» يجعل هذا التأكيد يسقط.
+      if (requestPath.startsWith('/api/events/') && requestPath !== '/api/events/featured') {
         eventGetCalled = true;
         return jsonResponse({ success: false });
       }
@@ -11218,7 +11076,7 @@ async function run() {
     assert.strictEqual(document.getElementById('authModal').style.display, 'flex', 'the login modal must open so the visitor can sign in again');
     const notices = Array.from(document.querySelectorAll('.app-toast')).filter(t => t.textContent === SESSION_EXPIRED_MESSAGE);
     assert.strictEqual(notices.length, 1, `two parallel 401s must surface ONE session-expired notice, got ${notices.length}`);
-    assert.strictEqual(document.getElementById('userAuthBtn').title, 'حسابي', 'with the session gone the account button carries no first name any more');
+    assert.strictEqual(document.getElementById('headerGreeting').hidden, true, 'with the session gone the header greeting hides');
   });
 
   await test('a 401 on a call WITHOUT auth:true (or on the admin token) leaves the site session alone', async () => {
@@ -11278,38 +11136,22 @@ async function run() {
     assert.strictEqual(publishAttempts[1], 'Bearer fresh-token', 'the retry must carry the NEW token');
   });
 
-  await test('the header and floating account buttons always read «حسابي» with a person icon, open #tabAccount instead of a login form or a logout, and leave the logout inside «حسابي» alone', async () => {
+  await test('header account buttons are removed; bottom bar «حسابي» opens #tabAccount for guests and signed-in users while logout lives inside #tabAccount', async () => {
     const guest = buildEnv({ loggedIn: false });
     await flushBoot();
     const gDoc = guest.window.document;
-    const guestBtn = gDoc.getElementById('userAuthBtn');
-    assert.strictEqual(gDoc.getElementById('userAuthLabel').textContent, 'حسابي');
-    assert.strictEqual(guestBtn.querySelector('i').className, 'fa-solid fa-user', 'a person icon, not the old login lock');
-    assert.strictEqual(guestBtn.title, 'حسابي', 'no session, so no first name to carry in the title');
+    assert.strictEqual(gDoc.getElementById('userAuthBtn'), null, 'duplicate header account button must be removed');
+    assert.strictEqual(gDoc.getElementById('floatingAuthBtn'), null, 'duplicate floating header account button must be removed');
 
-    const floatingAuthBtn = gDoc.querySelector('#floatingTopBar #floatingAuthBtn');
-    assert.ok(floatingAuthBtn, 'the phone/PWA floating bar must hold an account button — the header is hidden there');
-    assert.strictEqual(gDoc.getElementById('floatingAuthLabel').textContent, 'حسابي');
-    assert.strictEqual(floatingAuthBtn.querySelector('i').className, 'fa-solid fa-user');
+    const accountNavBtn = gDoc.getElementById('navBtnAccount');
+    assert.ok(accountNavBtn, 'bottom bar holds «حسابي»');
     assert.strictEqual(gDoc.getElementById('adminPanelBtn').hidden, true, 'no admin link for a visitor');
 
-    floatingAuthBtn.click();
-    assert.ok(
-      gDoc.getElementById('tabAccount').classList.contains('active-tab'),
-      'the floating button must land on «حسابي»'
-    );
-    assert.strictEqual(
-      gDoc.getElementById('authModal').style.display,
-      'none',
-      'a visitor lands on the account page, whose own button opens the login form — not the other way round'
-    );
-    assert.strictEqual(
-      gDoc.getElementById('accountGuestView').style.display,
-      'block',
-      'the sign-in door is inside «حسابي» for a visitor'
-    );
+    accountNavBtn.click();
+    assert.ok(gDoc.getElementById('tabAccount').classList.contains('active-tab'), 'bottom-bar «حسابي» opens #tabAccount');
+    assert.strictEqual(gDoc.getElementById('authModal').style.display, 'none');
+    assert.strictEqual(gDoc.getElementById('accountGuestView').style.display, 'block', 'the sign-in door is inside «حسابي» for a visitor');
 
-    // A plain user whose phone is the old hard-coded «admin» number gets no admin link — the role decides, not the phone.
     const confirms = [];
     const user = buildEnv({
       onBeforeEval: (w) => {
@@ -11320,32 +11162,21 @@ async function run() {
     });
     await flushBoot();
     const uDoc = user.window.document;
-    assert.strictEqual(uDoc.getElementById('userAuthLabel').textContent, 'حسابي', 'a signed-in visitor sees «حسابي», not an explicit logout');
-    assert.strictEqual(uDoc.getElementById('floatingAuthLabel').textContent, 'حسابي');
-    assert.strictEqual(uDoc.getElementById('userAuthBtn').title, 'سالم — حسابي', 'the first name lives in the title alone');
-    assert.strictEqual(uDoc.getElementById('adminPanelBtn').hidden, true, 'role user must not get the admin link, whatever the phone number');
+    assert.strictEqual(uDoc.getElementById('headerGreetingName').textContent, 'سالم');
+    assert.strictEqual(uDoc.getElementById('headerGreeting').hidden, false);
+    assert.strictEqual(uDoc.getElementById('adminPanelBtn').hidden, true, 'role user must not get the admin link');
 
-    const headerAuthWords = uDoc.getElementById('userAuthBtn').closest('header').textContent.match(/تسجيل (?:الدخول|الخروج)/g);
-    assert.strictEqual(headerAuthWords, null, 'no «تسجيل الدخول/الخروج» is left in the header');
-    const floatingAuthWords = uDoc.getElementById('floatingTopBar').textContent.match(/تسجيل (?:الدخول|الخروج)/g);
-    assert.strictEqual(floatingAuthWords, null, 'nor in the phone/PWA floating bar');
+    uDoc.getElementById('navBtnAccount').click();
+    assert.deepStrictEqual(confirms, []);
+    assert.ok(uDoc.getElementById('tabAccount').classList.contains('active-tab'));
+    assert.strictEqual(uDoc.getElementById('authModal').style.display, 'none');
+    assert.strictEqual(user.window.localStorage.getItem('negev_token'), 'user-token');
 
-    uDoc.getElementById('userAuthBtn').click();
-    assert.deepStrictEqual(confirms, [], 'opening «حسابي» must ask nothing — no logout confirmation');
-    assert.ok(
-      uDoc.getElementById('tabAccount').classList.contains('active-tab'),
-      'the header button opens «حسابي» for a signed-in user too'
-    );
-    assert.strictEqual(uDoc.getElementById('authModal').style.display, 'none', 'a signed-in user is not shown a login form');
-    assert.strictEqual(user.window.localStorage.getItem('negev_token'), 'user-token', 'opening «حسابي» must not sign the user out');
-
-    // The page's one logout lives inside «حسابي», and it is what ends the session.
     const logoutBtn = uDoc.querySelector('#tabAccount .account-logout-btn');
     assert.ok(logoutBtn, '«حسابي» must hold the logout button');
-    assert.strictEqual(logoutBtn.closest('#tabAccount').id, 'tabAccount', 'the logout button lives inside #tabAccount, not in the header');
     logoutBtn.click();
     assert.strictEqual(user.window.localStorage.getItem('negev_token'), null, 'the logout inside «حسابي» ends the session');
-    assert.strictEqual(uDoc.getElementById('userAuthBtn').title, 'حسابي', 'the account button drops the first name once the session is gone');
+    assert.strictEqual(uDoc.getElementById('headerGreeting').hidden, true);
 
     const admin = buildEnv({
       onBeforeEval: (w) => {
@@ -11356,8 +11187,6 @@ async function run() {
     await flushBoot();
     const aDoc = admin.window.document;
     assert.strictEqual(aDoc.getElementById('adminPanelBtn').hidden, false, 'super_admin gets the separate «لوحة الإدارة» link');
-    assert.strictEqual(aDoc.getElementById('userAuthLabel').textContent, 'حسابي', 'the account button reads the same for admins');
-    assert.strictEqual(aDoc.getElementById('userAuthBtn').title, 'مدير — حسابي');
   });
 
   await test('choosing «قريتي غير موجودة» reveals a name field and the publish POST carries requested_village_name with no village_id', async () => {
@@ -14975,43 +14804,38 @@ async function run() {
     assert.ok(empty.dom.window.document.getElementById('myListBody').textContent.includes('لا مناسبات منتهية في قائمتك'));
   });
 
-  await test('the bottom nav holds three destinations — المناسبات · خدماتنا · خدمات الأعراس — and «حسابي», a header button rather than a bar slot, lights nothing down there', async () => {
+  await test('the bottom nav holds six slots in RTL order with center gold button, «حسابي» last, and both publish capsules above', async () => {
     const dom = buildEnv();
     const { document } = dom.window;
 
+    const navbar = document.querySelector('.bottom-navbar');
+    assert.ok(navbar, 'expected .bottom-navbar');
+    const slotIds = Array.from(navbar.children).map(el => (
+      el.classList.contains('nav-center-slot') ? el.querySelector('button').id : el.id
+    ));
+    assert.deepStrictEqual(
+      slotIds,
+      ['navBtnHome', 'navBtnOurServices', 'navBtnFeaturedMenu', 'navBtnServices', 'navBtnMyEvents', 'navBtnAccount'],
+      'RTL order from the right: المناسبات · خدماتنا · زر الوسط · خدمات الأعراس · مناسباتي · حسابي'
+    );
+
     const navBtns = document.querySelectorAll('.bottom-navbar .nav-btn');
-    assert.strictEqual(navBtns.length, 3, 'the bar must hold exactly three destinations');
+    assert.strictEqual(navBtns.length, 5, 'five tab buttons (.nav-btn); the center gold button is not a tab');
     assert.deepStrictEqual(
-      Array.from(navBtns).map(btn => btn.id),
-      ['navBtnHome', 'navBtnOurServices', 'navBtnServices'],
-      'RTL order from the right: المناسبات · خدماتنا · خدمات الأعراس'
+      Array.from(navBtns).map(btn => btn.querySelector('span:not(.nav-btn-badge)').textContent.trim()),
+      ['المناسبات', 'خدماتنا', 'خدمات الأعراس', 'مناسباتي', 'حسابي']
     );
-    assert.deepStrictEqual(
-      Array.from(navBtns).map(btn => btn.querySelector('span').textContent.trim()),
-      ['المناسبات', 'خدماتنا', 'خدمات الأعراس']
-    );
+    assert.strictEqual(navBtns[4].id, 'navBtnAccount', '«حسابي» is the last slot');
+    const centerBtn = document.getElementById('navBtnFeaturedMenu');
+    assert.ok(centerBtn && !centerBtn.classList.contains('nav-btn'), 'center button is not a tab');
+    assert.ok(centerBtn.querySelector('img[src="/icons/icon.svg"]'), 'center button carries the platform icon');
 
-    // «حسابي» و«قائمتي» و«الخريطة» و«النقوط» ليست وجهات في الشريط — لا أثر لأزرارها فيه.
-    for (const gone of ['navBtnAccount', 'navBtnMyList', 'navBtnMap', 'navBtnNokoot']) {
-      assert.strictEqual(document.getElementById(gone), null, `${gone} must not remain as a bottom-bar destination`);
-    }
-    assert.strictEqual(document.querySelector('.nav-fab-gap'), null, 'the old reserved FAB slot is gone with the FAB');
-
-    // شارة مناسبات اليوم رحلت مع «حسابي» إلى زرّ الترويسة، مخفيةً بلا جلسة.
-    const badge = document.getElementById('myListNavBadge');
-    assert.ok(badge, 'the header account button carries its badge span');
-    assert.strictEqual(badge.closest('.auth-pill-btn'), document.getElementById('userAuthBtn'),
-      'the badge rides the header «حسابي» button');
-    assert.strictEqual(badge.closest('.bottom-navbar'), null, 'no copy of it is left in the bottom bar');
-    assert.strictEqual(badge.hidden, true, 'the badge starts hidden — no signed-in list, nothing today');
-
-    // الكبستان العائمتان بدل .fab-publish: بارزة للعرس، أهدأ للخدمة.
-    assert.strictEqual(document.querySelector('.fab-publish'), null, 'the single round FAB is replaced, not kept alongside');
+    // الكبستان العائمتان فوق الشريط
     const capsules = document.querySelectorAll('.nav-publish-capsules .nav-capsule');
-    assert.strictEqual(capsules.length, 2, 'two floating capsules, no more');
-    assert.ok(capsules[0].classList.contains('nav-capsule-primary'), '«أضف عرسك» is the prominent one');
+    assert.strictEqual(capsules.length, 2, 'two floating capsules above the bar');
+    assert.ok(capsules[0].classList.contains('nav-capsule-primary'));
     assert.ok(capsules[0].textContent.includes('أضف عرسك'));
-    assert.ok(capsules[1].classList.contains('nav-capsule-secondary'), '«أضف خدمتك» is the quieter one');
+    assert.ok(capsules[1].classList.contains('nav-capsule-secondary'));
     assert.ok(capsules[1].textContent.includes('أضف خدمتك'));
 
     let addEventTaps = 0;
@@ -15020,11 +14844,11 @@ async function run() {
     dom.window.openSubmitServiceModal = () => { addServiceTaps += 1; };
     capsules[0].click();
     capsules[1].click();
-    assert.strictEqual(addEventTaps, 1, 'the prominent capsule opens the event form');
-    assert.strictEqual(addServiceTaps, 1, 'the quiet capsule opens the service offer form');
+    assert.strictEqual(addEventTaps, 1);
+    assert.strictEqual(addServiceTaps, 1);
 
-    // وجهات الشريط الثلاث: واحدة نشِطة بالضبط، وهي خانتها.
-    [['tabHome', 0], ['tabOurServices', 1], ['tabServices', 2]].forEach(([page, index]) => {
+    // وجهات الشريط الخمس: واحدة نشِطة بالضبط، وهي خانتها.
+    [['tabHome', 0], ['tabOurServices', 1], ['tabServices', 2], ['tabMyList', 3], ['tabAccount', 4]].forEach(([page, index]) => {
       dom.window.switchTab(page);
       assert.ok(document.getElementById(page).classList.contains('active-tab'), `${page} opens its own page`);
       const lit = document.querySelectorAll('.bottom-navbar .nav-btn.active');
@@ -15032,35 +14856,24 @@ async function run() {
       assert.strictEqual(lit[0], navBtns[index], `${page} lights its own slot in the bar`);
     });
 
-    // صفحات الحساب وبطاقاته: «حسابي» غادر الشريط، فلا زرّ نشِطاً في الأسفل إطلاقاً.
-    for (const page of ['tabMyList', 'tabMap', 'tabNokoot', 'tabAccount']) {
+    // صفحات أخرى خارج الشريط لا تضيء خانة
+    for (const page of ['tabMap', 'tabNokoot', 'tabStickers']) {
       dom.window.switchTab(page);
-      assert.ok(document.getElementById(page).classList.contains('active-tab'),
-        `${page} still opens — only its bar slot is gone`);
-      assert.strictEqual(document.querySelectorAll('.bottom-navbar .nav-btn.active').length, 0,
-        `${page} belongs to «حسابي», which is not a bottom-bar destination — nothing may be lit for it`);
+      assert.strictEqual(document.querySelectorAll('.bottom-navbar .nav-btn.active').length, 0);
     }
-    assert.ok(document.getElementById('myListLockedView').style.display === 'block',
-      'a visitor with no session sees the sign-in card, never a blank tab');
 
-    // وجهة بلا زرّ في الشريط (الستيكرات) لا تُضيء شيئاً.
-    dom.window.switchTab('tabStickers');
-    assert.strictEqual(document.querySelectorAll('.bottom-navbar .nav-btn.active').length, 0,
-      'a page outside the bar lights no destination at all');
-
-    // والشارة بعد النقل تُكتب وتُخفى من updateMyListNavBadge نفسها: الـid لم تتغيّر،
-    // فمناسبات اليوم تساوت في الزرّ والبطاقة، وصفرها يُخفيها بدل أن يرسم «0».
+    // شارة مناسبات اليوم على خانة مناسباتي وفي بطاقة حسابي
+    const badge = document.getElementById('myListNavBadge');
+    assert.ok(badge && badge.closest('#navBtnMyEvents'), 'badge sits on «مناسباتي»');
     const busy = await buildMyListEnv({
       events: [buildMyListEvent({ id: 21 })],
       counts: { all: 1, upcoming: 1, ended: 0 },
       under_review_count: 0
     });
     const busyDoc = busy.dom.window.document;
-    assert.strictEqual(busyDoc.getElementById('myListNavBadge').textContent, '1',
-      'the day-events count fills the header badge that app.js still finds by id');
-    assert.strictEqual(busyDoc.getElementById('myListNavBadge').hidden, false, 'and the badge is shown');
-    assert.strictEqual(busyDoc.getElementById('accountMyListTodayCount').textContent, '1',
-      'the card inside «حسابي» carries the same number — one source, two places');
+    assert.strictEqual(busyDoc.getElementById('myListNavBadge').textContent, '1');
+    assert.strictEqual(busyDoc.getElementById('myListNavBadge').hidden, false);
+    assert.strictEqual(busyDoc.getElementById('accountMyListTodayCount').textContent, '1');
 
     const quiet = await buildMyListEnv({
       events: [buildMyListEvent({ id: 22, bucket: 'this_week', days_until_start: 3 })],
@@ -15068,8 +14881,173 @@ async function run() {
       under_review_count: 0
     });
     const quietBadge = quiet.dom.window.document.getElementById('myListNavBadge');
-    assert.strictEqual(quietBadge.hidden, true, 'no event today → the badge hides, it never draws «0»');
-    assert.strictEqual(quietBadge.textContent, '', 'and it carries no text while hidden');
+    assert.strictEqual(quietBadge.hidden, true);
+    assert.strictEqual(quietBadge.textContent, '');
+  });
+
+  await test('زرّ الوسط يفتح ورقة «مميّز عندنا» بثمانية عناصر، وEsc يغلقها ويعيد التركيز إلى الزرّ', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    await flushBoot();
+    const win = dom.window;
+    const { document } = win;
+
+    const trigger = document.getElementById('navBtnFeaturedMenu');
+    trigger.focus();
+    trigger.click();
+
+    const backdrop = document.getElementById('featuredMenuBackdrop');
+    const panel = document.getElementById('featuredMenuPanel');
+    assert.strictEqual(backdrop.hidden, false, 'sheet opens on center button click');
+    assert.strictEqual(panel.getAttribute('role'), 'dialog');
+    assert.strictEqual(panel.getAttribute('aria-modal'), 'true');
+    assert.strictEqual(document.getElementById('featuredMenuTitle').textContent.trim(), 'مميّز عندنا');
+    assert.strictEqual(trigger.getAttribute('aria-expanded'), 'true');
+
+    const hero = panel.querySelector('.featured-hero-card');
+    const gridItems = [...panel.querySelectorAll('.featured-grid-item')];
+    assert.ok(hero, 'hero item exists');
+    assert.ok(hero.textContent.includes('صمّم بطاقة دعوتك'));
+    assert.ok(hero.textContent.includes('١٢ قالباً جاهزاً'));
+    assert.strictEqual(gridItems.length, 7, 'hero + 7 grid items = 8 items total');
+    assert.deepStrictEqual(
+      gridItems.map(el => el.querySelector('.featured-grid-title').textContent.trim()),
+      ['حاسبة الذهب', 'محوّل العملات', 'ألبومات الأعراس', 'البث المباشر', 'آخر خبر', 'متاجرنا', 'دفتر النقوط']
+    );
+    assert.ok(!panel.textContent.includes('أضف عرسك') && !panel.textContent.includes('أضف خدمتك'), 'no publish buttons inside the sheet');
+
+    // Escape closes and returns focus to the trigger button
+    document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    assert.strictEqual(backdrop.hidden, true, 'Escape closes the sheet');
+    assert.strictEqual(trigger.getAttribute('aria-expanded'), 'false');
+    assert.strictEqual(document.activeElement, trigger, 'focus returns to the trigger button after close');
+
+    // Clicking backdrop also closes
+    trigger.click();
+    assert.strictEqual(backdrop.hidden, false);
+    backdrop.click();
+    assert.strictEqual(backdrop.hidden, true, 'clicking outside closes the sheet');
+
+    // Each item closes the sheet and opens its existing destination
+    const openedUrls = [];
+    win.open = (u) => { openedUrls.push(u); return {}; };
+
+    trigger.click();
+    panel.querySelector('[data-special-id="gold"]').click();
+    assert.strictEqual(backdrop.hidden, true);
+    assert.ok(document.getElementById('tabOurServices').classList.contains('active-tab'));
+    assert.strictEqual(document.getElementById('pricesPanelGold').hidden, false);
+
+    trigger.click();
+    panel.querySelector('[data-special-id="fx"]').click();
+    assert.strictEqual(backdrop.hidden, true);
+    assert.strictEqual(document.getElementById('pricesPanelFx').hidden, false);
+
+    trigger.click();
+    panel.querySelector('[data-special-id="albums"]').click();
+    assert.strictEqual(backdrop.hidden, true);
+    assert.strictEqual(document.getElementById('albumsPage').hidden, false);
+    win.closeAlbumsPage();
+
+    trigger.click();
+    panel.querySelector('[data-special-id="live"]').click();
+    assert.strictEqual(backdrop.hidden, true);
+    assert.strictEqual(document.getElementById('liveModal').style.display, 'flex');
+    win.closeLiveSection();
+
+    trigger.click();
+    panel.querySelector('[data-special-id="news"]').click();
+    assert.strictEqual(backdrop.hidden, true);
+    assert.strictEqual(document.getElementById('newsScreen').hidden, false);
+    win.closeNewsScreen();
+
+    trigger.click();
+    panel.querySelector('[data-special-id="stores"]').click();
+    assert.strictEqual(backdrop.hidden, true);
+    assert.strictEqual(openedUrls[0], 'https://kolshee.ktra-pro.tech/');
+
+    trigger.click();
+    panel.querySelector('[data-special-id="nokoot"]').click();
+    assert.strictEqual(backdrop.hidden, true);
+    assert.ok(document.getElementById('tabNokoot').classList.contains('active-tab'));
+
+    trigger.click();
+    panel.querySelector('[data-special-id="card"]').click();
+    assert.strictEqual(backdrop.hidden, true);
+    assert.ok(document.getElementById('tabMyList').classList.contains('active-tab'));
+
+    // Guest clicking card or nokoot gets prompted to sign in
+    const guestDom = buildEnv({ loggedIn: false });
+    await flushBoot();
+    const gDoc = guestDom.window.document;
+    gDoc.getElementById('navBtnFeaturedMenu').click();
+    gDoc.querySelector('#featuredMenuPanel [data-special-id="nokoot"]').click();
+    assert.strictEqual(gDoc.getElementById('authModal').style.display, 'flex', 'guest is prompted to sign in for nokoot');
+    guestDom.window.closeAuthModal();
+    gDoc.getElementById('navBtnFeaturedMenu').click();
+    gDoc.querySelector('#featuredMenuPanel [data-special-id="card"]').click();
+    assert.strictEqual(gDoc.getElementById('authModal').style.display, 'flex', 'guest is prompted to sign in for card studio');
+  });
+
+  await test('«مناسباتي» تعرض «مناسباتي اللي نشرتها» قبل «قائمتي» مع الحالات الفارغة والأزرار القائمة', async () => {
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (w) => {
+        const base = buildFetchStub();
+        w.fetch = async (url, opts = {}) => {
+          const p = String(url).split('?')[0];
+          if (p === '/api/my-events') {
+            return jsonResponse({
+              success: true,
+              events: [{
+                id: 77,
+                title: 'عرس سامي',
+                groom_name: 'سامي',
+                town: TOWNS[0],
+                event_date: '2026-12-10',
+                status: 'approved',
+                occasion_type: WEDDING_TYPE
+              }]
+            });
+          }
+          if (p === '/api/my-reminders') {
+            return jsonResponse({
+              success: true,
+              events: [buildMyListEvent({ id: 88 })],
+              counts: { all: 1, upcoming: 1, ended: 0 },
+              under_review_count: 0
+            });
+          }
+          return base(url, opts);
+        };
+      }
+    });
+    await flushBoot();
+    const { document } = dom.window;
+
+    document.getElementById('navBtnMyEvents').click();
+    await waitFor(() => document.querySelectorAll('#myPublishedEventsList .event-card').length === 1);
+    await waitFor(() => document.querySelectorAll('#myListBody .my-list-row').length === 1);
+
+    const publishedSec = document.getElementById('myPublishedEventsSection');
+    const savedSec = document.getElementById('myListSavedSection');
+    assert.ok(publishedSec && savedSec);
+    assert.ok(publishedSec.textContent.includes('مناسباتي اللي نشرتها'));
+    assert.ok(savedSec.textContent.includes('قائمتي'));
+    assert.ok(
+      publishedSec.compareDocumentPosition(savedSec) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+      'published events section precedes saved list section'
+    );
+    assert.ok(document.querySelector('#myPublishedEventsList button[onclick^="openCardStudio"]'), 'includes «صمّم بطاقة»');
+    assert.ok(document.querySelector('#myPublishedEventsList button[onclick^="triggerReadyCardUpload"]'), 'includes «ارفع بطاقتك الجاهزة»');
+
+    // Empty states
+    const emptyDom = buildEnv({ loggedIn: true });
+    await flushBoot();
+    emptyDom.window.document.getElementById('navBtnMyEvents').click();
+    await waitFor(() => emptyDom.window.document.getElementById('myPublishedEventsList').textContent.includes('ما نشرت مناسبات بعد'));
+    await waitFor(() => emptyDom.window.document.getElementById('myListBody').textContent.includes('قائمتك فارغة'));
+    const addBtn = emptyDom.window.document.querySelector('#myPublishedEventsList button[onclick="openAddEventModal()"]');
+    assert.ok(addBtn && addBtn.textContent.includes('أضف عرسك'), 'empty published events shows «أضف عرسك» button');
   });
 
   await test('«خدماتنا» is a public page with the three Ktra platform capsules in order, the news one opening the reader in-place', () => {
@@ -16444,9 +16422,9 @@ async function run() {
     assert.deepStrictEqual(JSON.parse(win.localStorage.getItem('negev_user')), savedUser, 'negev_user holds the server answer');
     assert.strictEqual(win.document.getElementById('accountUserName').textContent, 'محمد أبو سالم', 'the card re-renders from the saved user');
     assert.strictEqual(
-      win.document.getElementById('userAuthBtn').title,
-      'محمد — حسابي',
-      'the account button is rebuilt from the new first name instead of keeping the old one'
+      win.document.getElementById('headerGreetingName').textContent,
+      'محمد',
+      'the header greeting updates from the new first name'
     );
 
     // An empty name is refused locally — the server must not see a request at all.
@@ -17371,16 +17349,15 @@ async function run() {
     assert.strictEqual(document.getElementById('regionSheetEmpty').hidden, false, 'and a short Arabic explanation instead of a blank card');
   });
 
-  await test('القلب يفتح «قائمتي» وزرّ الأجندة يفتح الأجندة القائمة، والشريط السفلي يبقى ثلاث وجهات', () => {
+  await test('القلب يفتح «مناسباتي» وزرّ الأجندة يفتح الأجندة القائمة، والشريط السفلي بست خانات', () => {
     const dom = buildRichHeaderEnv();
     const { document } = dom.window;
 
     const navButtons = [...document.querySelectorAll('.bottom-navbar .nav-btn')];
-    assert.strictEqual(navButtons.length, 3, 'the bottom bar stays three destinations — the rich header adds none');
+    assert.strictEqual(navButtons.length, 5, 'the bottom bar holds the five tab buttons');
     assert.deepStrictEqual(
-      navButtons.map(btn => btn.textContent.trim()),
-      ['المناسبات', 'خدماتنا', 'خدمات الأعراس'],
-      'and they are the very same three'
+      navButtons.map(btn => btn.querySelector('span:not(.nav-btn-badge)').textContent.trim()),
+      ['المناسبات', 'خدماتنا', 'خدمات الأعراس', 'مناسباتي', 'حسابي']
     );
 
     const heart = document.getElementById('headerMyListBtn');
@@ -17392,12 +17369,12 @@ async function run() {
     assert.strictEqual(
       document.getElementById('tabMyList').classList.contains('active-tab'),
       true,
-      'the heart opens «قائمتي» through the existing tab, not a new destination'
+      'the heart opens «مناسباتي» through #tabMyList'
     );
     assert.strictEqual(
-      document.getElementById('navBtnHome').classList.contains('active'),
-      false,
-      '«قائمتي» still adds no active bottom-bar destination'
+      document.getElementById('navBtnMyEvents').classList.contains('active'),
+      true,
+      '«مناسباتي» slot lights up in the bottom bar'
     );
 
     calendar.click();
