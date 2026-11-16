@@ -136,13 +136,11 @@ const DUPLICATE_DATE_WINDOW_DAYS = 1;
 const TRENDING_WINDOW_DAYS = 7;
 
 /**
- * سقف المناسبات المبرزة **النشِطة** في المحافظة الواحدة (تذكرة #171). الرابعة
- * تُردّ 409 عربية، والمحافظة الأخرى لا تتأثّر — العدّاد يُقطع بـ`region_id`
- * دائماً. و«النشِطة» = `featured_until IS NOT NULL AND featured_until >=
- * CURDATE()`، فالمناسبة التي انتهى إبرازها لا تحجز مقعداً. وثلاثة لأن التغذية
- * التي تتصدّرها أكثر من ثلاث بطاقات لم تعد «مناسبة كبرى» بل قائمةً ثانية.
+ * سقف تقني لعدد صفوف قائمة «الأعراس المميزة» (`GET /api/events/featured`) —
+ * حماية لحجم الردّ لا سقف إبراز: للأدمن أن يبرز ما يشاء بلا حدّ، والقائمة
+ * تُرجع أقصاها هذا العدد مرتّباً بالتاريخ.
  */
-const FEATURED_EVENTS_MAX_PER_REGION = 3;
+const FEATURED_EVENTS_LIST_LIMIT = 30;
 
 /**
  * سقف عدد الحاضرين في جواب حضور واحد («جاي» بعدد) — تذكرة #168 والمواصفة
@@ -396,7 +394,7 @@ module.exports = {
   CONGRATULATION_REPORT_THRESHOLD,
   DUPLICATE_DATE_WINDOW_DAYS,
   TRENDING_WINDOW_DAYS,
-  FEATURED_EVENTS_MAX_PER_REGION,
+  FEATURED_EVENTS_LIST_LIMIT,
   RSVP_PARTY_SIZE_MAX,
   OCCASION_MESSAGE_BODY_MAX,
   RSVP_GUEST_RATE_LIMIT,
