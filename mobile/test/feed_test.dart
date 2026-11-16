@@ -24,6 +24,7 @@ import 'package:negev_events/state/region_onboarding.dart';
 import 'package:negev_events/state/region_store.dart';
 import 'package:negev_events/state/welcome.dart';
 import 'package:negev_events/theme.dart';
+import 'package:negev_events/widgets/auth_action_button.dart';
 import 'package:negev_events/widgets/event_card.dart';
 import 'package:negev_events/widgets/motion.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -33,16 +34,17 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// يعيد قائمة فارغة ما لم يُمرَّر جسم مختلف صراحةً: [eventsBody] لردّ ثابت أو
 /// [eventsBodyFor] لردّ يتبع استعلام الطلب. [requests] يلتقط كل طلب.
 ///
-/// [trendingBody]/[trendingBodyFor] هما الردّ نفسه لـ`/api/events/trending`
-/// (تذكرة #177)، وافتراضهما `{success: true, events: []}` — أي «لا نتيجة»،
-/// فلا يحمل اختبارٌ شريطاً لم يطلبه.
+/// [featuredBody]/[featuredBodyFor] هما الردّ نفسه لـ`/api/events/featured`
+/// («الأعراس المميزة»)، وافتراضهما `{success: true, events: []}` — أي «لا نتيجة»،
+/// فلا يحمل اختبارٌ قسماً لم يطلبه.
 NegevApi feedScreenApi({
   Object? eventsBody,
   List<Uri>? requests,
   Object? Function(Uri url)? eventsBodyFor,
   Object? storiesBody,
-  Object? trendingBody,
-  Object? Function(Uri url)? trendingBodyFor,
+  Object? featuredBody,
+  Object? Function(Uri url)? featuredBodyFor,
+  int featuredStatus = 200,
   Object? statsBody,
 }) {
   final client = MockClient((request) async {
@@ -64,14 +66,14 @@ NegevApi feedScreenApi({
         headers: {'content-type': 'application/json; charset=utf-8'},
       );
     }
-    if (request.url.path.endsWith('/api/events/trending')) {
+    if (request.url.path.endsWith('/api/events/featured')) {
       return http.Response(
         jsonEncode(
-          trendingBodyFor?.call(request.url) ??
-              trendingBody ??
+          featuredBodyFor?.call(request.url) ??
+              featuredBody ??
               {'success': true, 'events': <Map<String, dynamic>>[]},
         ),
-        200,
+        featuredStatus,
         headers: {'content-type': 'application/json; charset=utf-8'},
       );
     }
@@ -137,6 +139,8 @@ Future<void> pumpFeedScreen(
   WidgetTester tester,
   NegevApi api, {
   ValueNotifier<int>? tabRequest,
+  bool disableAnimations = false,
+  bool isActive = true,
 }) async {
   final auth = AuthStore(api);
   final realtime = RealtimeService();
@@ -150,9 +154,13 @@ Future<void> pumpFeedScreen(
       realtime: realtime,
       tabRequest: tabRequest,
       child: MaterialApp(
+        theme: AppTheme.light(),
         home: Directionality(
           textDirection: TextDirection.rtl,
-          child: const EventsScreen(),
+          child: MediaQuery(
+            data: MediaQueryData(disableAnimations: disableAnimations),
+            child: EventsScreen(isActive: isActive),
+          ),
         ),
       ),
     ),
@@ -2068,15 +2076,20 @@ void main() {
     Future<void> pumpPlacementFeed(
       WidgetTester tester, {
       required NegevApi api,
+      bool disableAnimations = true,
     }) async {
-      // ٣٦٠×٧٨٠ منطقيّاً: الشريط (٨٢) والكاروسيل (٩٦) يقتطعان من ارتفاع
-      // التغذية، فشاشة اختبارٍ أصغر تُنتج فيضاً لا علاقة له بالمواضع.
+      // ٣٦٠×٧٨٠ منطقيّاً: تعطيل الحركات افتراضياً هنا كي لا يمنع مؤقت الـ ٤ ثوانٍ
+      // استقرار `pumpAndSettle` مع تعدّد الشرائح.
       tester.view.physicalSize = const Size(1080, 2340);
       tester.view.devicePixelRatio = 3;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       SharedPreferences.setMockInitialValues({});
-      await pumpFeedScreen(tester, api);
+      await pumpFeedScreen(
+        tester,
+        api,
+        disableAnimations: disableAnimations,
+      );
       // وصول الستوريات والمناسبات معاً قبل أي قفزة: عدد الصفحات يتغيّر معها.
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
@@ -2101,7 +2114,7 @@ void main() {
     }
 
     testWidgets(
-      'الشريط bar وحده، والكاروسيل أعلى التغذية، وإعلان بعد الكرت ٨ و١٦ بالتناوب',
+      'لا دوائر ستوريات، والبطاقة الكبيرة تعرض carousel ثم bar بالترتيب، وإعلان بعد الكرت ٨ و١٦ بالتناوب',
       (tester) async {
         final requests = <Uri>[];
         final api = feedScreenApi(
@@ -2111,41 +2124,72 @@ void main() {
         );
         await pumpPlacementFeed(tester, api: api);
 
-        // 1) الشريط: موضع `bar` وحده — لا بانر كاروسيل ولا إعلان بين الكروت.
-        final strip = find.byKey(const Key('stories_strip'));
-        expect(
-          find.descendant(of: strip, matching: find.text('ستوري الشريط')),
-          findsOneWidget,
-          reason: 'ستوري موضع bar هي وحدها ما يعرضه الشريط',
-        );
-        expect(
-          find.descendant(of: strip, matching: find.text('بانر الكاروسيل')),
-          findsNothing,
-          reason: 'ستوري الكاروسيل لا تُكرَّر في الشريط',
-        );
-        expect(
-          find.descendant(of: strip, matching: find.text('إعلان أول')),
-          findsNothing,
-          reason: 'إعلان «بين الكروت» لا يسكن الشريط',
-        );
+        // 1) لا دوائر ستوريات: حُذف `_StoriesStrip` و`_StripItem`.
+        expect(find.byKey(const Key('stories_strip')), findsNothing);
+        expect(find.byType(ClipOval), findsNothing);
 
-        // 2) الكاروسيل: بانر الموضع carousel وحده، وأعلى الكروت في التغذية نفسها.
+        // 2) البطاقة الكبيرة: ستوريات `carousel` ثم `bar` بالترتيب، ولا `feed` فيها،
+        // وكبسولة البث فوق زاويتها العليا (لا في صفّ الرقاقات).
         final carousel = find.byKey(const Key('story_carousel'));
-        expect(carousel, findsOneWidget, reason: 'بانر الكاروسيل يظهر حين تصل ستوريات carousel');
+        expect(carousel, findsOneWidget);
+        expect(find.byKey(const Key('live_floating_pill')), findsOneWidget);
+        expect(find.byKey(const Key('live_chip')), findsNothing);
+        expect(find.byKey(const Key('story_carousel_dots')), findsOneWidget);
+        expect(find.byKey(const Key('story_carousel_dot_0')), findsOneWidget);
+        expect(find.byKey(const Key('story_carousel_dot_1')), findsOneWidget);
+
+        // الشريحة الأولى: ستوري `carousel` (902) لا `bar` (901) ولا `feed` (903).
         expect(
           find.descendant(of: carousel, matching: find.text('بانر الكاروسيل')),
           findsOneWidget,
-          reason: 'كاروسيل واحد لستوري carousel الواحدة',
         );
         expect(
           find.descendant(of: carousel, matching: find.text('ستوري الشريط')),
           findsNothing,
-          reason: 'ستوري الشريط لا تهاجر إلى الكاروسيل',
         );
+        expect(
+          find.descendant(of: carousel, matching: find.text('إعلان أول')),
+          findsNothing,
+        );
+
+        // النقطة النشطة أعرض وذهبية (`context.c.gold`).
+        final activeDot = tester.widget<AnimatedContainer>(
+          find.descendant(of: find.byKey(const Key('story_carousel_dot_0')), matching: find.byType(AnimatedContainer)),
+        );
+        final inactiveDot = tester.widget<AnimatedContainer>(
+          find.descendant(of: find.byKey(const Key('story_carousel_dot_1')), matching: find.byType(AnimatedContainer)),
+        );
+        expect(
+          tester.getSize(find.descendant(of: find.byKey(const Key('story_carousel_dot_0')), matching: find.byType(AnimatedContainer))).width,
+          greaterThan(
+            tester.getSize(find.descendant(of: find.byKey(const Key('story_carousel_dot_1')), matching: find.byType(AnimatedContainer))).width,
+          ),
+        );
+        expect(
+          (activeDot.decoration as BoxDecoration).color,
+          NegevPalette.light.gold,
+        );
+        expect(
+          (inactiveDot.decoration as BoxDecoration).color,
+          NegevPalette.light.line,
+        );
+
+        // السحب إلى الشريحة الثانية يعرض ستوري `bar` (901).
+        await tester.drag(
+          find.descendant(of: carousel, matching: find.byType(PageView)),
+          const Offset(300, 0),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.descendant(of: carousel, matching: find.text('ستوري الشريط')),
+          findsOneWidget,
+          reason: 'ستوريات carousel ثم bar بالترتيب داخل البطاقة الكبيرة',
+        );
+
         expect(
           tester.getBottomLeft(carousel).dy,
           lessThanOrEqualTo(tester.getTopLeft(cardFor(301)).dy),
-          reason: 'الكاروسيل أعلى الكروت في التغذية لا داخلها ولا تحتها',
+          reason: 'البطاقة الكبيرة أعلى الكروت في التغذية لا داخلها ولا تحتها',
         );
 
         // 3) الإعلان بعد الثامن: الصفحة ٧ ما زالت الكرت الثامن (رقم ٣٠٨)،
@@ -2343,83 +2387,280 @@ void main() {
         expect(find.text('إعلان ثانٍ'), findsOneWidget, reason: 'التناوب بين ستوريات feed مستمر');
       },
     );
+
+    testWidgets(
+      'ستوري واحد في البطاقة الكبيرة: لا نقاط تحته',
+      (tester) async {
+        final api = feedScreenApi(
+          storiesBody: {
+            'success': true,
+            'stories': [
+              {'id': 910, 'title': 'ستوري وحيدة', 'placement': 'bar'},
+            ],
+          },
+        );
+        await pumpFeedScreen(tester, api);
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('story_carousel')), findsOneWidget);
+        expect(find.text('ستوري وحيدة'), findsOneWidget);
+        expect(find.byKey(const Key('story_carousel_dots')), findsNothing,
+            reason: 'ستوري واحد بلا نقاط ولا تبديل');
+      },
+    );
+
+    testWidgets(
+      'البطاقة الكبيرة تتقدّم كل ٤ ثوانٍ، وتتوقّف عند اللمس أو عدم النشاط',
+      (tester) async {
+        final api = feedScreenApi(
+          storiesBody: {
+            'success': true,
+            'stories': [
+              {'id': 920, 'title': 'ستوري أولى', 'placement': 'carousel'},
+              {'id': 921, 'title': 'ستوري ثانية', 'placement': 'bar'},
+            ],
+          },
+        );
+
+        Future<void> pumpActive(bool isActive) async {
+          await tester.pumpWidget(
+            AppServices(
+              api: api,
+              auth: AuthStore(api),
+              realtime: RealtimeService(),
+              child: MaterialApp(
+                theme: AppTheme.light(),
+                home: Directionality(
+                  textDirection: TextDirection.rtl,
+                  child: EventsScreen(isActive: isActive),
+                ),
+              ),
+            ),
+          );
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 50));
+        }
+
+        await pumpActive(true);
+        expect(find.text('ستوري أولى'), findsOneWidget);
+        expect(find.text('ستوري ثانية'), findsNothing);
+
+        // لمس مستمر على البطاقة: يتوقّف التقدّم التلقائي ما دام الإصبع عليها.
+        final carouselPageView = find.descendant(
+          of: find.byKey(const Key('story_carousel')),
+          matching: find.byType(PageView),
+        );
+        final finger = await tester.startGesture(tester.getCenter(carouselPageView));
+        await tester.pump(const Duration(seconds: 4));
+        await tester.pump(const Duration(milliseconds: 400));
+        expect(find.text('ستوري أولى'), findsOneWidget,
+            reason: 'التقدّم يتوقّف ما دام الإصبع على البطاقة');
+
+        await finger.moveBy(const Offset(0, 40));
+        await finger.up();
+        await tester.pump();
+        expect(find.byType(StoryViewerScreen), findsNothing);
+
+        // بعد رفع الإصبع: يتقدّم بعد ٤ ثوانٍ إلى الثانية.
+        await tester.pump(const Duration(seconds: 4));
+        await tester.pump(const Duration(milliseconds: 400));
+        expect(find.text('ستوري ثانية'), findsOneWidget);
+
+        // عند عدم النشاط (`isActive: false`): يتوقّف التقدّم التلقائي.
+        await pumpActive(false);
+        await tester.pump(const Duration(seconds: 4));
+        await tester.pump(const Duration(milliseconds: 400));
+        expect(find.text('ستوري ثانية'), findsOneWidget,
+            reason: 'isActive == false يوقف التقدّم التلقائي');
+      },
+    );
   });
 
-  group('«الأكثر تفاعلاً هذا الأسبوع» — الشريط واختفاؤه (تذكرة #177)', () {
-    /// الردّ كما يعيده `GET /api/events/trending`: صفوف بشكل كرت التغذية نفسه
+  group('«الأعراس المميزة» — الكاروسيل واختفاؤه', () {
+    /// الردّ كما يعيده `GET /api/events/featured`: صفوف بشكل كرت التغذية نفسه
     /// (`Event.fromJson` واحد)، فلا شكل ثانٍ في الاختبار ولا في العميل.
-    Map<String, dynamic> trendingReply({List<int> ids = const [701, 702, 703]}) => {
+    Map<String, dynamic> featuredReply({List<int> ids = const [701, 702, 703]}) => {
           'success': true,
-          'window_days': 7,
           'events': [
             for (final id in ids)
               {
                 'id': id,
-                'title': 'مناسبة الأكثر تفاعلاً $id',
+                'title': 'عرس مميز $id',
                 'groom_name': 'سالم',
                 'family_clan': 'آل سالم',
                 'town': 'رهط',
                 'event_date': '2026-12-0${id - 700}',
+                'poster_url': 'https://cdn.test/featured-$id.jpg',
               },
           ],
         };
 
     testWidgets(
-      'ثلاث مناسبات في الرد ترسم ثلاثة كروت في الشريط، بترتيب الخادم نفسه',
+      'ثلاث مناسبات مميزة من featuredEvents ترسم الكاروسيل بـ viewportFraction ~0.86 وإطار ذهبي وبوستر contain على cardGround',
       (tester) async {
-        final api = feedScreenApi(trendingBody: trendingReply());
-        await pumpFeedScreen(tester, api);
+        final api = feedScreenApi(featuredBody: featuredReply());
+        await pumpFeedScreen(tester, api, disableAnimations: true);
         await tester.pumpAndSettle();
 
-        expect(find.byKey(const Key('trending_strip')), findsOneWidget,
-            reason: 'ردّ فيه مناسبات يظهر الشريط');
-        expect(find.text('الأكثر تفاعلاً هذا الأسبوع'), findsOneWidget,
-            reason: 'العنوان الذي تسمّيه التذكرة');
-        for (final id in [701, 702, 703]) {
-          expect(find.byKey(Key('trending_card_$id')), findsOneWidget,
-              reason: 'كرت لكل مناسبة في الردّ');
-        }
+        final carousel = find.byKey(const Key('featured_carousel'));
+        expect(carousel, findsOneWidget,
+            reason: 'ردّ فيه مناسبات مميزة يظهر القسم');
+        expect(find.text('الأعراس المميزة'), findsOneWidget);
+        expect(
+          find.descendant(of: carousel, matching: find.byIcon(Icons.star_rounded)),
+          findsOneWidget,
+        );
 
-        // الشريط RTL: البطاقة الأولى في الردّ هي أيمن الثلاث — فالموضع الأفقي
-        // نفسه هو دليل «بترتيب الخادم»، لا ترتيبٌ يعيد العميل حسابه.
-        final x0 = tester.getTopLeft(find.byKey(const Key('trending_card_701'))).dx;
-        final x1 = tester.getTopLeft(find.byKey(const Key('trending_card_702'))).dx;
-        final x2 = tester.getTopLeft(find.byKey(const Key('trending_card_703'))).dx;
-        expect(x0 > x1 && x1 > x2, isTrue,
-            reason: 'الترتيب 701 ثم 702 ثم 703 من اليمين إلى اليسار كما وصل');
+        final pageView = tester.widget<PageView>(
+          find.descendant(of: carousel, matching: find.byType(PageView)),
+        );
+        expect(pageView.controller?.viewportFraction, closeTo(0.86, 0.01));
+
+        // البطاقة الأولى ظاهرة وطرف الثانية ظاهر معها بترتيب الخادم في RTL.
+        expect(find.byKey(const Key('featured_card_701')), findsOneWidget);
+        expect(find.byKey(const Key('featured_card_702')), findsOneWidget);
+        final x0 = tester.getTopLeft(find.byKey(const Key('featured_card_701'))).dx;
+        final x1 = tester.getTopLeft(find.byKey(const Key('featured_card_702'))).dx;
+        expect(x0 > x1, isTrue,
+            reason: 'الترتيب 701 ثم 702 من اليمين إلى اليسار كما وصل');
+
+        // بوستر المناسبة بـ BoxFit.contain على cardGround، وإطار ذهبي cardGold،
+        // وتحته cardHeadline وسطر التاريخ — البلدة.
+        final card701 = find.byKey(const Key('featured_card_701'));
+        final img = tester.widget<Image>(
+          find.descendant(of: card701, matching: find.byType(Image)),
+        );
+        expect(img.fit, BoxFit.contain);
+        final colored = tester.widget<ColoredBox>(
+          find.descendant(of: card701, matching: find.byType(ColoredBox)).first,
+        );
+        expect(colored.color, cardGround);
+        final cardMaterial = tester.widget<Material>(
+          find.ancestor(of: card701, matching: find.byType(Material)).first,
+        );
+        final shape = cardMaterial.shape as RoundedRectangleBorder;
+        expect(shape.side.color, cardGold);
+        expect(
+          find.descendant(of: card701, matching: find.text('سالم')),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: card701,
+            matching: find.text('${arabicEventDate('2026-12-01')} — رهط'),
+          ),
+          findsOneWidget,
+        );
       },
     );
 
     testWidgets(
-      'ردّ فارغ لا يترك شريطاً: لا Key ولا عنوان ولا مساحة محجوزة',
+      'ردّ فارغ أو فشل لـ featuredEvents لا يترك عنواناً ولا مساحة',
       (tester) async {
-        // الافتراضي في العميل الوهمي: `{success: true, events: []}`.
-        final api = feedScreenApi();
-        await pumpFeedScreen(tester, api);
+        // 1) ردّ فارغ: `{success: true, events: []}`.
+        await pumpFeedScreen(tester, feedScreenApi());
         await tester.pumpAndSettle();
 
-        expect(find.byKey(const Key('trending_strip')), findsNothing,
+        expect(find.byKey(const Key('featured_carousel')), findsNothing,
             reason: 'لا نتيجة = القسم غير موجود في الشجرة أصلاً');
-        expect(find.text('الأكثر تفاعلاً هذا الأسبوع'), findsNothing,
+        expect(find.text('الأعراس المميزة'), findsNothing,
             reason: 'ولا عنوان بلا بطاقات تحته');
+
+        // 2) فشل النداء (500): يختفي بصمت ولا يسقط التغذية.
+        await tester.pumpWidget(const SizedBox.shrink());
+        await pumpFeedScreen(
+          tester,
+          feedScreenApi(
+            featuredStatus: 500,
+            eventsBody: {
+              'success': true,
+              'events': [
+                {'id': 88, 'groom_name': 'سالم', 'town': 'رهط', 'event_date': '2026-12-10'},
+              ],
+              'pagination': {'page': 1, 'limit': 30, 'total': 1, 'totalPages': 1},
+              'announcements': <Map<String, dynamic>>[],
+            },
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('featured_carousel')), findsNothing);
+        expect(find.byType(EventCard), findsOneWidget);
       },
     );
 
     testWidgets(
-      'النقر على كرت في الشريط يفتح صفحة تفاصيل المناسبة',
+      'النقر على بطاقة مميزة يفتح صفحة تفاصيل المناسبة',
       (tester) async {
-        final api = feedScreenApi(trendingBody: trendingReply(ids: [701]));
+        final api = feedScreenApi(featuredBody: featuredReply(ids: [701]));
         await pumpFeedScreen(tester, api);
         await tester.pumpAndSettle();
 
-        await tester.tap(find.byKey(const Key('trending_card_701')));
+        await tester.tap(find.byKey(const Key('featured_card_701')));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 400));
 
         expect(find.byType(EventDetailsScreen), findsOneWidget,
-            reason: 'الكرت يفتح التفاصيل بالمسار نفسه الذي يفتحه كرت التغذية');
+            reason: 'البطاقة المميزة تفتح التفاصيل بالمسار نفسه الذي يفتحه كرت التغذية');
       },
     );
+
+    testWidgets(
+      'الأعراس المميزة تتقدّم تلقائياً كل ٤ ثوانٍ، وزرّ التحديث يعيد جلبها',
+      (tester) async {
+        final requests = <Uri>[];
+        final api = feedScreenApi(
+          requests: requests,
+          featuredBody: featuredReply(ids: [701, 702, 703]),
+        );
+        await pumpFeedScreen(tester, api);
+
+        PageView pageView() => tester.widget<PageView>(
+              find.descendant(
+                of: find.byKey(const Key('featured_carousel')),
+                matching: find.byType(PageView),
+              ),
+            );
+        expect(pageView().controller?.page?.round() ?? 0, 0);
+
+        await tester.pump(const Duration(seconds: 4));
+        await tester.pump(const Duration(milliseconds: 400));
+        expect(pageView().controller?.page?.round(), 1);
+
+        final beforeRefresh =
+            requests.where((u) => u.path.endsWith('/api/events/featured')).length;
+        await tester.tap(find.byTooltip('تحديث'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 50));
+        final afterRefresh =
+            requests.where((u) => u.path.endsWith('/api/events/featured')).length;
+        expect(afterRefresh, beforeRefresh + 1,
+            reason: 'زرّ التحديث في صفّ الكروم يعيد جلب الأعراس المميزة');
+      },
+    );
+  });
+
+  group('صفّ الكروم بلا «حسابي»', () {
+    testWidgets('لا أيقونة حساب في صفّ الكروم، وتبقى في لوح الفلاتر', (tester) async {
+      await pumpFeedScreen(tester, feedScreenApi());
+      await tester.pumpAndSettle();
+
+      final bar = find.byKey(const Key('feed_controls_bar'));
+      expect(bar, findsOneWidget);
+      expect(
+        find.descendant(of: bar, matching: find.byType(AuthActionButton)),
+        findsNothing,
+        reason: 'أيقونة «حسابي» خرجت من صفّ الكروم إلى الشريط السفلي',
+      );
+      expect(
+        find.descendant(of: bar, matching: find.byTooltip('حسابي')),
+        findsNothing,
+      );
+
+      // أمّا لوح الفلاتر فيحتفظ بها كما هو.
+      await tester.tap(find.text('الفلاتر والبحث'));
+      await tester.pumpAndSettle();
+      expect(find.byType(AuthActionButton), findsOneWidget);
+    });
   });
 
   group('تمرير التغذية الرئيسية على مقاس هاتف حقيقي', () {
@@ -2456,14 +2697,13 @@ void main() {
             ],
             'total': 16,
           },
-          trendingBody: {
+          featuredBody: {
             'success': true,
-            'window_days': 7,
             'events': [
               for (final id in [701, 702, 703])
                 {
                   'id': id,
-                  'title': 'مناسبة شائعة $id',
+                  'title': 'مناسبة مميزة $id',
                   'groom_name': 'سالم',
                   'family_clan': 'آل سالم',
                   'town': 'رهط',
@@ -2489,26 +2729,28 @@ void main() {
           },
         );
 
-        await pumpFeedScreen(tester, api);
+        await pumpFeedScreen(tester, api, disableAnimations: true);
         await tester.pumpAndSettle();
 
         Finder cardFor(int id) => find.byWidgetPredicate(
               (w) => w is EventCard && w.event.id == id,
             );
 
-        // (أ) عند الفتح الرأس ظاهر، وtrending_strip وstories_strip فوق الكرت الأول.
-        final storiesStrip = find.byKey(const Key('stories_strip'));
-        final trendingStrip = find.byKey(const Key('trending_strip'));
-        expect(storiesStrip, findsOneWidget);
-        expect(trendingStrip, findsOneWidget);
-        expect(find.text('المجموع 16'), findsOneWidget);
+        // (أ) عند الفتح الرأس ظاهر، والبطاقة الكبيرة والأعراس المميزة فوق الكرت الأول،
+        // ولا شريط إحصائيات.
+        final bigCard = find.byKey(const Key('story_carousel'));
+        final featuredCarousel = find.byKey(const Key('featured_carousel'));
+        expect(bigCard, findsOneWidget);
+        expect(featuredCarousel, findsOneWidget);
+        expect(find.byKey(const Key('home_stats_ticker')), findsNothing);
+        expect(find.text('المجموع 16'), findsNothing);
         expect(cardFor(801), findsOneWidget);
         expect(
-          tester.getBottomLeft(storiesStrip).dy,
-          lessThanOrEqualTo(tester.getTopLeft(trendingStrip).dy),
+          tester.getBottomLeft(bigCard).dy,
+          lessThanOrEqualTo(tester.getTopLeft(featuredCarousel).dy),
         );
         expect(
-          tester.getBottomLeft(trendingStrip).dy,
+          tester.getBottomLeft(featuredCarousel).dy,
           lessThanOrEqualTo(tester.getTopLeft(cardFor(801)).dy),
         );
 
@@ -2529,12 +2771,12 @@ void main() {
         await tester.dragFrom(cardDragStart, Offset(0, -headerHeight));
         await tester.pumpAndSettle();
 
-        final storiesOffScreen = storiesStrip.evaluate().isEmpty ||
-            tester.getBottomLeft(storiesStrip).dy <= 0;
-        final trendingOffScreen = trendingStrip.evaluate().isEmpty ||
-            tester.getBottomLeft(trendingStrip).dy <= 0;
-        expect(storiesOffScreen, isTrue, reason: 'stories_strip خرج من الشاشة');
-        expect(trendingOffScreen, isTrue, reason: 'trending_strip خرج من الشاشة');
+        final bigCardOffScreen = bigCard.evaluate().isEmpty ||
+            tester.getBottomLeft(bigCard).dy <= 0;
+        final featuredOffScreen = featuredCarousel.evaluate().isEmpty ||
+            tester.getBottomLeft(featuredCarousel).dy <= 0;
+        expect(bigCardOffScreen, isTrue, reason: 'البطاقة الكبيرة خرجت من الشاشة');
+        expect(featuredOffScreen, isTrue, reason: 'الأعراس المميزة خرجت من الشاشة');
 
         final feedHeight =
             tester.getSize(find.byKey(const Key('feed_pager'))).height;
@@ -2573,11 +2815,11 @@ void main() {
         await tester.fling(cardFor(801), Offset(0, headerHeight + 100), 1200);
         await tester.pumpAndSettle();
 
-        expect(storiesStrip, findsOneWidget);
-        expect(trendingStrip, findsOneWidget);
-        expect(tester.getTopLeft(storiesStrip).dy, greaterThanOrEqualTo(0));
+        expect(bigCard, findsOneWidget);
+        expect(featuredCarousel, findsOneWidget);
+        expect(tester.getTopLeft(bigCard).dy, greaterThanOrEqualTo(0));
         expect(
-          tester.getBottomLeft(trendingStrip).dy,
+          tester.getBottomLeft(featuredCarousel).dy,
           lessThanOrEqualTo(tester.getTopLeft(cardFor(801)).dy),
         );
 

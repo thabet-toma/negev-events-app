@@ -51,6 +51,7 @@ NegevApi _api({
   Map<String, dynamic>? voteBody,
   List<http.Request>? requests,
   List<Map<String, dynamic>>? events,
+  List<Map<String, dynamic>>? stories,
 }) {
   final client = MockClient((request) async {
     requests?.add(request);
@@ -68,7 +69,7 @@ NegevApi _api({
         'user': {'id': 7, 'phone_number': '0500000000', 'full_name': 'مستخدم', 'role': 'user'},
       };
     } else if (path.endsWith('/api/stories')) {
-      body = {'success': true, 'stories': <Map<String, dynamic>>[]};
+      body = {'success': true, 'stories': stories ?? <Map<String, dynamic>>[]};
     } else if (path.endsWith('/api/occasion-types')) {
       body = {'success': true, 'types': <Map<String, dynamic>>[]};
     } else if (path.endsWith('/api/towns')) {
@@ -363,46 +364,105 @@ void main() {
       );
     });
 
-    testWidgets('في التغذية بلا بث: كبسة البث ظاهرة أول الشريط بلا شارة', (tester) async {
+    testWidgets('في التغذية بلا بث وبلا ستوريات: كبسة البث رقاقة أولى بلا شارة', (tester) async {
       final quiet = _api();
       await _pump(tester, quiet, await _auth(quiet), const EventsScreen());
-      final tile = find.byKey(const Key('stories_live_tile'));
-      expect(tile, findsOneWidget);
+      final chip = find.byKey(const Key('live_chip'));
+      expect(chip, findsOneWidget);
+      expect(find.byKey(const Key('live_floating_pill')), findsNothing);
       expect(find.text('البث المباشر'), findsOneWidget);
-      expect(find.byIcon(Icons.live_tv_rounded), findsOneWidget);
       expect(find.text('مباشر'), findsNothing);
 
-      // فعل مستقل في الشريط، لا داخل صفّ الصوت/الدخول.
-      final container = find.byKey(const Key('feed_audio_auth_container'));
-      expect(find.descendant(of: container, matching: tile), findsNothing);
+      // فعل مستقل في صفّ الرقاقات، لا داخل صفّ الكروم.
+      final controls = find.byKey(const Key('feed_controls_bar'));
+      expect(find.descendant(of: controls, matching: chip), findsNothing);
+      // رقاقة أولى قبل «ألبومات الأعراس» في RTL (جهة اليمين).
+      final albumsChip = find.byKey(const Key('albums_entry_chip'));
       expect(
-        find.descendant(of: find.byKey(const Key('stories_strip')), matching: tile),
-        findsOneWidget,
+        tester.getRect(chip).right,
+        greaterThan(tester.getRect(albumsChip).right),
       );
       // وتحت صفّ الأيقونات لا بجانبه.
       expect(
-        tester.getRect(tile).top,
+        tester.getRect(chip).top,
         greaterThan(tester.getRect(find.byIcon(Icons.calendar_month_rounded)).bottom),
-      );
-      // الشريط ٨٢ بكسل: في رأس التغذية يدفعها تحته، فلا حاجة إلى هامش يسمح
-      // بتغطية طرف من الكرت الأول.
-      expect(
-        tester.getSize(find.byKey(const Key('stories_strip'))).height,
-        lessThanOrEqualTo(82),
       );
     });
 
-    testWidgets('في التغذية مع بث: كبسة الشريط تحمل شارة «مباشر»', (tester) async {
+    testWidgets('في التغذية مع بث وبلا ستوريات: رقاقة البث تحمل شارة «مباشر»', (tester) async {
       final live = _api(liveBody: _activeLive());
       await _pump(tester, live, await _auth(live), const EventsScreen());
       await tester.pump(const Duration(milliseconds: 50));
-      expect(find.byKey(const Key('stories_live_tile')), findsOneWidget);
+      expect(find.byKey(const Key('live_chip')), findsOneWidget);
       expect(find.text('البث المباشر'), findsOneWidget);
       expect(find.text('مباشر'), findsOneWidget);
-      expect(find.byKey(const Key('stories_live_badge')), findsOneWidget);
+      expect(find.byKey(const Key('live_chip_badge')), findsOneWidget);
     });
 
-    testWidgets('نقر كبسة الشريط يفتح شاشة البث', (tester) async {
+    testWidgets('مع ستوريات: كبسولة البث عائمة فوق البطاقة الكبيرة، وتفتح شاشة البث', (tester) async {
+      final api = _api(
+        liveBody: _activeLive(),
+        hubBody: _hub(live: _activeLive()),
+        stories: const [
+          {'id': 11, 'title': 'بانر ترويجي', 'placement': 'carousel'},
+        ],
+      );
+      await tester.pumpWidget(
+        AppServices(
+          api: api,
+          auth: await _auth(api),
+          realtime: RealtimeService(),
+          child: MaterialApp(
+            theme: AppTheme.light(),
+            home: const Directionality(
+              textDirection: TextDirection.rtl,
+              child: MediaQuery(
+                data: MediaQueryData(disableAnimations: true),
+                child: EventsScreen(),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      final pill = find.byKey(const Key('live_floating_pill'));
+      final carousel = find.byKey(const Key('story_carousel'));
+      expect(pill, findsOneWidget);
+      expect(find.byKey(const Key('live_chip')), findsNothing,
+          reason: 'مع وجود ستوريات لا تتكرّر كبسة البث في الرقاقات');
+      expect(find.descendant(of: carousel, matching: pill), findsOneWidget);
+      expect(find.text('مباشر'), findsOneWidget);
+      expect(find.text('البث المباشر'), findsOneWidget);
+
+      // الزاوية العليا جهة البداية في RTL (أعلى اليمين).
+      final pillRect = tester.getRect(pill);
+      final cardRect = tester.getRect(carousel);
+      expect(pillRect.top, greaterThanOrEqualTo(cardRect.top));
+      expect(pillRect.right, lessThanOrEqualTo(cardRect.right));
+      expect(pillRect.center.dx, greaterThan(cardRect.center.dx));
+
+      await tester.tap(pill);
+      await tester.pumpAndSettle();
+      expect(find.byType(LiveScreen), findsOneWidget);
+    });
+
+    testWidgets('مع ستوريات وبث متوقف: الكبسولة رمادية بنص «البث المباشر» بلا «مباشر»', (tester) async {
+      final api = _api(
+        stories: const [
+          {'id': 12, 'title': 'ستوري', 'placement': 'bar'},
+        ],
+      );
+      await _pump(tester, api, await _auth(api), const EventsScreen());
+
+      expect(find.byKey(const Key('live_floating_pill')), findsOneWidget);
+      expect(find.byKey(const Key('live_chip')), findsNothing);
+      expect(find.text('البث المباشر'), findsOneWidget);
+      expect(find.text('مباشر'), findsNothing);
+    });
+
+    testWidgets('نقر رقاقة البث يفتح شاشة البث', (tester) async {
       final api = _api(hubBody: _hub());
       // `AppServices` فوق `MaterialApp` كي تصل الشاشة المدفوعة إليه.
       await tester.pumpWidget(
@@ -422,7 +482,7 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
 
-      await tester.tap(find.byKey(const Key('stories_live_tile')));
+      await tester.tap(find.byKey(const Key('live_chip')));
       await tester.pumpAndSettle();
 
       expect(find.byType(LiveScreen), findsOneWidget);
@@ -435,9 +495,10 @@ void main() {
       await tester.tap(find.byIcon(Icons.tune_rounded));
       await tester.pumpAndSettle();
 
-      // مدخل واحد للبث: كبسة الشريط، ولا LiveButton داخل اللوح.
+      // مدخل واحد للبث: رقاقة الرأس، ولا LiveButton داخل اللوح.
       expect(find.byKey(const Key('live_button')), findsNothing);
-      expect(find.byKey(const Key('stories_live_tile')), findsNothing);
+      expect(find.byKey(const Key('live_chip')), findsNothing);
+      expect(find.byKey(const Key('live_floating_pill')), findsNothing);
       expect(find.text('البث المباشر'), findsNothing);
       expect(find.text('بث مباشر'), findsNothing);
       // الحارس على الغياب لا يمرّ على لوح لم يُفتح أصلاً.
@@ -446,7 +507,7 @@ void main() {
     });
   });
 
-  testWidgets('هاتف ضيّق (٣٦٠) ومسجَّل مع بث: كبسة الشريط وشارتها بلا فيضان', (tester) async {
+  testWidgets('هاتف ضيّق (٣٦٠) ومسجَّل مع بث: رقاقة البث وشارتها بلا فيضان ولا «حسابي» في الكروم', (tester) async {
     tester.view.physicalSize = const Size(360, 780);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -458,19 +519,17 @@ void main() {
     expect(find.byTooltip('الإشعارات'), findsOneWidget);
     expect(find.text('البث المباشر'), findsOneWidget);
     expect(find.text('مباشر'), findsOneWidget);
-    // «حسابي» رمزٌ بتلميحه لا كلمة: الكلمة لم تعد في الشريط.
-    expect(find.byTooltip('حسابي'), findsOneWidget);
+    // «حسابي» أُزيل من صفّ الكروم إلى الشريط السفلي (يبقى في لوح الفلاتر وحده).
+    expect(find.byTooltip('حسابي'), findsNothing);
     expect(find.text('حسابي'), findsNothing);
-    final rail = find.byKey(const Key('stories_strip'));
-    final tile = find.byKey(const Key('stories_live_tile'));
-    expect(find.descendant(of: rail, matching: tile), findsOneWidget);
-    expect(tester.getSize(rail).height, lessThanOrEqualTo(82));
-    expect(tester.getRect(tile).right, lessThanOrEqualTo(360));
-    expect(tester.getRect(tile).left, greaterThanOrEqualTo(0));
+    final chip = find.byKey(const Key('live_chip'));
+    expect(chip, findsOneWidget);
+    expect(tester.getRect(chip).right, lessThanOrEqualTo(360));
+    expect(tester.getRect(chip).left, greaterThanOrEqualTo(0));
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('الستوريات تنتهي عند أعلى الكرت، والكروم صفّ واحد على ٣٦٠', (tester) async {
+  testWidgets('الرأس ينتهي عند أعلى الكرت، والكروم صفّ واحد على ٣٦٠ بلا «حسابي»', (tester) async {
     tester.view.physicalSize = const Size(360, 780);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -499,7 +558,10 @@ void main() {
           theme: AppTheme.light(),
           home: const Directionality(
             textDirection: TextDirection.rtl,
-            child: EventsScreen(),
+            child: MediaQuery(
+              data: MediaQueryData(disableAnimations: true),
+              child: EventsScreen(),
+            ),
           ),
         ),
       ),
@@ -514,44 +576,39 @@ void main() {
     final feedPager = find.byKey(const Key('feed_pager'));
     expect(feedPager, findsOneWidget);
 
-    // ١. الشريط ينتهي عند أعلى الكرت أو قبله: لا يعلو الكرت ولا يكتب على
-    // صورته — وهي العلّة التي جاء هذا الترتيب لإزالتها (النموذج، العرض «أ»).
-    final rail = find.byKey(const Key('stories_strip'));
-    final railBottom = tester.getRect(rail).bottom;
-    expect(tester.getRect(find.byType(EventCard)).top, greaterThanOrEqualTo(railBottom));
+    // ١. الرأس ينتهي عند أعلى الكرت أو قبله: لا يعلو الكرت ولا يكتب على صورته.
+    final chip = find.byKey(const Key('live_chip'));
+    final chipBottom = tester.getRect(chip).bottom;
+    expect(tester.getRect(find.byType(EventCard)).top, greaterThanOrEqualTo(chipBottom));
 
-    // ٢. الكروم صفّ واحد: كبسة الفلاتر وأيقونة «حسابي» في حزمة أفقية
-    // واحدة، لا صفّان فوق بعضهما كما كان.
+    // ٢. الكروم صفّ واحد: كبسة الفلاتر ومجموعة الأزرار في حزمة أفقية واحدة.
     final filterChip = find.text('الفلاتر والبحث');
-    final auth = find.byTooltip('حسابي');
+    final group = find.byKey(const Key('feed_controls_bar'));
     expect(filterChip, findsOneWidget);
-    expect(auth, findsOneWidget);
+    expect(group, findsOneWidget);
     expect(
-      (tester.getRect(filterChip).center.dy - tester.getRect(auth).center.dy).abs(),
+      (tester.getRect(filterChip).center.dy - tester.getRect(group).center.dy).abs(),
       lessThan(8),
     );
 
-    // ٣. الشريط ستّة أزرار لمسجَّل: أوّلها «إعلان مناسبة» (زرّ التمييز)،
-    // وآخرها «حسابي» برمز لا بكلمة. ولا دعم واتساب في الشريط: بقي
-    // في لوح الفلاتر وحده.
-    final group = find.byKey(const Key('feed_controls_bar'));
+    // ٣. الشريط خمسة أزرار لمسجَّل: أوّلها «إعلان مناسبة»، وآخرها كتم/تشغيل الصوت،
+    // ولا أيقونة «حسابي» ولا دعم واتساب في الشريط.
     final buttons = tester
         .widgetList<IconButton>(
           find.descendant(of: group, matching: find.byType(IconButton)),
         )
         .toList();
-    expect(buttons, hasLength(6));
+    expect(buttons, hasLength(5));
     expect(buttons.first.tooltip, 'إعلان مناسبة');
-    expect(buttons.last.tooltip, 'حسابي');
+    expect(buttons.last.key, const Key('feed_mute_toggle'));
+    expect(find.byTooltip('حسابي'), findsNothing);
     expect(find.text('حسابي'), findsNothing);
     expect(find.byTooltip('الدعم الفني عبر واتساب'), findsNothing);
 
-    // والكرت نفسه لا يفيض بعد أن قصرت التغذية: ارتفاعه يوزَّع بين الصورة
-    // (‏`Expanded`) ولوح المعلومات، فالملصق وحده يتراجع.
+    // والكرت نفسه لا يفيض.
     expect(tester.takeException(), isNull);
 
-    // وأيقونة النشر تفتح شاشة النشر — فعل الزرّ العائم الذي كان فوق الكرت،
-    // وقد انتقل إلى داخل الشريط.
+    // وأيقونة النشر تفتح شاشة النشر.
     await tester.tap(find.byTooltip('إعلان مناسبة'));
     await tester.pumpAndSettle();
     expect(find.byType(AddEventScreen), findsOneWidget);
