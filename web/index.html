@@ -110,7 +110,7 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <!-- App Styles -->
-  <link rel="stylesheet" href="styles.css?v=2.8.5">
+  <link rel="stylesheet" href="styles.css?v=2.9.0">
 </head>
 <body>
 
@@ -169,15 +169,6 @@
           <span aria-hidden="true">👑</span>
           <span>لوحة الإدارة</span>
         </a>
-        <!-- «حسابي» دائماً — وجهة واحدة للزائر والمسجَّل (الدخول والخروج داخلها)،
-             ونفس السلوك لزرّ الشريط العائم في الهاتف. وهو بابها معه بعد أن
-             غادرت الشريط السفلي، وشارة عدّاد مناسبات اليوم `myListNavBadge`
-             تعلوه هنا. -->
-        <button id="userAuthBtn" class="auth-pill-btn" onclick="switchTab('tabAccount')" title="حسابي">
-          <i class="fa-solid fa-user"></i>
-          <span id="userAuthLabel">حسابي</span>
-          <span class="auth-pill-badge" id="myListNavBadge" hidden></span>
-        </button>
         <!-- كتم/تفعيل التشغيل التلقائي لمقاطع المناسبات — تفضيل هذا الزائر وحده -->
         <button id="soundToggleBtn" class="theme-toggle-btn" onclick="toggleSoundMuted()" title="الصوت مفعَّل — اضغط لكتمه" aria-label="كتم الصوت" aria-pressed="false">
           <i class="fa-solid fa-volume-high"></i>
@@ -233,15 +224,6 @@
         <i class="fa-solid fa-sliders"></i>
         <span id="floatingFilterLabel">الفلاتر والبحث</span>
         <span id="floatingFilterDot" class="floating-filter-dot" style="display:none;"></span>
-      </button>
-
-      <!-- «حسابي» — خارج صندوق الأفعال لا داخله، ليصير مع فلتر البحث صفّاً
-           أول مستقلاً على ٣٦٠px، وتبقى أزرار الأفعال في صفّها الثاني بأهداف
-           44px كاملة (#164). الترويسة مخفية على الهاتف وفي التطبيق المثبَّت —
-           هذا زرّ «حسابي» الوحيد هناك، ظاهر على كل تبويب. -->
-      <button id="floatingAuthBtn" class="floating-auth-btn" onclick="switchTab('tabAccount')" title="حسابي" aria-label="حسابي">
-        <i class="fa-solid fa-user"></i>
-        <span id="floatingAuthLabel">حسابي</span>
       </button>
 
       <!-- Start: Actions Pill -->
@@ -335,21 +317,20 @@
       <div class="region-picker-chips" id="drawerRegionPickerChips"></div>
     </div>
 
-    <!-- ستوريات الشريط، وبانرات carousel لسطح الهاتف/PWA داخل الدرج. -->
+    <!-- البطاقة الإعلانية الكبيرة في الدرج لسطح الهاتف/PWA (تجمع carousel ثم bar). -->
     <div class="drawer-stories-wrapper">
-      <div class="stories-slider" id="drawerStoriesContainer"></div>
       <div class="drawer-story-carousel-section" id="drawerStoryCarouselSection" hidden>
-        <div class="story-carousel" id="drawerStoryCarousel"></div>
+        <div class="story-carousel-box" id="drawerStoryCarouselBox"></div>
+        <div class="carousel-dots" id="drawerStoryCarouselDots" hidden></div>
       </div>
     </div>
 
-    <!-- «الأكثر تفاعلاً هذا الأسبوع» على سطح الهاتف/PWA (تذكرة #177): نسخة
-         الدرج من القسم نفسه — هناك التغذية شريحة `fixed` بملء الشاشة تحجب ما
-         فوقها، فلا يُرى القسم في التدفق إطلاقاً (كما في كاروسيل البانرات
-         #173). تُرسم من نداء `loadTrending()` الواحد نفسه: لا طلب ثانٍ. -->
-    <section class="trending-section trending-drawer-section" id="drawerTrendingSection" hidden aria-labelledby="drawerTrendingTitle">
-      <h2 class="trending-title" id="drawerTrendingTitle">الأكثر تفاعلاً هذا الأسبوع</h2>
-      <div class="trending-row" id="drawerTrendingRow"></div>
+    <!-- «الأعراس المميزة» على سطح الهاتف/PWA inside drawer -->
+    <section class="featured-events-section featured-drawer-section" id="drawerFeaturedEventsSection" hidden aria-labelledby="drawerFeaturedEventsTitle">
+      <div class="featured-events-head">
+        <h2 class="featured-events-title" id="drawerFeaturedEventsTitle"><span class="featured-star-gold" aria-hidden="true">★</span><span>الأعراس المميزة</span></h2>
+      </div>
+      <div class="featured-events-track" id="drawerFeaturedEventsTrack"></div>
     </section>
 
     <!-- Search input inside Drawer -->
@@ -361,6 +342,11 @@
 
     <!-- Filter chips row inside Drawer -->
     <div class="drawer-filter-chips">
+      <button type="button" id="drawerLiveFilterChip" class="filter-chip live-chip is-off" onclick="toggleTopChrome(false); openLiveSection();" hidden>
+        <span class="live-dot" aria-hidden="true"></span>
+        <span>البث المباشر</span>
+        <span class="live-tag" hidden>مباشر</span>
+      </button>
       <button id="drawerPlaceChip" class="filter-chip" onclick="openFilterSheet('place')">
         <i class="fa-solid fa-location-dot"></i>
         <span id="drawerPlaceChipLabel">كل الأماكن</span>
@@ -425,32 +411,6 @@
     <div id="tickerExpandedList" class="ticker-expanded-list" hidden></div>
   </div>
 
-  <!-- شريط الإحصائيات في الرئيسية (#172): عدد المناسبات القادمة في كل محافظة،
-       والمجموع، و«حُدّث HH:MM». يُملأ من GET /api/stats/ticker عند فتح الصفحة
-       (fetchStatsTicker في app.js)، والحساب كله على الخادم — لا رقم يُبنى هنا.
-
-       **وهو وشريط التعاميم لا يجتمعان:** حين يوجد تعميم حيّ يعرض الشريط هو
-       ويغيب هذا (renderStatsTicker يقرأ نفس قائمة liveBroadcasts ويخفيه)، فما
-       يراه الزائر واحدٌ لا اثنان. والمجموع مجموع أعداد المحافظات المعروضة
-       نفسها، و«حُدّث» لحظة حساب الخادم لا لحظة فتح الصفحة. -->
-  <div id="statsTicker" class="stats-ticker" hidden>
-    <div class="stats-ticker-main">
-      <i class="fa-solid fa-calendar-days stats-ticker-icon" aria-hidden="true"></i>
-      <div id="statsTickerRegions" class="stats-ticker-regions" role="group" aria-label="المناسبات القادمة لكل محافظة"></div>
-    </div>
-    <div class="stats-ticker-meta">
-      <span id="statsTickerTotal" class="stats-ticker-total"></span>
-      <span id="statsTickerUpdated" class="stats-ticker-updated"></span>
-    </div>
-  </div>
-
-  <!-- STORIES & LIVE SNAPS BAR (قصص وسنابات الأفراح) -->
-  <section class="stories-section">
-    <div class="stories-slider" id="storiesContainer">
-      <!-- Injected via JS -->
-    </div>
-  </section>
-
   <!-- Main Container -->
   <main class="app-main">
 
@@ -487,6 +447,11 @@
            الفلاتر» في الطرف الأقصى (margin-inline-start: auto)، لا بين
            الرقاقتين. -->
       <div class="filter-chips-row">
+        <button type="button" id="liveFilterChip" class="filter-chip live-chip is-off" onclick="openLiveSection()" hidden>
+          <span class="live-dot" aria-hidden="true"></span>
+          <span>البث المباشر</span>
+          <span class="live-tag" hidden>مباشر</span>
+        </button>
         <button id="placeFilterChip" class="filter-chip" onclick="openFilterSheet('place')" disabled>
           <i class="fa-solid fa-location-dot"></i>
           <span id="placeFilterChipLabel">كل الأماكن</span>
@@ -523,20 +488,21 @@
       <!-- إعلانات تعديل التاريخ — خبر عن مناسبة قائمة، وليس مناسبة جديدة (#20 خطوة 10) -->
       <div id="announcementsContainer"></div>
 
-      <!-- كاروسيل البانرات (تذكرة #173): ستوريات موضع «carousel» وحدها، أعلى
-           التغذية مباشرة. يُرسم من GET /api/stories في app.js، ويبقى مخفياً
-           بلا ستوريات كاروسيل — لا هيكل فارغاً في الصفحة. -->
-      <section class="story-carousel-section" id="storyCarouselSection" hidden>
-        <div class="story-carousel" id="storyCarousel"></div>
+      <!-- البطاقة الإعلانية الكبيرة: ستوريات `carousel` ثم `bar` بنسبة 16:10،
+           ومعها كبسولة البث العائمة. صفر ستوريات ⇒ القسم مخفيّ والكبسولة تنتقل
+           إلى صفّ الرقاقات أعلاه. -->
+      <section class="story-carousel-section" id="storyCarouselSection" aria-label="البطاقة الإعلانية الكبيرة" hidden>
+        <div class="story-carousel-box" id="storyCarouselBox"></div>
+        <div class="carousel-dots" id="storyCarouselDots" hidden></div>
       </section>
 
-      <!-- «الأكثر تفاعلاً هذا الأسبوع» (تذكرة #177): عنصر مستقل بين كاروسيل
-           البانرات و#eventsContainer — لا داخل أحدهما، لأن اختبارات web-dom
-           تقرأ أبناء #eventsContainer كأنهم كروت مناسبات. يبقى مخفياً حتى يصل
-           ردّ فيه مناسبة واحدة على الأقل، فلا مساحة محجوزة حين لا نتيجة. -->
-      <section class="trending-section" id="trendingSection" hidden aria-labelledby="trendingTitle">
-        <h2 class="trending-title" id="trendingTitle">الأكثر تفاعلاً هذا الأسبوع</h2>
-        <div class="trending-row" id="trendingRow"></div>
+      <!-- «الأعراس المميزة»: من GET /api/events/featured، شريط بطاقات كبيرة
+           بـscroll-snap وإطار ذهبي وبوستر كامل. يُخفى كاملاً عند الفراغ أو الفشل. -->
+      <section class="featured-events-section" id="featuredEventsSection" hidden aria-labelledby="featuredEventsTitle">
+        <div class="featured-events-head">
+          <h2 class="featured-events-title" id="featuredEventsTitle"><span class="featured-star-gold" aria-hidden="true">★</span><span>الأعراس المميزة</span></h2>
+        </div>
+        <div class="featured-events-track" id="featuredEventsTrack"></div>
       </section>
 
       <!-- Events List Feed — هياكل تحميل بدل الدوّارة (#85 خطوة 53) -->
@@ -750,42 +716,54 @@
 
     </section>
 
-    <!-- TAB: «قائمتي» — الوجه المرئي لمتابعة «ذكّرني» (زرّ واحد لا زرّان).
-         التجميع والترتيب (bucket وتواريخ الامتداد) يأتيان من الخادم — لا يُعيد
-         العميل اشتقاق تاريخ ولا ترتيباً. الرأس وحده ثابت هنا؛ الرقاقات والصفوف
-         والأقسام يرسمها app.js#renderMyList في #myListChips و#myListBody. -->
+    <!-- TAB: «مناسباتي» — تجمع «مناسباتي اللي نشرتها» أولاً ثم «قائمتي» أسفلها. -->
     <section id="tabMyList" class="tab-content">
 
-      <!-- حالة الزائر غير المسجّل — بنفس بطاقة دفتر النقوط المقفلة -->
+      <!-- حالة الزائر غير المسجّل -->
       <div id="myListLockedView" class="vault-locked-card">
         <div class="vault-icon"><i class="fa-solid fa-bookmark"></i></div>
-        <h2>قائمتي</h2>
-        <p>احفظ المناسبات التي تهمّك أثناء التصفّح، وتابع القادم منها وما انتهى في مكان واحد.</p>
+        <h2>مناسباتي</h2>
+        <p>سجّل الدخول لترى مناسباتك اللي نشرتها وقائمتك المحفوظة في مكان واحد.</p>
         <button class="gold-action-btn" onclick="requireAuth({ type: 'my_list' })"><i class="fa-solid fa-right-to-bracket"></i> تسجيل الدخول</button>
       </div>
 
-      <!-- القائمة نفسها — للمسجَّل دخوله وحده -->
+      <!-- الصفحة للمسجَّل دخوله وحده -->
       <div id="myListUnlockedView" style="display: none;">
-        <div class="my-list-head">
-          <div class="my-list-head-title">
-            <h2>قائمتي</h2>
-            <span id="myListCount" class="my-list-count">0</span>
-          </div>
-          <button type="button" id="myListClearEndedBtn" class="my-list-clear-btn" onclick="clearEndedMyList()" hidden>نظّف المنتهية</button>
+        <div class="page-title-box my-events-page-head">
+          <h2><i class="fa-solid fa-bookmark" aria-hidden="true"></i> مناسباتي</h2>
+          <p>مناسباتك التي نشرتها وقائمتك المحفوظة</p>
         </div>
 
-        <div class="my-list-chips" id="myListChips"></div>
+        <section id="myPublishedEventsSection" class="my-published-section" aria-labelledby="myPublishedEventsTitle">
+          <div class="my-list-head">
+            <div class="my-list-head-title">
+              <h3 id="myPublishedEventsTitle">مناسباتي اللي نشرتها</h3>
+            </div>
+            <button type="button" class="map-refresh-btn" onclick="fetchMyEvents()"><i class="fa-solid fa-rotate"></i> تحديث</button>
+          </div>
+          <div id="myPublishedEventsList" class="my-published-list"></div>
+        </section>
 
-        <p id="myListUnderReview" class="my-list-notice" hidden></p>
+        <section id="myListSavedSection" class="my-list-saved-section" aria-labelledby="myListSavedTitle">
+          <div class="my-list-head">
+            <div class="my-list-head-title">
+              <h3 id="myListSavedTitle">قائمتي</h3>
+              <span id="myListCount" class="my-list-count">0</span>
+            </div>
+            <button type="button" id="myListClearEndedBtn" class="my-list-clear-btn" onclick="clearEndedMyList()" hidden>نظّف المنتهية</button>
+          </div>
 
-        <div id="myListBody"></div>
+          <div class="my-list-chips" id="myListChips"></div>
 
-        <!-- «مزوّدون محفوظون» (تذكرة #185): قسم داخل «قائمتي» لا وجهة جديدة في
-             الشريط. يرسمه app.js#renderSavedProviders من GET /api/services/favorites
-             ويُخفى كاملاً حين لا محفوظات — لا عنوان لقسم فارغ. -->
-        <section id="myListSavedProviders" class="my-list-providers" hidden>
-          <h3 class="my-list-bucket-head"><i class="fa-solid fa-heart" aria-hidden="true"></i> مزوّدون محفوظون</h3>
-          <div id="myListSavedProvidersList"></div>
+          <p id="myListUnderReview" class="my-list-notice" hidden></p>
+
+          <div id="myListBody"></div>
+
+          <!-- «مزوّدون محفوظون» (تذكرة #185) -->
+          <section id="myListSavedProviders" class="my-list-providers" hidden>
+            <h3 class="my-list-bucket-head"><i class="fa-solid fa-heart" aria-hidden="true"></i> مزوّدون محفوظون</h3>
+            <div id="myListSavedProvidersList"></div>
+          </section>
         </section>
       </div>
 
@@ -1325,13 +1303,9 @@
   </main>
 
   <!--
-    الشريط السفلي — ثلاث وجهات فقط، من اليمين في RTL: المناسبات · خدماتنا ·
-    خدمات الأعراس. «حسابي» غادر الشريط أيضاً: بابُه زرّه في الترويسة (والشريط
-    العائم في الهاتف) وحده. «الخريطة» و«قائمتي» و«النقوط» بطاقات وصول سريع
-    داخل «حسابي»، وصفحاته وصفحات هذه البطاقات بلا زرّ نشِط في الشريط إطلاقاً:
-    حالة `active` لا تُضاف لوجهة غادرت. فوق الشريط كبستان عائمتان في الوسط:
-    «أضف عرسك» البارزة و«أضف خدمتك» الأهدأ، بدل زرّ النشر الدائري المفرد.
-    وشارة مناسبات اليوم على «حسابي» في الترويسة، لا هنا.
+    الشريط السفلي — ست خانات في RTL من اليمين:
+    المناسبات · خدماتنا · زرّ الوسط (مميّز عندنا) · خدمات الأعراس · مناسباتي · حسابي.
+    فوق الشريط كبستا النشر «أضف عرسك / أضف خدمتك».
   -->
   <div class="bottom-nav-wrap">
     <div class="nav-publish-capsules">
@@ -1342,20 +1316,39 @@
         <i class="fa-solid fa-screwdriver-wrench" aria-hidden="true"></i> <span>أضف خدمتك</span>
       </button>
     </div>
-    <nav class="bottom-navbar">
-      <button class="nav-btn active" id="navBtnHome" onclick="switchTab('tabHome')">
-        <i class="fa-solid fa-champagne-glasses"></i>
+    <nav class="bottom-navbar" id="bottomNavTrack" aria-label="التنقل السفلي">
+      <button type="button" class="nav-btn active" id="navBtnHome" onclick="switchTab('tabHome')">
+        <i class="fa-solid fa-champagne-glasses" aria-hidden="true"></i>
         <span>المناسبات</span>
       </button>
-      <button class="nav-btn" id="navBtnOurServices" onclick="openOurServices()">
-        <i class="fa-solid fa-layer-group"></i>
+      <button type="button" class="nav-btn" id="navBtnOurServices" onclick="openOurServices()">
+        <i class="fa-solid fa-layer-group" aria-hidden="true"></i>
         <span>خدماتنا</span>
       </button>
-      <button class="nav-btn" id="navBtnServices" onclick="switchTab('tabServices')">
-        <i class="fa-solid fa-screwdriver-wrench"></i>
+      <div class="nav-center-slot">
+        <button type="button" id="navBtnFeaturedMenu" class="center-gold-btn" onclick="openFeaturedMenu()" aria-label="مميّز عندنا" aria-haspopup="dialog" aria-expanded="false">
+          <img src="/icons/icon.svg" alt="">
+        </button>
+      </div>
+      <button type="button" class="nav-btn" id="navBtnServices" onclick="switchTab('tabServices')">
+        <i class="fa-solid fa-screwdriver-wrench" aria-hidden="true"></i>
         <span>خدمات الأعراس</span>
       </button>
+      <button type="button" class="nav-btn" id="navBtnMyEvents" onclick="switchTab('tabMyList')">
+        <i class="fa-solid fa-bookmark" aria-hidden="true"></i>
+        <span>مناسباتي</span>
+        <span class="nav-btn-badge" id="myListNavBadge" hidden></span>
+      </button>
+      <button type="button" class="nav-btn" id="navBtnAccount" onclick="switchTab('tabAccount')">
+        <i class="fa-solid fa-user" aria-hidden="true"></i>
+        <span>حسابي</span>
+      </button>
     </nav>
+  </div>
+
+  <!-- ورقة «مميّز عندنا» — ورقة سفلية (S1) تفتح من زرّ الوسط الذهبي -->
+  <div id="featuredMenuBackdrop" class="featured-sheet-backdrop" hidden onclick="if (event.target === this) closeFeaturedMenu()">
+    <div id="featuredMenuPanel" class="featured-sheet" role="dialog" aria-modal="true" aria-labelledby="featuredMenuTitle" tabindex="-1"></div>
   </div>
 
   <!-- MODAL 1: AI SMART NABATI POETRY GENERATOR (مولد قصائد الذكاء الاصطناعي) -->
@@ -2607,6 +2600,6 @@
   <script src="config.js?v=2.5.2"></script>
   <script src="api.js?v=2.5.2"></script>
   <script src="occasionForm.js?v=2.5.2"></script>
-  <script src="app.js?v=2.8.5"></script>
+  <script src="app.js?v=2.9.0"></script>
 </body>
 </html>

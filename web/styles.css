@@ -267,69 +267,6 @@ body {
 .broadcast-ticker.tone-info .ticker-expanded-item,
 .broadcast-ticker.tone-solemn .ticker-expanded-item { border-top-color: var(--line-soft); }
 
-/* شريط الإحصائيات (#172) — تحت شريط التعاميم مباشرةً (مكانه في index.html
-   بعده)، بهدوء التعاميم نفسه: لا حركة ولا زحف. يغيب كاملاً حين يوجد تعميم
-   حيّ (renderStatsTicker في app.js)، فالاثنان لا يجتمعان أبداً. والخلفية
-   `--surface` لا نغمة تعميم: قراءة لا تنبيه. */
-.stats-ticker {
-  position: relative;
-  z-index: 89;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px 14px;
-  padding: 7px 18px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--line);
-  color: var(--ink-soft);
-  font-size: 0.8rem;
-}
-
-/* `display: flex` أعلاه يتغلّب على `[hidden]` الافتراضي في المتصفّح — القاعدة
-   الصريحة هذه هي ما يُبقي الإخفاء يعمل برمجياً (كما في `.ticker-expanded-list`). */
-.stats-ticker[hidden] { display: none; }
-
-.stats-ticker-main { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
-
-.stats-ticker-icon { flex-shrink: 0; color: var(--sky-deep); font-size: 0.95rem; }
-
-/* المحافظات صفّ واحد يمرّر أفقياً عند الحاجة: شريط لا كتلة، ومحافظة تُضاف
-   من اللوحة غداً لا تفيض على الشاشة ولا تكسر الصفّ. */
-.stats-ticker-regions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1;
-  min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-.stats-ticker-regions::-webkit-scrollbar { display: none; }
-
-.stats-region {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 10px;
-  border-radius: var(--radius-pill);
-  background: var(--sky-wash);
-  color: var(--sky-deep);
-  font-weight: 700;
-  white-space: nowrap;
-}
-.stats-region-count { font-weight: 800; }
-
-.stats-ticker-meta {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-.stats-ticker-total { font-weight: 800; color: var(--ink); }
-.stats-ticker-updated { opacity: 0.8; font-size: 0.72rem; }
-
 /* نبض لطيف حصراً لنغمة «عاجل» — الوقور والعادي بلا أي حركة إطلاقاً، ويلغيه
    تقليل الحركة عبر القاعدة الشاملة *{animation-duration} أسفل الملف. */
 .ticker-urgent-pulse { animation: tickerUrgentPulse 2.2s ease-in-out infinite; }
@@ -680,144 +617,214 @@ body {
 
 .app-download-btn[hidden], .app-download-size[hidden] { display: none; }
 
-/* Stories & Live Snaps Bar */
-.stories-section {
-  max-width: 650px;
-  margin: 14px auto 8px auto;
-  padding: 0 16px;
-  overflow-x: auto;
-  scrollbar-width: none;
+/* كبسولة البث المباشر — عائمة فوق الزاوية العليا (جهة البداية في RTL) للبطاقة
+   الإعلانية الكبيرة، أو رقاقة أولى في صفّ الرقاقات عند غياب الستوريات. */
+@keyframes livePillPulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.75); }
+  50% { transform: scale(1.18); box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
 }
-.stories-section::-webkit-scrollbar { display: none; }
 
-.stories-slider { display: flex; gap: 16px; width: max-content; padding: 6px 2px; }
-
-.story-item { display: flex; flex-direction: column; align-items: center; gap: 6px; cursor: pointer; transition: transform 0.2s; }
-.story-item:hover { transform: scale(1.06); }
-
-.story-avatar-ring {
-  width: 66px;
-  height: 66px;
+.live-dot {
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  padding: 2.5px;
-  background: linear-gradient(135deg, var(--sky-bright), var(--sky));
-  box-shadow: 0 0 0 1px var(--line);
-  position: relative;
+  flex: 0 0 8px;
+  background: #94a3b8;
+}
+.is-live .live-dot {
+  background: #ef4444;
+  animation: livePillPulse 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .is-live .live-dot { animation: none; }
 }
 
-.story-avatar-ring.live {
-  background: linear-gradient(135deg, #ef4444 0%, #f59e0b 100%);
+.live-chip[hidden] { display: none; }
+.live-chip.is-live {
+  background: color-mix(in srgb, #ef4444 14%, var(--surface));
+  border-color: color-mix(in srgb, #ef4444 55%, var(--line));
+  color: var(--ink);
 }
-
-.story-avatar-ring.live::after {
-  content: 'مباشر';
-  position: absolute;
-  bottom: -5px;
-  inset-inline-start: 50%;
-  transform: translateX(-50%);
-  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-  color: #ffffff;
-  font-size: 0.6rem;
-  font-weight: 900;
-  padding: 1px 7px;
-  border-radius: 10px;
-  box-shadow: 0 2px 8px rgba(239, 68, 68, 0.5);
-  letter-spacing: 0.5px;
-}
-
-.story-avatar-img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; border: 2.5px solid var(--surface); }
-
-.story-title {
-  font-size: 0.72rem;
+.live-chip.is-off {
+  background: var(--surface);
+  border-color: var(--line);
   color: var(--ink-soft);
-  max-width: 68px;
-  text-align: center;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-weight: 600;
+}
+.live-tag {
+  font-size: 0.65rem;
+  font-weight: 900;
+  background: var(--danger);
+  color: #ffffff;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+}
+.live-tag[hidden] { display: none; }
+
+.live-floating-pill {
+  position: absolute;
+  top: 10px;
+  inset-inline-start: 10px;
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-main);
+  font-size: 0.72rem;
+  font-weight: 900;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+.live-floating-pill.is-live {
+  background: rgba(12, 27, 42, 0.86);
+  color: #ffffff;
+  border: 1px solid rgba(239, 68, 68, 0.65);
+}
+.live-floating-pill.is-off {
+  background: rgba(71, 85, 105, 0.86);
+  color: #e2e8f0;
+  border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
-/*
- * كاروسيل البانرات (تذكرة #173) — ستوريات موضع `carousel` أعلى التغذية.
- * عرضه الأقصى كعرض شريط الستوريات نفسه (650px) كي يبقى وسط الصفحة على الشاشات
- * العريضة، ويمرّ أفقياً على الضيّقة. القسم مخفيّ بـ`hidden` ما دامت لا
- * ستوريات كاروسيل، فلا مساحة فارغة في الصفحة.
- */
+/* البطاقة الإعلانية الكبيرة 16:10 (موضع carousel ثم bar) */
 .story-carousel-section {
-  max-width: 650px;
-  margin: 10px auto 6px auto;
-  padding: 0 16px;
-  overflow-x: auto;
-  scrollbar-width: none;
+  width: 100%;
+  margin: 10px auto 6px;
 }
-.story-carousel-section::-webkit-scrollbar { display: none; }
 .story-carousel-section[hidden] { display: none; }
 
-.story-carousel { display: flex; gap: 12px; width: max-content; padding: 4px 2px; }
-
-.story-banner-card {
-  width: 240px;
-  display: flex;
-  flex-direction: column;
-  background: var(--surface);
-  border: 1px solid var(--line);
+.story-carousel-box {
+  position: relative;
   border-radius: var(--radius-md);
   overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--surface);
   box-shadow: var(--shadow);
+  touch-action: pan-y;
+  user-select: none;
 }
 
-/* الزرّ يحمل الصورة بدل `<div onclick>`: هدف لمسي حقيقي ولوحة مفاتيح بدل نقر
-   صامت على عنصر بلا دور (زرّ `type="button"` لا يُرسل نموذجاً). */
-.story-banner-media {
-  display: block;
+.carousel-viewport {
   width: 100%;
-  height: 132px;
-  padding: 0;
-  border: 0;
-  background: var(--surface-sunk);
-  cursor: pointer;
-}
-
-.story-banner-img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.story-banner-img-empty { display: block; width: 100%; height: 100%; background: linear-gradient(135deg, var(--sky-wash), var(--surface-sunk)); }
-
-.story-banner-body { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px 10px; }
-
-.story-banner-chip {
-  align-self: flex-start;
-  font-size: 0.62rem;
-  font-weight: 800;
-  color: var(--gold);
-  background: var(--gold-wash);
-  border: 1px solid var(--gold);
-  border-radius: var(--radius-pill);
-  padding: 1px 8px;
-}
-
-.story-banner-title {
-  font-size: 0.82rem;
-  font-weight: 700;
-  color: var(--ink);
-  line-height: 1.4;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
   overflow: hidden;
+  direction: ltr;
+  cursor: grab;
+}
+.carousel-viewport:active { cursor: grabbing; }
+
+.carousel-track {
+  display: flex;
+  transition: transform 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
+}
+.carousel-track.is-dragging { transition: none; }
+@media (prefers-reduced-motion: reduce) {
+  .carousel-track { transition: none; }
 }
 
-.story-banner-cta {
-  align-self: flex-start;
-  margin-top: 2px;
+.carousel-slide {
+  flex: 0 0 100%;
+  position: relative;
+  aspect-ratio: 16 / 10;
+  background: var(--surface-sunk);
+}
+.carousel-slide img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  pointer-events: none;
+}
+
+.ad-overlay {
+  position: absolute;
+  inset: 0;
+  direction: rtl;
+  background: linear-gradient(to top, rgba(6, 14, 22, 0.92) 0%, rgba(6, 14, 22, 0.35) 55%, transparent 100%);
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.ad-title {
+  color: #ffffff;
+  font-size: 0.92rem;
+  font-weight: 900;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+  line-height: 1.35;
+}
+
+.ad-cta {
+  flex: 0 0 auto;
+  padding: 6px 14px;
   border: 0;
   border-radius: var(--radius-pill);
-  background: var(--sky);
-  color: var(--on-sky);
+  background: var(--card-gold);
+  color: #0c1b2a;
   font-family: var(--font-main);
   font-size: 0.74rem;
-  font-weight: 800;
-  padding: 5px 14px;
+  font-weight: 900;
   cursor: pointer;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);
+}
+
+.carousel-dots {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding-top: 8px;
+}
+.carousel-dots[hidden] { display: none; }
+
+button.carousel-dot {
+  width: 8px;
+  height: 8px;
+  min-width: 8px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  padding: 18px 2px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+button.carousel-dot::before {
+  content: '';
+  display: block;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--line);
+  transition: width 0.25s ease, background 0.25s ease;
+}
+button.carousel-dot.is-active {
+  width: 24px;
+  min-width: 24px;
+}
+button.carousel-dot.is-active::before {
+  width: 22px;
+  background: var(--card-gold);
+}
+
+.img-fallback {
+  width: 100%;
+  height: 100%;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: linear-gradient(145deg, var(--surface-sunk), var(--surface));
+  color: var(--ink-soft);
+  font-size: 0.76rem;
+  font-weight: 700;
 }
 
 /*
@@ -1035,6 +1042,7 @@ body {
   white-space: nowrap;
   transition: all 0.2s ease;
 }
+.filter-chip[hidden] { display: none; }
 .filter-chip:hover:not(:disabled) { border-color: var(--sky); color: var(--sky-deep); }
 .filter-chip:disabled { opacity: 0.55; cursor: wait; }
 .filter-chip-clear { margin-inline-start: auto; background: transparent; border-style: dashed; color: var(--ink-faint); }
@@ -2542,13 +2550,13 @@ body {
   padding-inline-end: 4px;
 }
 
-/* Bottom Navigation Bar — الحاوية الثابتة تحمل الشريط وكبستَي النشر معاً،
-   فيتوسّطهما نفس عرض الشريط (650px) بلا أن يعتمدا على عرض النافذة (#31، الخيار ج) */
+/* Bottom Navigation Bar — عمود وسطي على الحاسوب، بست خانات في RTL
+   وكبستَي نشر فوق الشريط. */
 .bottom-nav-wrap {
   position: fixed;
   bottom: 0;
   inset-inline: 0;
-  max-width: 650px;
+  max-width: 480px;
   margin: 0 auto;
   z-index: 100;
 }
@@ -2558,23 +2566,106 @@ body {
   background: var(--surface);
   border-top: 1px solid var(--line);
   display: flex;
-  justify-content: space-around;
-  padding: 10px 12px;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 2px;
+  padding: 12px 4px 7px;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   box-shadow: 0 -6px 20px rgba(12, 27, 42, 0.08);
 }
+.bottom-navbar::-webkit-scrollbar { display: none; }
 
-.nav-btn { background: none; border: none; color: var(--ink-faint); font-family: var(--font-main); display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 0.72rem; font-weight: 600; cursor: pointer; transition: all 0.2s; min-height: 48px; justify-content: center; }
-.nav-btn i { font-size: 1.2rem; }
+.nav-btn {
+  position: relative;
+  flex: 1 0 56px;
+  min-width: 56px;
+  scroll-snap-align: start;
+  background: none;
+  border: none;
+  color: var(--ink-faint);
+  font-family: var(--font-main);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 5px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: center;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color 0.15s ease, background-color 0.15s ease;
+  min-height: 48px;
+}
+.nav-btn i { font-size: 1.1rem; }
+.nav-btn > span:not(.nav-btn-badge) { white-space: normal; }
 .nav-btn.active { color: var(--sky); font-weight: 800; }
 .nav-btn.active i { transform: translateY(-2px); }
 
-/* كبستا النشر العائمتان فوق الشريط في الوسط — فعلان لا وجهتان، فلا تأخذان
-   خانة فيه. «أضف عرسك» بارزة بلون السماء، و«أضف خدمتك» أهدأ على سطح الصفحة
-   نفسه كي لا تتنافسا على العين. الوسط محايد في RTL (left/translateX لا
-   يتأثّران باتجاه النص، بخلاف right) (#4، #31). */
+.nav-btn-badge {
+  position: absolute;
+  top: 2px;
+  inset-inline-end: 6px;
+  min-width: 16px;
+  padding: 1px 5px;
+  border-radius: var(--radius-pill);
+  background: var(--sky);
+  color: var(--on-sky);
+  font-family: var(--font-main);
+  font-size: 0.62rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+}
+.nav-btn-badge[hidden] { display: none; }
+
+.nav-center-slot {
+  flex: 0 0 60px;
+  min-width: 60px;
+  scroll-snap-align: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  position: relative;
+}
+
+.center-gold-btn {
+  width: 54px;
+  height: 54px;
+  min-width: 54px;
+  min-height: 54px;
+  margin-top: -14px;
+  border-radius: 50%;
+  background: linear-gradient(145deg, #f4d57b, var(--card-gold));
+  border: 3px solid var(--surface);
+  box-shadow: 0 6px 16px rgba(197, 148, 37, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 5px;
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+.center-gold-btn:active { transform: scale(0.95); }
+.center-gold-btn img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 50%;
+  display: block;
+}
+
+/* كبستا النشر العائمتان فوق الشريط في الوسط — تبقيان فوقه مع فراغ كافٍ فوق زرّ الوسط */
 .nav-publish-capsules {
   position: absolute;
-  bottom: calc(100% + 8px);
+  bottom: calc(100% + 14px);
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -3415,28 +3506,28 @@ body {
    ========================================================================== */
 @media (min-width: 769px) {
   .app-main {
-    max-width: 820px;
-    padding: 20px 24px 80px;
+    max-width: 480px;
+    padding: 16px 14px 120px;
+    border-inline: 1px solid var(--line);
+    min-height: 100dvh;
+    background: var(--ground);
+    box-shadow: 0 0 36px rgba(0, 0, 0, 0.12);
   }
 
-  .header-container {
-    max-width: 820px;
-  }
-
-  .stories-section {
-    max-width: 820px;
+  .header-container,
+  .header-rich-row {
+    max-width: 480px;
   }
 
   .broadcast-ticker {
-    max-width: 820px;
+    max-width: 480px;
     margin-left: auto;
     margin-right: auto;
   }
 
-  .stats-ticker {
-    max-width: 820px;
-    margin-left: auto;
-    margin-right: auto;
+  .bottom-nav-wrap {
+    max-width: 480px;
+    border-inline: 1px solid var(--line);
   }
 
   #eventsContainer.events-feed {
@@ -3689,36 +3780,6 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
 .live-entry-floating-btn.is-live { color: #fecaca; }
 .floating-badge.live-entry-floating-badge { top: -6px; left: -10px; padding: 1px 4px; font-size: 0.55rem; }
 
-/* زرّ «حسابي» في الشريط العائم — أيقونة شخص + الكلمة، بارتفاع 44px كسائر
-   أهداف اللمس (#164). انتقل خارج صندوق الأفعال ليكون مع فلتر البحث في
-   الصفّ الأول على الشاشات الضيّقة (انظر كتلة 680px أدناه). */
-.floating-auth-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-height: 44px;
-  height: 44px;
-  padding: 0 12px;
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  border-radius: var(--radius-pill);
-  /* انتقل خارج صندوق الأفعال، فيحمل خلفيته الداكنة بنفسه كي يبقى مقروءاً
-     فوق صورة الكرت. */
-  background: rgba(12, 27, 42, 0.75);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  color: #ffffff;
-  font-family: inherit;
-  font-size: 0.78rem;
-  font-weight: 700;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background-color 0.15s ease, transform 0.15s ease;
-}
-
-.floating-auth-btn:active {
-  transform: scale(0.94);
-}
-
 /* علامة «اعراسنا» في الشريط العائم (#157): الترويسة العريضة مخفية على الهاتف
    وفي PWA المثبَّت، وهذا الشريط ترويستها الظاهرة. طبقة `icon` (بلا الكلمة) من
    `web/icons/favicon-32.png` المولَّد. القرص نفسه هدف لمس 44×44 (#164) والصورة
@@ -3855,7 +3916,6 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
     gap: 2px;
     padding: 2px 4px;
   }
-  .floating-auth-btn { padding: 0 10px; gap: 4px; font-size: 0.76rem; }
 }
 
 /* التسمية تُخفى عند 460px فقط، حيث يصبح الصفّ ضيّقاً فعلاً؛ بين 461 و680
@@ -4012,21 +4072,14 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
 }
 
 .drawer-stories-wrapper {
-  margin: 0 -16px;
-  padding: 4px 16px;
-  overflow-x: auto;
-  scrollbar-width: none;
+  margin: 0;
+  padding: 0;
 }
-.drawer-stories-wrapper::-webkit-scrollbar { display: none; }
 
-/* بانرات موضع `carousel` في الدرج: سطح الهاتف/PWA الذي يبقى خارج تغذية
-   الالتقاط. يُخفى العنصر كله حين لا تصل ستوريات carousel. */
+/* البطاقة الإعلانية الكبيرة في الدرج لسطح الهاتف/PWA. */
 .drawer-story-carousel-section {
   margin: 4px 0;
-  overflow-x: auto;
-  scrollbar-width: none;
 }
-.drawer-story-carousel-section::-webkit-scrollbar { display: none; }
 .drawer-story-carousel-section[hidden] { display: none; }
 
 .drawer-search-box {
@@ -4544,17 +4597,8 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
   #tabHome > .filter-chips-row,
   #tabHome > .search-bar-container,
   #tabHome > #announcementsContainer,
-  /* كاروسيل البانرات (تذكرة #173) أيضاً: هنا التغذية شريحة ١٠٠dvh والكروم
-     يمرّ ويختفي فوقها، فبانرٌ ثابت قبلها يفسد الالتقاط. يبقى الكاروسيل متاحاً
-     لسطح الهاتف/PWA داخل الدرج العلوي، بجوار شريط الستوريات. */
   #tabHome > .story-carousel-section,
-  /* «الأكثر تفاعلاً هذا الأسبوع» (تذكرة #177) بالسابقة نفسها: التغذية هنا
-     طبقة `fixed` بملء الشاشة (`#eventsContainer` أعلاه)، فالشريط في التدفق
-     يبقى تحتها ولا يُرى إطلاقاً. نسخته المتاحة على الهاتف هي
-     `#drawerTrendingSection` داخل الدرج العلوي، تُرسم من الردّ نفسه ولا تطلب
-     شيئاً ثانياً. */
-  #tabHome > .trending-section,
-  #tabHome > .stories-section {
+  #tabHome > .featured-events-section {
     display: none !important; /* Managed through sliding top drawer on mobile */
   }
 
@@ -5766,17 +5810,7 @@ body.event-page-open { overflow: hidden; }
    رموز الملف وحدها (وأبيض واحد فوق الأخضر المصمت كما في .record-nokoot-btn)،
    فتعمل في الوضعين الفاتح والداكن بلا استثناء. */
 
-/* الوجهات الثلاث تتقاسم الشريط بالتساوي، وتسمية كل وجهة في سطر واحد — «خدمات
-   الأعراس» أطولها. لا خانة محجوزة لزرّ نشر: صار كبستين عائمتين فوق الشريط. */
-.bottom-navbar .nav-btn { flex: 1 1 0; min-width: 0; }
-.bottom-navbar .nav-btn > span { white-space: nowrap; }
-
-/* 380px وما دونها: تسمية «خدمات الأعراس» لا تتّسع بحشوة 12px وخطّ 0.72rem،
-   فتُضيّق الحشوة ويصغر الخطّ بدل أن تفيض التسميات على بعضها. */
-@media (max-width: 380px) {
-  .bottom-navbar { padding: 10px 6px; }
-  .nav-btn { font-size: 0.66rem; }
-}
+/* (خانات الشريط السفلي الست مُنسَّقة في كتلة .bottom-nav-wrap أعلاه) */
 
 /* «في قائمتي» حالة نشِطة: تسبق قواعد .record-nokoot-btn وقواعد الكرت في
    الترتيب (الملف يُقرأ من أعلاه إلى أسفله) بنفس التخصيص أو أعلى. */
@@ -6907,44 +6941,60 @@ body.news-screen-open { overflow: hidden; }
 }
 
 /*
- * «الأكثر تفاعلاً هذا الأسبوع» (تذكرة #177) — شريط أفقي مضغوط فوق التغذية،
- * تحت كاروسيل البانرات. بطاقة صغيرة: صورة، سطر عنوان، وسطر تاريخ/بلدة.
- * العرض الأقصى كعرض شريط الستوريات (650px) كي يبقى وسط الصفحة على العريضة،
- * والقسم مخفيّ بـ`hidden` ما دامت لا نتيجة في محافظته. والبطاقة نفسها زرٌّ
- * هدفه أكبر من 44px في البعدين، وحدود التركيز ظاهرة للوحة المفاتيح.
+ * «الأعراس المميزة» — من GET /api/events/featured، شريط بطاقات كبيرة
+ * يظهر فيه طرف البطاقة التالية بـscroll-snap، وإطار ذهبي وبوستر كامل.
  */
-.trending-section {
-  max-width: 650px;
-  margin: 6px auto 10px auto;
-  padding: 0 16px;
+.featured-events-section {
+  width: 100%;
+  margin: 10px 0 12px;
 }
-.trending-section[hidden] { display: none; }
+.featured-events-section[hidden] { display: none; }
 
-.trending-title {
-  margin: 0 0 8px 0;
-  font-size: 0.95rem;
-  font-weight: 800;
+.featured-events-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 2px 8px;
+}
+
+.featured-events-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 0.96rem;
+  font-weight: 900;
   color: var(--ink);
 }
 
-.trending-row {
+.featured-star-gold {
+  color: var(--card-gold);
+  font-size: 1rem;
+}
+
+.featured-events-track {
   display: flex;
   gap: 10px;
   overflow-x: auto;
-  padding: 2px 2px 8px 2px;
+  scroll-snap-type: x mandatory;
+  padding: 2px 0 6px;
   scrollbar-width: none;
+  scroll-behavior: smooth;
 }
-.trending-row::-webkit-scrollbar { display: none; }
+.featured-events-track::-webkit-scrollbar { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .featured-events-track { scroll-behavior: auto; }
+}
 
-.trending-card {
-  flex: 0 0 auto;
-  width: 132px;
+.featured-event-card {
+  flex: 0 0 calc(100% - 44px);
+  width: calc(100% - 44px);
   min-height: 44px;
+  scroll-snap-align: start;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 0 0 10px 0;
-  border: 1px solid var(--line);
+  padding: 0;
+  border: 1.5px solid var(--card-gold);
   border-radius: var(--radius-md);
   background: var(--surface);
   box-shadow: var(--shadow);
@@ -6954,47 +7004,54 @@ body.news-screen-open { overflow: hidden; }
   cursor: pointer;
   overflow: hidden;
 }
-.trending-card:focus-visible { outline: 3px solid var(--sky); outline-offset: 2px; }
+.featured-event-card:focus-visible { outline: 3px solid var(--sky); outline-offset: 2px; }
 
-.trending-card-img {
+.featured-event-shot {
+  width: 100%;
+  height: 210px;
+  background: #0c1b2a;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.featured-event-img {
   display: block;
   width: 100%;
-  height: 86px;
-  object-fit: cover;
-  background: var(--surface-sunk);
+  height: 100%;
+  object-fit: contain;
 }
-.trending-card-img-empty {
+.featured-event-img-empty {
   display: flex;
   align-items: center;
   justify-content: center;
   color: var(--ink-faint);
-  font-size: 1.4rem;
+  font-size: 1.8rem;
 }
 
-.trending-card-title {
-  padding: 0 10px;
-  font-size: 0.84rem;
+.featured-event-body {
+  padding: 9px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.featured-event-name {
+  font-size: 0.86rem;
   font-weight: 800;
-  line-height: 1.5;
+  color: var(--ink);
+  line-height: 1.4;
 }
 
-.trending-card-meta {
-  padding: 0 10px;
-  font-size: 0.74rem;
+.featured-event-meta {
+  font-size: 0.72rem;
   font-weight: 600;
   color: var(--ink-soft);
 }
 
-/*
- * نسخة الدرج من الشريط (تذكرة #177) — سطح الهاتف/PWA الذي تحجب فيه التغذيةُ
- * الثابتة ما فوقها. البنية نفسها (`.trending-section` و`.trending-row`
- * و`.trending-card`)، والهامش هنا يناسب الدرج بدل توسيطه في التغذية. محدِّد
- * مركَّب من صنفين قائمين، فلا يكرّر محدِّداً ولا يغلبه.
- */
-.trending-section.trending-drawer-section {
-  max-width: none;
-  margin: 4px -16px 8px -16px;
-  padding: 0 16px;
+.featured-events-section.featured-drawer-section {
+  margin: 4px 0 8px;
 }
 
 /* =========================================================================
@@ -7230,3 +7287,213 @@ body.news-screen-open { overflow: hidden; }
 /* صفّا الزرّين في كرت «مناسباتي» (#180) — المسافة وحدها، والباقي من
    `.event-page-btn-row` القائم. */
 .my-event-card-row { margin-top: 8px; }
+
+/* =========================================================================
+ * ورقة «مميّز عندنا» (S1: ورقة سفلية ~65%، تفتح من زرّ الوسط الذهبي)
+ * ========================================================================= */
+@keyframes featuredSheetRise {
+  from { transform: translateY(32px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.featured-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 14, 22, 0.62);
+  z-index: 960;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.featured-sheet-backdrop[hidden] { display: none; }
+
+.featured-sheet {
+  width: 100%;
+  max-width: 480px;
+  max-height: 65dvh;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  border-inline: 1px solid var(--line);
+  border-radius: 24px 24px 0 0;
+  padding: 10px 14px max(20px, env(safe-area-inset-bottom, 20px));
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.42);
+  animation: featuredSheetRise 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  touch-action: pan-y;
+}
+@media (prefers-reduced-motion: reduce) {
+  .featured-sheet { animation: none; }
+}
+
+.featured-sheet-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  cursor: grab;
+  user-select: none;
+}
+
+.featured-sheet-handle {
+  width: 44px;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--line);
+  margin: 0 auto;
+}
+
+.featured-sheet-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.featured-sheet-title {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 900;
+  color: var(--ink);
+}
+
+.featured-sheet-close {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--surface-sunk);
+  border: 1px solid var(--line);
+  font-size: 1.05rem;
+  font-weight: 900;
+  color: var(--ink-soft);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.featured-hero-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 13px;
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, var(--gold-wash), var(--surface-sunk));
+  border: 1.5px solid var(--card-gold);
+  font-family: var(--font-main);
+  text-align: start;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+
+.featured-hero-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 13px;
+  background: linear-gradient(145deg, #f4d57b, var(--card-gold));
+  color: #0c1b2a;
+  display: grid;
+  place-items: center;
+  flex: 0 0 44px;
+  font-size: 1.25rem;
+}
+
+.featured-hero-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.featured-hero-title {
+  font-size: 0.88rem;
+  font-weight: 900;
+  color: var(--ink);
+  margin-bottom: 2px;
+}
+
+.featured-hero-desc {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--ink-soft);
+  line-height: 1.4;
+}
+
+.featured-sheet-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.featured-grid-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 5px;
+  padding: 10px 6px;
+  border-radius: 14px;
+  background: var(--surface-sunk);
+  border: 1px solid var(--line);
+  font-family: var(--font-main);
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+.featured-grid-item:hover { border-color: var(--sky); }
+
+.featured-grid-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--sky);
+  display: grid;
+  place-items: center;
+  font-size: 1rem;
+}
+
+.featured-grid-title {
+  font-size: 0.74rem;
+  font-weight: 900;
+  color: var(--ink);
+  line-height: 1.25;
+}
+
+.featured-grid-desc {
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+  line-height: 1.3;
+}
+
+/* =========================================================================
+ * وجهة «مناسباتي» (#tabMyList): المنشورة أولاً ثم «قائمتي»
+ * ========================================================================= */
+.my-published-section {
+  margin-bottom: 20px;
+}
+.my-published-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.my-published-list > .event-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.my-list-saved-section {
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+}
+.my-list-head-title h3 {
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: var(--ink);
+}
+.my-events-empty .gold-action-btn {
+  margin-top: 14px;
+}
