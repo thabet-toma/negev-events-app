@@ -111,18 +111,16 @@ void main() {
         reason: 'السطر الصغير يقول أين الستوري الذي تشير إليه البطاقة',
       );
 
-      // حارس الموضع: البطاقة **تحت** شريط الستوريات لا عائمة فوقه. حين كانت
-      // `Positioned` في الـStack كانت تغطّي لثلاث ثوانٍ رأسَ التغذية وشريط
-      // الستوريات ورقاقة الألبومات — وهي تشير إلى أوّل حلقة في ذلك الشريط.
-      // العودة إلى الطفو تُسقط هذا التأكيد (`cardTop < stripBottom`).
-      final stripBottom =
-          tester.getBottomLeft(find.byKey(const Key('stories_strip'))).dy;
+      // حارس الموضع: البطاقة **تحت** رأس التغذية (الرقاقات) لا عائمة فوقه.
+      // العودة إلى الطفو تُسقط هذا التأكيد (`cardTop < headerBottom`).
+      final headerBottom =
+          tester.getBottomLeft(find.byKey(const Key('albums_entry_chip'))).dy;
       final cardTop =
           tester.getTopLeft(find.byKey(const Key('home_entry_card'))).dy;
       expect(
         cardTop,
-        greaterThanOrEqualTo(stripBottom),
-        reason: 'أعلى البطاقة تحت أسفل شريط الستوريات',
+        greaterThanOrEqualTo(headerBottom),
+        reason: 'أعلى البطاقة تحت صفّ الرقاقات في رأس التغذية',
       );
 
       // المؤقّت ثلاث ثوانٍ؛ أربعٌ تكفيه، والبطاقة تغيب بلا نقر.

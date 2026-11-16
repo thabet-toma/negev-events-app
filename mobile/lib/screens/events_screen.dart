@@ -9,7 +9,6 @@ import '../main.dart';
 import '../models/event.dart';
 import '../models/live.dart';
 import '../models/notification.dart' as notif;
-import '../models/stats_ticker.dart';
 import '../state/audio_coordinator.dart';
 import '../state/home_ticker.dart';
 import '../state/rate_us.dart';
@@ -157,10 +156,11 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   /// نفسها تصل في [_storiesList]، فلا `Future` محفوظ لا يقرأه أحد (تذكرة #173).
   bool _storiesRequested = false;
 
-  /// الستوريات بعد وصولها — تحمل المواضع الثلاثة (تذكرة #173)، وكل موضع
-  /// يرشّح نسخته: الشريط `bar` والكاروسيل `carousel` والإعلان بين الكروت
-  /// `feed`. نسخة محلّية لا `FutureBuilder` حول كل موضع، لأن إعلان التغذية
-  /// يُبنى داخل `_buildList` نفسها — نفس نمط `_types`/`_typesList` أدناه.
+  /// الستوريات بعد وصولها — تحمل المواضع الثلاثة (تذكرة #173): موضعَا
+  /// `carousel` و`bar` يُعرضان معاً في البطاقة الإعلانية الكبيرة أعلى
+  /// التغذية، وموضع `feed` إعلاناً بين الكروت. نسخة محلّية لا `FutureBuilder`
+  /// حول كل موضع، لأن إعلان التغذية يُبنى داخل `_buildList` نفسها — نفس نمط
+  /// `_types`/`_typesList` أدناه.
   List<Story> _storiesList = const [];
 
   /// فاصل إعلان التغذية — من `feed_ad_interval` في ردّ الستوريات (تذكرة #173).
@@ -180,13 +180,13 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   bool _entryCardShown = false;
   Timer? _entryCardTimer;
 
-  /// حالة البث لكبسة الشريط وشارتها — `null` قبل أول ردّ أو عند فشله،
-  /// والكبسة ظاهرة وقابلة للكبس في الحالتين.
+  /// حالة البث لكبسولة البطاقة الكبيرة ورقاقة البث — `null` قبل أول ردّ أو عند
+  /// فشله، والكبسة ظاهرة وقابلة للكبس في الحالتين.
   LiveChannel? _liveChannel;
 
-  /// التعميم الحيّ وشريط الإحصاءات (#172) يعيشان في `AppServices.homeTicker`
-  /// وحده — مشتركين بين الهيكل وهذه الشاشة، ومصدر العرض والإغلاق واحد. لا
-  /// لقطة محلية هنا: لقطة محلية كانت تسمح بشريطين لتعميم واحد.
+  /// التعميم الحيّ (#172) يعيش في `AppServices.homeTicker` وحده — مشتركاً بين
+  /// الهيكل وهذه الشاشة، ومصدر العرض والإغلاق واحد. لا لقطة محلية هنا: لقطة
+  /// محلية كانت تسمح بشريطين لتعميم واحد.
   Future<List<OccasionType>>? _types;
   Future<List<Village>>? _villages;
 
@@ -199,14 +199,13 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   List<Announcement> _announcements = const [];
   Pagination? _pagination;
 
-  /// «الأكثر تفاعلاً هذا الأسبوع» (تذكرة #177) كما وصلت من الخادم — بلا
-  /// ترشيح ولا ترتيب هنا: النافذة والبوابة والعزاء والحدّ والترتيب كلها في
-  /// `listTrendingEvents`. فارغة = لا شريط في الشجرة أصلاً (لا مساحة محجوزة).
-  List<Event> _trending = const [];
+  /// «الأعراس المميزة» كما وصلت من الخادم (`GET /api/events/featured`) — بلا
+  /// ترشيح ولا ترتيب هنا. فارغة = لا قسم في الشجرة أصلاً (لا مساحة محجوزة).
+  List<Event> _featured = const [];
 
-  /// تسلسل نداءات الشريط: ردٌّ متأخر لمحافظة أو وضع سابق يُهمَل، ولا يرسم
+  /// تسلسل نداءات القسم: ردٌّ متأخر لمحافظة أو وضع سابق يُهمَل، ولا يرسم
   /// بطاقاتٍ فوق ما يخصّ الشاشة الآن.
-  int _trendingSeq = 0;
+  int _featuredSeq = 0;
   bool _initialLoading = true;
   bool _loadingMore = false;
   Object? _error;
@@ -293,13 +292,11 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     if (!_didInit) {
       _didInit = true;
       _loadFirstPage();
-      // «الأكثر تفاعلاً» (تذكرة #177) مع أول تحميل — قسمٌ واحد لا ينتظر أي
-      // سطح آخر، ولا مستمع `RegionStore` جديد: التغذية لا تسمعه اليوم،
-      // وسماعُ القسم وحده يجعله يخالفها.
-      _loadTrending();
+      // «الأعراس المميزة» مع أول تحميل — قسمٌ واحد لا ينتظر أي سطح آخر.
+      _loadFeatured();
       _loadLiveChannel();
-      // شريط الإحصاءات والتعميم (#172): المخزن المشترك يحمّل مرّة واحدة، وإن
-      // سبقه الهيكل (وهو الأصل) لا يتضاعف النداء.
+      // التعميم الحيّ (#172): المخزن المشترك يحمّل مرّة واحدة، وإن سبقه
+      // الهيكل (وهو الأصل) لا يتضاعف النداء.
       AppServices.of(context).homeTicker.ensureLoaded();
       // بعد أول إطار: بطاقة الدخول نداء ثانٍ لا يشترك في بناء التغذية، فلا
       // يؤخّر أول كرت ولا يمنع ظهوره إن تأخّر.
@@ -347,7 +344,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     });
   }
 
-  /// GET /api/live لكبسة البث في شريط الستوريات. الفشل صامت: الكبسة تبقى بلا
+  /// GET /api/live لكبسولة البث المباشر. الفشل صامت: الكبسة تبقى ظاهرة بلا
   /// شارة.
   Future<void> _loadLiveChannel() async {
     try {
@@ -503,13 +500,21 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
 
   @override
   void didPushNext() {
-    _covered = true;
+    if (mounted) {
+      setState(() => _covered = true);
+    } else {
+      _covered = true;
+    }
     _audio?.pause(this);
   }
 
   @override
   void didPopNext() {
-    _covered = false;
+    if (mounted) {
+      setState(() => _covered = false);
+    } else {
+      _covered = false;
+    }
     _autoplayCurrent();
   }
 
@@ -690,24 +695,23 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     }
   }
 
-  /// «الأكثر تفاعلاً هذا الأسبوع» (تذكرة #177) — نداء واحد يرسم الشريط أو
-  /// يُخفيه. **تُفرَّغ القائمة قبل الطلب** لا بعده (درس #175): لا تبقى بطاقات
-  /// محافظة سابقة معروضة تحت تغذية محافظة جديدة أثناء انتظار الردّ. وردٌّ
-  /// متأخر (`seq` مختلف) يُهمَل، وفشلُ الشبكة يتركها فارغة فيختفي الشريط بلا
-  /// رسالة — القسم لا يعرض خطأً، و«لا نتيجة» حالته الطبيعية.
-  Future<void> _loadTrending() async {
-    final seq = ++_trendingSeq;
-    if (_trending.isNotEmpty) setState(() => _trending = const []);
+  /// «الأعراس المميزة» — نداء واحد يرسم القسم أو يُخفيه. **تُفرَّغ القائمة
+  /// قبل الطلب** لا بعده: لا تبقى بطاقات محافظة سابقة معروضة تحت تغذية
+  /// محافظة جديدة أثناء انتظار الردّ. وردٌّ متأخر (`seq` مختلف) يُهمَل، وفشلُ
+  /// الشبكة يتركها فارغة فيختفي القسم بصمت.
+  Future<void> _loadFeatured() async {
+    final seq = ++_featuredSeq;
+    if (_featured.isNotEmpty) setState(() => _featured = const []);
 
     List<Event> events;
     try {
-      events = await AppServices.of(context).api.trendingEvents(allRegions: _allRegions);
+      events = await AppServices.of(context).api.featuredEvents(allRegions: _allRegions);
     } catch (_) {
       events = const [];
     }
 
-    if (!mounted || seq != _trendingSeq) return;
-    setState(() => _trending = events);
+    if (!mounted || seq != _featuredSeq) return;
+    setState(() => _featured = events);
   }
 
   /// يلتقط ما هو معروض الآن قبل أي تغيير فلتر فعلي — القائمة وموضعها والفلتر
@@ -1135,9 +1139,9 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   void _expandToAllRegions() {
     setState(() => _allRegions = true);
     _loadFirstPage();
-    // الشريط فوق الكروت يقرأ المحافظة نفسها: توسيعٌ بلا إعادة جلبه يتركه
+    // القسم فوق الكروت يقرأ المحافظة نفسها: توسيعٌ بلا إعادة جلبه يتركه
     // يعرض محافظةً واحدة فوق تغذيةٍ فيها كل المحافظات.
-    _loadTrending();
+    _loadFeatured();
   }
 
   Future<void> _openEvent(int eventId) async {
@@ -1392,9 +1396,9 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
 
   @override
   Widget build(BuildContext context) {
-    // ستوريات موضع `carousel` (تذكرة #173): كاروسيل بانرات أعلى التغذية
-    // مباشرة. بلا ستوريات كاروسيل لا عنصر ولا مساحة — التخطيط كما كان.
-    final carouselStories = _storiesFor('carousel');
+    // البطاقة الإعلانية الكبيرة: ستوريات `carousel` ثم `bar` بهذا الترتيب.
+    // صفر ستوريات = لا بطاقة ولا مساحة محجوزة، وتنتقل كبسة البث إلى الرقاقات.
+    final bigStories = [..._storiesFor('carousel'), ..._storiesFor('bar')];
     _scheduleMeasureHeader();
     return Scaffold(
       body: Stack(
@@ -1414,12 +1418,8 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                       final services = AppServices.of(context);
                       _loadStories();
                       _loadLiveChannel();
-                      // «الأكثر تفاعلاً» (تذكرة #177) مع السحب كبقية أسطح
-                      // الاكتشاف: نافذته سبعة أيام تتحرّك مع الساعة، فسحبٌ لا
-                      // يجددها يُبقي الشريط على أرقام الأمس.
-                      _loadTrending();
-                      // السحب للتحديث يقرأ الشريط والتعميم من جديد كذلك — رقمُ
-                      // الشريط يُبطل كل خمس دقائق على الخادم، لا عند كل سحب.
+                      _loadFeatured();
+                      // السحب للتحديث يقرأ التعميم من جديد كذلك.
                       services.homeTicker.refresh();
                       // السحب للتحديث يلتقط أيضاً مقطعاً افتراضياً رفعه الأدمن للتوّ.
                       services.audio
@@ -1456,13 +1456,15 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   // حين يُفتح لوح الفلاتر يحلّ محلّ الرأس بدل أن يجلس فوقه: اللوح
-                                  // يرسم أدواته بنفسه، فلا تبقى وراءه نسخة ثانية من شريط
-                                  // الستوريات ولا من كبسة الفلاتر، مع حفظ الارتفاع كي لا يقفز
+                                  // يرسم أدواته بنفسه، فلا تبقى وراءه نسخة ثانية من الرقاقات
+                                  // ولا من كبسة الفلاتر، مع حفظ الارتفاع كي لا يقفز
                                   // المحتوى خلف الغطاء.
                                   if (!_showTopChrome)
                                     KeyedSubtree(
                                       key: _feedHeaderKey,
-                                      child: _feedHeader(),
+                                      child: _feedHeader(
+                                        showLiveChip: bigStories.isEmpty,
+                                      ),
                                     )
                                   else
                                     SizedBox(height: _feedHeaderExtent),
@@ -1470,9 +1472,8 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                                   // الكروت مباشرةً كبطاقة الدخول — يدفعها قليلاً ثم يختفي بـ×،
                                   // ولا طبقة تحجبها ولا ورقة حواريّة. يتبع تبديل المحافظة بنفسه.
                                   const RegionBanner(),
-                                  // بطاقة الدخول التسويقية: عنصر عادي في عمود التغذية — **تحت**
-                                  // شريط الستوريات لا فوقه — فتدفع الكروت قليلاً ثم تختفي ويعود
-                                  // التخطيط. بطاقةٌ تشير إلى أوّل ستوري لا يجوز أن تحجبه.
+                                  // بطاقة الدخول التسويقية: عنصر عادي في عمود التغذية — تدفع
+                                  // الكروت قليلاً ثم تختفي ويعود التخطيط.
                                   if (_entryCardVisible && _entryStory != null)
                                     Padding(
                                       padding: const EdgeInsets.fromLTRB(
@@ -1484,22 +1485,26 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                                             _openEntryStory(_entryStory!),
                                       ),
                                     ),
-                                  // كاروسيل البانرات أعلى التغذية (تذكرة #173)، تحت بطاقة الدخول
-                                  // التي تختفي وحدها — ثم تبدأ الكروت.
-                                  if (carouselStories.isNotEmpty)
-                                    _StoryCarousel(
-                                      stories: carouselStories,
+                                  // البطاقة الإعلانية الكبيرة: ستوريات `carousel` ثم `bar`،
+                                  // وفوق زاويتها العليا كبسولة البث المباشر.
+                                  if (bigStories.isNotEmpty)
+                                    _BigStoryCard(
+                                      stories: bigStories,
+                                      liveChannel: _liveChannel,
+                                      isActive: widget.isActive && !_covered,
+                                      onLiveTap: () => openLiveScreen(context),
                                       onOpen: (index) =>
-                                          _openStoryList(carouselStories, index),
+                                          _openStoryList(bigStories, index),
                                       onCta: (story) =>
                                           openStoryTarget(context, story),
                                     ),
-                                  // «الأكثر تفاعلاً هذا الأسبوع» (تذكرة #177): تحت الكاروسيل وفوق
-                                  // الكروت. بلا نتيجة لا عنصر في الشجرة إطلاقاً — لا عنوان بلا
+                                  // «الأعراس المميزة»: تحت البطاقة الكبيرة وفوق الكروت.
+                                  // بلا نتيجة لا عنصر في الشجرة إطلاقاً — لا عنوان بلا
                                   // بطاقات ولا مساحة محجوزة تُزيح الكرت الأول.
-                                  if (_trending.isNotEmpty)
-                                    _TrendingStrip(
-                                      events: _trending,
+                                  if (_featured.isNotEmpty)
+                                    _FeaturedCarousel(
+                                      events: _featured,
+                                      isActive: widget.isActive && !_covered,
                                       onOpen: (eventId) => _openEvent(eventId),
                                     ),
                                 ],
@@ -1592,8 +1597,8 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                           ],
                         ),
                       ),
-                      // كبسة البث والستوريات في الشريط الظاهر على التغذية
-                      // وحدها؛ لا نسخة ثانية لهما داخل اللوح.
+                      // كبسة البث والبطاقة الإعلانية في التغذية وحدها؛
+                      // لا نسخة ثانية منهما داخل اللوح.
                       _SearchBar(
                         controller: _searchController,
                         onChanged: _onSearchChanged,
@@ -1637,11 +1642,10 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     );
   }
 
-  /// رأس التغذية: صفّ كروم واحد في أعلاه، ثم رقاقتا «ألبومات الأعراس» و
-  /// «المناسبات المنتهية» في صفّهما، ثم شريط الستوريات — وكلُّه يدفع التغذية
-  /// تحته. **ليس عائماً**: لا تسمية ستوري ولا أيقونة تغطّي صورة الكرت الأول،
-  /// وهي عِلّة الشكوى (الشكل «أ» في `docs/prototype/home-2026-10.html`).
-  Widget _feedHeader() {
+  /// رأس التغذية: صفّ كروم واحد في أعلاه، ثم رقاقات البث (حين لا ستوريات)
+  /// و«ألبومات الأعراس» و«المناسبات المنتهية»، ثم التعميم الحيّ حين يوجد —
+  /// وكلُّه يدفع التغذية تحته. **ليس عائماً**: لا عنصر يغطّي صورة الكرت الأول.
+  Widget _feedHeader({required bool showLiveChip}) {
     return SafeArea(
       bottom: false,
       child: Padding(
@@ -1652,34 +1656,28 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
           children: [
             _chromeRow(),
             const SizedBox(height: 6),
-            // «ألبومات الأعراس» (تذكرة #101، القرار D11) و«المناسبات المنتهية»
-            // صفّهما الخاص تحت الشريط، وهما العنصران الوحيدان خارجه بقرار
-            // المالك. `Wrap` لا `Row`: على هاتف ٣٢٠dp ينكسر الصفّ إلى سطرين
-            // بدل أن يفيض النصّ خارج الشاشة.
+            // حين لا ستوريات إطلاقاً: كبسة البث رقاقةً أولى قبل «ألبومات الأعراس»
+            // و«المناسبات المنتهية». `Wrap` لا `Row`: على هاتف ٣٢٠dp ينكسر الصفّ
+            // إلى سطرين بدل أن يفيض النصّ خارج الشاشة.
             Align(
               alignment: AlignmentDirectional.centerStart,
               child: Wrap(
                 spacing: 8,
                 runSpacing: 6,
                 children: [
+                  if (showLiveChip)
+                    _LiveChip(
+                      channel: _liveChannel,
+                      onTap: () => openLiveScreen(context),
+                    ),
                   _albumsEntryChip(),
                   _archiveToggleChip(),
                 ],
               ),
             ),
-            // شريط الإحصائيات (#172): عدد القادم في كل محافظة والمجموع، أو
-            // التعميم الحيّ الذي يحلّ محلّه — من المخزن المشترك نفسه الذي يقرأه
-            // الهيكل ويغلقه. عنصر عادي في العمود — لا عائم — فوق شريط الستوريات
-            // كما في الويب (بعد شريط التعاميم هناك).
+            // التعميم الحيّ وحده حين يوجد (#172)، من المخزن المشترك نفسه الذي
+            // يقرأه الهيكل ويغلقه.
             _HomeTicker(store: AppServices.of(context).homeTicker),
-            // شريط الستوريات ظاهر هنا دائماً لا داخل لوح الفلاتر: كبسة البث
-            // أوّله ثم ستوريات التسويق، ثم تبدأ الكروت تحته. وموضع الشريط
-            // `bar` وحده (تذكرة #173): الكاروسيل والإعلان لهما موضعاهما.
-            _StoriesStrip(
-              stories: _storiesFor('bar'),
-              channel: _liveChannel,
-              onLiveTap: () => openLiveScreen(context),
-            ),
           ],
         ),
       ),
@@ -1768,13 +1766,9 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     );
   }
 
-  /// مجموعة أيقونات الشريط، بترتيب المالك: النشر (بلون التمييز، أوّلها)،
-  /// الأجندة، التحديث، الجرس (لمسجَّل وحده)، كتم الصوت، و«حسابي»
-  /// **آخرها برمز لا بكلمة**. كلٌّ منها ٣٠×٣٠ (مقاييس `.icon-btn` في
-  /// `docs/prototype/home-2026-10.html`)، فتمرّ ستّاً في صفّ واحد على هاتف
-  /// ٣٦٠dp بلا فيض. وأيقونة الدعم عبر واتساب ليست هنا: لها مكانها في لوح
-  /// الفلاتر — «خيار واحد» في الشريط، والرقاقتان (الألبومات والمناسبات
-  /// المنتهية) وحدهما خارجه.
+  /// مجموعة أيقونات الشريط: النشر (بلون التمييز، أوّلها)، الأجندة، التحديث،
+  /// الجرس (لمسجَّل وحده)، وكتم الصوت. كلٌّ منها ٣٠×٣٠، فتمرّ في صفّ واحد
+  /// على هاتف ٣٦٠dp بلا فيض. «حسابي» في الشريط السفلي (وفي لوح الفلاتر).
   Widget _chromeControlsGroup() {
     final auth = AppServices.of(context).auth;
 
@@ -1811,6 +1805,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
             onPressed: () async {
               _loadStories();
               _loadLiveChannel();
+              _loadFeatured();
               // تحديث في المكان: الصفحة الأولى تُستبدل والكرت المعروض يبقى
               // أمام المستخدم بدل أن يقفز إلى أوّله.
               await _refreshInPlace();
@@ -1825,40 +1820,16 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
               return _NotificationBell(userId: auth.user!.id);
             },
           ),
-          // زوج الصوت والدخول: مفتاحه باقٍ لأنّ `live_test` يحرس به أنّ كبسة
-          // البث في شريط الستوريات ليست داخله.
-          Row(
-            key: const Key('feed_audio_auth_container'),
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              AnimatedBuilder(
-                animation: _audio!,
-                builder: (context, _) => _chromeIcon(
-                  key: const Key('feed_mute_toggle'),
-                  icon: _audio!.isMuted
-                      ? Icons.volume_off_rounded
-                      : Icons.volume_up_rounded,
-                  tooltip: _audio!.isMuted ? 'تشغيل الصوت' : 'كتم الصوت',
-                  onPressed: _toggleMute,
-                ),
-              ),
-              // «حسابي» أيقونةً وحدها بتلميحها: الكلمة لم تعد ظاهرة في الشريط
-              // (طلب المالك)، والنقر يدفع شاشة «حسابي» من داخل
-              // `AuthActionButton` — لا حوار تأكيد ولا خروج من هنا.
-              // `IconButtonTheme` هنا يقصّ زرّه (‏٤٨dp افتراضياً) إلى ٣٠×٣٠ بلا
-              // لمس الزرّ نفسه.
-              IconButtonTheme(
-                data: IconButtonThemeData(
-                  style: IconButton.styleFrom(
-                    padding: EdgeInsets.zero,
-                    minimumSize: const Size(30, 30),
-                    maximumSize: const Size(30, 30),
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                ),
-                child: const AuthActionButton(compact: true, color: Colors.white),
-              ),
-            ],
+          AnimatedBuilder(
+            animation: _audio!,
+            builder: (context, _) => _chromeIcon(
+              key: const Key('feed_mute_toggle'),
+              icon: _audio!.isMuted
+                  ? Icons.volume_off_rounded
+                  : Icons.volume_up_rounded,
+              tooltip: _audio!.isMuted ? 'تشغيل الصوت' : 'كتم الصوت',
+              onPressed: _toggleMute,
+            ),
           ),
         ],
       ),
@@ -2692,44 +2663,17 @@ class _AnnouncementInfoLine extends StatelessWidget {
   }
 }
 
-/// ارتفاع شريط الستوريات. الشريط في رأس التغذية يدفعها تحته، فكل زيادة فيه
-/// تُقتطع من ارتفاع الكرت لا أن تغطّيه: يبقى ٨٢ كما في النموذج
-/// (`docs/prototype/home-2026-10.html`، العرض «أ») ولا يكبر.
-const double _storiesStripHeight = 82;
-
 /// خلفية تعميم ثابتة مستقلة عن الوضع الفاتح/الداكن — **نفس**
 /// `_broadcastBannerColor` في `home_shell.dart` حرفياً (قرار #20 خطوة 15:
 /// تدرّج أغمق من `--warn` كي لا يهتزّ تباين النص الأبيض بين الوضعين). تعميمٌ
 /// هنا وآخر هناك يجب أن يُقرآ الشيء نفسه لا شكلين لمعنى واحد.
 const Color _homeBroadcastColor = Color(0xFF78350F);
 
-/// «حُدّث HH:MM» من لحظة حساب الخادم، بالساعة **المحلية للجهاز** وبخانتين
-/// دائماً (‎09:07‎ لا ‎9:7‎). `null` (حقل غائب أو غير مقروء تاريخاً) يعطي
-/// نصاً فارغاً، فلا يُكتب وقتٌ مخترع.
-String _statsUpdatedLabel(DateTime? updatedAt) {
-  if (updatedAt == null) return '';
-  final local = updatedAt.toLocal();
-  final hours = local.hour.toString().padLeft(2, '0');
-  final minutes = local.minute.toString().padLeft(2, '0');
-  return 'حُدّث $hours:$minutes';
-}
-
-/// شريط الإحصاءات في الرئيسية (تذكرة #172) — أو **التعميم الحيّ مكانه**.
-///
-/// الأولوية للتعميم: وجود تعميم حيّ يُخفي الشريط كاملاً، فلا يُعرض الاثنان
-/// معاً في موضع واحد (وهو ما يفعله الويب أيضاً: `renderStatsTicker` تقرأ قائمة
-/// التعاميم نفسها). و**لا رقم قبل حسم حالة التعاميم** (`broadcastsKnown`): رقمٌ
-/// يظهر ثم يختفي حين يصل تعميم ومضةٌ يحكم بها ترتيب الشبكة وحده.
+/// التعميم الحيّ في الرئيسية (تذكرة #172) — يُعرض وحده حين يوجد، وإلا لا شيء.
 ///
 /// الحالة من [HomeTickerStore] لا من لقطة محلية: الهيكل يستمع لإشارة Socket
 /// ويغلق الشريط من شريطه، وكلاهما يقرأ الحالة نفسها — فلا شريطان لتعميم واحد،
-/// وإغلاق أيّهما يعيد شريط الإحصاءات.
-///
-/// والغياب الكامل — لا تعميم ولا شريط، أو شريط بلا محافظات — يعطي
-/// `SizedBox.shrink()`: لا إطار فارغ ولا حشوة في التخطيط.
-///
-/// ولا حساب في هذا الصنف: الأعداد والمجموع ولحظة الحساب كما وصلت من الخادم
-/// (`StatsTicker` شرحُ العقد هناك)، والشرط «قادم» و«ظاهر» في الخدمة وحدها.
+/// وإغلاق أيّهما يخفيه عن الجميع.
 class _HomeTicker extends StatelessWidget {
   const _HomeTicker({required this.store});
 
@@ -2741,20 +2685,15 @@ class _HomeTicker extends StatelessWidget {
       listenable: store,
       builder: (context, _) {
         final live = store.broadcast;
-        if (live != null) return _broadcastBar(live);
-        if (!store.broadcastsKnown) return const SizedBox.shrink();
-        final ticker = store.stats;
-        if (ticker == null || ticker.regions.isEmpty) {
-          return const SizedBox.shrink();
-        }
-        return _statsBar(context, ticker);
+        if (live == null) return const SizedBox.shrink();
+        return _broadcastBar(live);
       },
     );
   }
 
   /// التعميم الحيّ — سطرٌ ورسالة، وزرّ إغلاق واحد يشاركه معه شريط الهيكل:
-  /// الإغلاق من أيّهما يمرّ بـ`HomeTickerStore.dismissActive`، فتعود الإحصاءات
-  /// في الموضع نفسه (تذكرة #172، الجولة ٢). ومركز الإشعارات لا يُمَسّ.
+  /// الإغلاق من أيّهما يمرّ بـ`HomeTickerStore.dismissActive`، ومركز
+  /// الإشعارات لا يُمَسّ.
   Widget _broadcastBar(({int id, String title, String message}) live) {
     return Container(
       key: const Key('home_broadcast_ticker'),
@@ -2811,175 +2750,517 @@ class _HomeTicker extends StatelessWidget {
       ),
     );
   }
+}
 
-  /// صفّ المحافظات يُمرَّر أفقياً عند الحاجة (شريط لا كتلة): محافظة تُضاف من
-  /// اللوحة غداً لا تفيض على هاتف ضيّق، والمجموع و«حُدّث» ثابتان تحته.
-  Widget _statsBar(BuildContext context, StatsTicker ticker) {
-    return Container(
-      key: const Key('home_stats_ticker'),
-      width: double.infinity,
-      margin: const EdgeInsets.only(top: 6),
-      padding: const EdgeInsets.fromLTRB(10, 7, 10, 7),
-      decoration: BoxDecoration(
-        color: context.c.surface,
-        border: Border.all(color: context.c.line),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.calendar_month_rounded, size: 15, color: context.c.sky),
-              const SizedBox(width: 6),
-              Expanded(
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      for (final region in ticker.regions)
-                        Padding(
-                          // مسافة بين الرقاقات في اتجاه القراءة (RTL) — لا
-                          // اتجاه فيزيائي ثابت.
-                          padding: const EdgeInsetsDirectional.only(end: 6),
-                          child: _regionChip(context, region),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 5),
-          Row(
-            children: [
-              Text(
-                'المجموع ${ticker.total}',
-                key: const Key('home_stats_ticker_total'),
-                style: TextStyle(
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.bold,
-                  color: context.c.ink,
-                ),
-              ),
-              const Spacer(),
-              Text(
-                _statsUpdatedLabel(ticker.updatedAt),
-                key: const Key('home_stats_ticker_updated'),
-                style: TextStyle(fontSize: 11.5, color: context.c.inkSoft),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
+/// نقطة حالة البث المباشر: حمراء نابضة حين البث شغّال (مع احترام
+/// `disableAnimations`)، ورمادية ثابتة حين التوقّف.
+class _LiveDot extends StatefulWidget {
+  const _LiveDot({required this.isLive});
+
+  final bool isLive;
+
+  @override
+  State<_LiveDot> createState() => _LiveDotState();
+}
+
+class _LiveDotState extends State<_LiveDot>
+    with SingleTickerProviderStateMixin {
+  AnimationController? _controller;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncAnimation();
   }
 
-  Widget _regionChip(BuildContext context, StatsRegion region) {
-    return Container(
-      key: Key('home_stats_region_${region.regionId}'),
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
+  @override
+  void didUpdateWidget(covariant _LiveDot oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.isLive != widget.isLive) {
+      _syncAnimation();
+    }
+  }
+
+  void _syncAnimation() {
+    final shouldPulse =
+        widget.isLive && !MediaQuery.of(context).disableAnimations;
+    if (shouldPulse) {
+      final ctrl = _controller ??= AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 700),
+      );
+      if (!ctrl.isAnimating) ctrl.repeat(reverse: true);
+    } else {
+      _controller?.stop();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dotColor = widget.isLive ? context.c.danger : context.c.inkFaint;
+    final core = Container(
+      width: 8,
+      height: 8,
       decoration: BoxDecoration(
-        color: context.c.skyWash,
-        borderRadius: BorderRadius.circular(999),
+        color: dotColor,
+        shape: BoxShape.circle,
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            region.name,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-              color: context.c.skyDeep,
+    );
+    final ctrl = _controller;
+    if (!widget.isLive || ctrl == null || !ctrl.isAnimating) {
+      return core;
+    }
+    return AnimatedBuilder(
+      animation: ctrl,
+      builder: (context, child) {
+        final t = ctrl.value;
+        return Transform.scale(
+          scale: 0.9 + t * 0.25,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: dotColor.withValues(alpha: 0.55 * (1 - t * 0.5)),
+                  blurRadius: 4 + t * 4,
+                  spreadRadius: t * 2,
+                ),
+              ],
+            ),
+            child: child,
+          ),
+        );
+      },
+      child: core,
+    );
+  }
+}
+
+/// كبسولة البث المباشر العائمة فوق الزاوية العليا (جهة البداية في RTL)
+/// للبطاقة الإعلانية الكبيرة.
+class _LiveFloatingPill extends StatelessWidget {
+  const _LiveFloatingPill({required this.channel, required this.onTap});
+
+  final LiveChannel? channel;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.c;
+    final live = channel?.isLive ?? false;
+    return Semantics(
+      button: true,
+      label: live ? 'مباشر · البث المباشر' : 'البث المباشر',
+      child: Material(
+        key: const Key('live_floating_pill'),
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(999),
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
+            decoration: BoxDecoration(
+              color: live
+                  ? cardGround.withValues(alpha: 0.85)
+                  : c.surface.withValues(alpha: 0.90),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(
+                color: live ? c.danger.withValues(alpha: 0.70) : c.line,
+              ),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x40000000),
+                  blurRadius: 10,
+                  offset: Offset(0, 3),
+                ),
+              ],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _LiveDot(isLive: live),
+                const SizedBox(width: 6),
+                if (live) ...[
+                  const Text(
+                    'مباشر',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const Text(
+                    ' · ',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ],
+                Text(
+                  'البث المباشر',
+                  style: TextStyle(
+                    color: live ? Colors.white : c.inkSoft,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(width: 4),
-          Text(
-            '${region.upcomingCount}',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w800,
-              color: context.c.skyDeep,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
 }
 
-/// ارتفاع كاروسيل البانرات (تذكرة #173): بانر أفقي واحد لكل ستوري موضع
-/// `carousel`. يُقتطع من ارتفاع الكرت كما يُقتطع الشريط، فلا يغطّي شيئاً.
-const double _storyCarouselHeight = 96;
+/// رقاقة البث المباشر في صفّ الرقاقات — تظهر أولاً حين لا توجد ستوريات إطلاقاً.
+class _LiveChip extends StatelessWidget {
+  const _LiveChip({required this.channel, required this.onTap});
 
-/// شريط الستوريات الظاهر دائماً في رأس التغذية: كبسة البث أولاً — فعل مستقل يبقى
-/// وحده إن لم تصل ستوريات — ثم ستوريات التسويق أفقياً.
-/// ستوريات موضع `bar` وحدها: كل موضع يعرض ما يخصّه — الكاروسيل أعلى التغذية
-/// له موضعه، وإعلان «بين الكروت» موضعه بين الكروت. `stories` تصل مرشَّحة من
-/// `_storiesFor('bar')`، فلا ترشيح ثانياً هنا.
-class _StoriesStrip extends StatelessWidget {
-  const _StoriesStrip({
-    required this.stories,
-    required this.channel,
-    required this.onLiveTap,
-  });
-
-  final List<Story> stories;
   final LiveChannel? channel;
-  final VoidCallback onLiveTap;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      key: const Key('stories_strip'),
-      height: _storiesStripHeight,
-      child: Row(
-        children: [
-          // أول عنصر في الجهة اليمنى (RTL) — كبسة البث على محاذاة صفّ
-          // «ألبومات الأعراس» فوقها (الحشو في عمود الكروم).
-          _LiveStoryTile(channel: channel, onTap: onLiveTap),
-          // بلا ستوريات: الكبسة وحدها بلا فاصل ولا شريط فارغ.
-          if (stories.isNotEmpty) ...[
-            Container(
-              width: 1,
-              height: 54,
-              margin: const EdgeInsets.symmetric(horizontal: 6),
-              color: context.c.line,
+    final c = context.c;
+    final live = channel?.isLive ?? false;
+    return Material(
+      key: const Key('live_chip'),
+      color: live ? c.dangerWash : c.surface,
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: live ? c.danger.withValues(alpha: 0.55) : c.line,
             ),
-            Expanded(
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                // رأسي ٢ لا ٤: كرة ٥٤ + فاصل ٥ + تسمية ١١px تبلغ ٧٥٫٥،
-                // والـ٤ كانت تترك ٧٤ فيفيض العمود بكسلٌ واحد على الجهاز
-                // الحقيقي (ظهر شريط الفيضان فوق الأسماء في لقطة 2026-10-25).
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                itemCount: stories.length,
-                separatorBuilder: (_, _) => const SizedBox(width: 12),
-                itemBuilder: (context, index) {
-                  final story = stories[index];
-                  return _StripItem(
-                    highlighted: story.isLive,
-                    label: story.title,
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => StoryViewerScreen(
-                          stories: stories,
-                          initialIndex: index,
-                        ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _LiveDot(isLive: live),
+              const SizedBox(width: 6),
+              Text(
+                'البث المباشر',
+                style: TextStyle(
+                  color: live ? c.ink : c.inkSoft,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              if (live) ...[
+                const SizedBox(width: 6),
+                Container(
+                  key: const Key('live_chip_badge'),
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: c.danger,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: const Text(
+                    'مباشر',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      height: 1.2,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// البطاقة الإعلانية الكبيرة أعلى التغذية: ستوريات `carousel` ثم `bar`،
+/// بنسبة ١٦:١٠ وزوايا ١٨ وهامش ١٢، وكبسولة البث المباشر عائمة فوق زاويتها
+/// العليا. تتقدّم تلقائياً كل ٤ ثوانٍ وتتوقف عند اللمس أو عدم النشاط.
+class _BigStoryCard extends StatefulWidget {
+  const _BigStoryCard({
+    required this.stories,
+    required this.liveChannel,
+    required this.isActive,
+    required this.onLiveTap,
+    required this.onOpen,
+    required this.onCta,
+  });
+
+  final List<Story> stories;
+  final LiveChannel? liveChannel;
+  final bool isActive;
+  final VoidCallback onLiveTap;
+  final void Function(int index) onOpen;
+  final void Function(Story story) onCta;
+
+  @override
+  State<_BigStoryCard> createState() => _BigStoryCardState();
+}
+
+class _BigStoryCardState extends State<_BigStoryCard> {
+  final PageController _pageController = PageController();
+  int _currentPage = 0;
+  Timer? _autoTimer;
+  bool _userTouching = false;
+  bool _disableAnimations = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _disableAnimations = MediaQuery.of(context).disableAnimations;
+    _syncTimer();
+  }
+
+  @override
+  void didUpdateWidget(covariant _BigStoryCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_currentPage >= widget.stories.length && widget.stories.isNotEmpty) {
+      _currentPage = widget.stories.length - 1;
+      if (_pageController.hasClients) {
+        _pageController.jumpToPage(_currentPage);
+      }
+    }
+    _syncTimer();
+  }
+
+  void _syncTimer() {
+    final shouldRun = widget.isActive &&
+        widget.stories.length > 1 &&
+        !_userTouching &&
+        !_disableAnimations;
+    if (!shouldRun) {
+      _autoTimer?.cancel();
+      _autoTimer = null;
+      return;
+    }
+    _autoTimer ??= Timer.periodic(const Duration(seconds: 4), (_) {
+      if (!mounted || !_pageController.hasClients || widget.stories.length <= 1) {
+        return;
+      }
+      final next = (_currentPage + 1) % widget.stories.length;
+      _pageController.animateToPage(
+        next,
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _autoTimer?.cancel();
+    _autoTimer = null;
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.c;
+    final multi = widget.stories.length > 1;
+    return Padding(
+      key: const Key('story_carousel'),
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            decoration: BoxDecoration(
+              color: c.surface,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: c.line),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x18000000),
+                  blurRadius: 10,
+                  offset: Offset(0, 3),
+                ),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(17),
+              child: AspectRatio(
+                aspectRatio: 16 / 10,
+                child: Stack(
+                  children: [
+                    Listener(
+                      onPointerDown: (_) {
+                        _userTouching = true;
+                        _syncTimer();
+                      },
+                      onPointerUp: (_) {
+                        _userTouching = false;
+                        _syncTimer();
+                      },
+                      onPointerCancel: (_) {
+                        _userTouching = false;
+                        _syncTimer();
+                      },
+                      child: PageView.builder(
+                        controller: _pageController,
+                        itemCount: widget.stories.length,
+                        onPageChanged: (index) {
+                          if (mounted) setState(() => _currentPage = index);
+                        },
+                        itemBuilder: (context, index) {
+                          final story = widget.stories[index];
+                          final hasTarget =
+                              story.targetUrl != null && story.targetUrl!.isNotEmpty;
+                          return GestureDetector(
+                            key: Key('story_carousel_media_${story.id}'),
+                            onTap: () => widget.onOpen(index),
+                            behavior: HitTestBehavior.opaque,
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                story.image == null
+                                    ? _storyPlaceholder(context)
+                                    : Image.network(
+                                        story.image!,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (_, _, _) =>
+                                            _storyPlaceholder(context),
+                                      ),
+                                Positioned.fill(
+                                  child: DecoratedBox(
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(
+                                        begin: Alignment.bottomCenter,
+                                        end: Alignment.topCenter,
+                                        colors: [
+                                          cardGround.withValues(alpha: 0.92),
+                                          cardGround.withValues(alpha: 0.35),
+                                          Colors.transparent,
+                                        ],
+                                        stops: const [0.0, 0.55, 1.0],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                Align(
+                                  alignment: AlignmentDirectional.bottomStart,
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 14,
+                                      vertical: 12,
+                                    ),
+                                    child: Row(
+                                      crossAxisAlignment: CrossAxisAlignment.end,
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            story.title,
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 14,
+                                              height: 1.3,
+                                              fontWeight: FontWeight.w900,
+                                              shadows: [
+                                                Shadow(
+                                                  color: Color(0x99000000),
+                                                  blurRadius: 8,
+                                                  offset: Offset(0, 2),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                        if (hasTarget) ...[
+                                          const SizedBox(width: 10),
+                                          FilledButton(
+                                            key: Key('story_carousel_cta_${story.id}'),
+                                            onPressed: () => widget.onCta(story),
+                                            style: FilledButton.styleFrom(
+                                              backgroundColor: c.sky,
+                                              foregroundColor: c.onSky,
+                                              minimumSize: const Size(0, 30),
+                                              padding: const EdgeInsets.symmetric(
+                                                horizontal: 14,
+                                              ),
+                                              tapTargetSize:
+                                                  MaterialTapTargetSize.shrinkWrap,
+                                              textStyle: const TextStyle(
+                                                fontSize: 11.5,
+                                                fontWeight: FontWeight.w900,
+                                              ),
+                                              shape: const StadiumBorder(),
+                                            ),
+                                            child: Text(storyCtaLabel(story)),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
                       ),
                     ),
-                    avatar: story.image == null
-                        ? _storyFallbackAvatar(context)
-                        : Image.network(
-                            story.image!,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) =>
-                                _storyFallbackAvatar(context),
-                          ),
-                  );
-                },
+                    PositionedDirectional(
+                      top: 10,
+                      start: 10,
+                      child: _LiveFloatingPill(
+                        channel: widget.liveChannel,
+                        onTap: widget.onLiveTap,
+                      ),
+                    ),
+                  ],
+                ),
               ),
+            ),
+          ),
+          if (multi) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              key: const Key('story_carousel_dots'),
+              alignment: WrapAlignment.center,
+              spacing: 5,
+              runSpacing: 4,
+              children: [
+                for (var i = 0; i < widget.stories.length; i++)
+                  GestureDetector(
+                    key: Key('story_carousel_dot_$i'),
+                    onTap: () {
+                      if (_pageController.hasClients) {
+                        _pageController.animateToPage(
+                          i,
+                          duration: const Duration(milliseconds: 300),
+                          curve: Curves.easeOutCubic,
+                        );
+                      }
+                    },
+                    child: AnimatedContainer(
+                      duration: _disableAnimations
+                          ? Duration.zero
+                          : const Duration(milliseconds: 250),
+                      width: i == _currentPage ? 22 : 7,
+                      height: 7,
+                      decoration: BoxDecoration(
+                        color: i == _currentPage ? c.gold : c.line,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ],
         ],
@@ -2988,234 +3269,206 @@ class _StoriesStrip extends StatelessWidget {
   }
 }
 
-/// كاروسيل البانرات أعلى التغذية (تذكرة #173): ستوريات موضع `carousel` وحدها،
-/// بانر أفقي لكل واحدة. الصورة تفتح العارض (فمشاهدة الثانيتين تُسجَّل كما في
-/// الشريط)، والزرّ يسجّل النقرة ثم يفتح الرابط — القياس من هذا الموضع لا يضيع.
-class _StoryCarousel extends StatelessWidget {
-  const _StoryCarousel({
-    required this.stories,
+/// «الأعراس المميزة» — كاروسيل تحت البطاقة الإعلانية الكبيرة وفوق الكروت:
+/// `PageView` بنسبة عرض ~0.86 يظهر فيه طرف البطاقة التالية، يتقدّم وحده كل
+/// ٤ ثوانٍ ويتوقّف عند اللمس أو عدم النشاط. بلا مميزة: لا عنوان ولا مساحة.
+class _FeaturedCarousel extends StatefulWidget {
+  const _FeaturedCarousel({
+    required this.events,
+    required this.isActive,
     required this.onOpen,
-    required this.onCta,
   });
 
-  final List<Story> stories;
-
-  /// فتح العارض على حلقة الكاروسيل المنقورة.
-  final void Function(int index) onOpen;
-
-  /// نقرة الزرّ: تسجيل ثم فتح الرابط (`openStoryTarget`).
-  final void Function(Story story) onCta;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.c;
-    return SizedBox(
-      key: const Key('story_carousel'),
-      height: _storyCarouselHeight,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-        itemCount: stories.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 10),
-        itemBuilder: (context, index) {
-          final story = stories[index];
-          final hasTarget = story.targetUrl != null && story.targetUrl!.isNotEmpty;
-          return Container(
-            width: 248,
-            clipBehavior: Clip.antiAlias,
-            decoration: BoxDecoration(
-              color: c.surface,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: c.line),
-            ),
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 92,
-                  height: double.infinity,
-                  child: GestureDetector(
-                    key: Key('story_carousel_media_${story.id}'),
-                    onTap: () => onOpen(index),
-                    behavior: HitTestBehavior.opaque,
-                    child: story.image == null
-                        ? _storyPlaceholder(context)
-                        : Image.network(
-                            story.image!,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) =>
-                                _storyPlaceholder(context),
-                          ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsetsDirectional.fromSTEB(0, 8, 0, 8),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          story.title,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 12,
-                            height: 1.3,
-                            fontWeight: FontWeight.w800,
-                            color: c.ink,
-                          ),
-                        ),
-                        if (hasTarget) ...[
-                          const SizedBox(height: 5),
-                          FilledButton(
-                            key: Key('story_carousel_cta_${story.id}'),
-                            onPressed: () => onCta(story),
-                            style: FilledButton.styleFrom(
-                              backgroundColor: c.sky,
-                              foregroundColor: c.onSky,
-                              minimumSize: const Size(0, 26),
-                              padding: const EdgeInsets.symmetric(horizontal: 10),
-                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              textStyle: const TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                              ),
-                              shape: const StadiumBorder(),
-                            ),
-                            child: Text(storyCtaLabel(story)),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-
-/// «الأكثر تفاعلاً هذا الأسبوع» (تذكرة #177) — شريط أفقي مضغوط بين كاروسيل
-/// البانرات والتغذية: عنوان، ثم بطاقة صغيرة لكل مناسبة (صورة، سطر عنوان، سطر
-/// تاريخ/بلدة). خام وكثيف عمداً — هو مدخلٌ سريع إلى المناسبة لا كرت تغذية
-/// ثانٍ، والبيانات نفسها تأتي بشكل كرت التغذية (`Event.fromJson`).
-///
-/// **ولا يظهر حين لا نتيجة**: الشرط `_trending.isNotEmpty` في `build` الشاشة،
-/// فلا عنوان بلا بطاقات ولا مساحة محجوزة تُزيح الكرت الأول.
-class _TrendingStrip extends StatelessWidget {
-  const _TrendingStrip({required this.events, required this.onOpen});
-
   final List<Event> events;
-
-  /// فتح صفحة المناسبة — الفعل نفسه الذي يفعله كرت التغذية (`_openEvent`).
+  final bool isActive;
   final void Function(int eventId) onOpen;
 
-  /// ارتفاع محدود للشريط: صورة ٦٤ + سطران + حشو صغير. و`ListView` أفقي يمرّ
-  /// ببطاقاته على الشاشات الضيّقة بدل أن يضغطها.
-  static const double _stripHeight = 126;
-  static const double _cardWidth = 132;
-  static const double _imageHeight = 64;
+  @override
+  State<_FeaturedCarousel> createState() => _FeaturedCarouselState();
+}
+
+class _FeaturedCarouselState extends State<_FeaturedCarousel> {
+  final PageController _pageController = PageController(viewportFraction: 0.86);
+  int _currentPage = 0;
+  Timer? _autoTimer;
+  bool _userTouching = false;
+  bool _disableAnimations = false;
+
+  static const double _carouselHeight = 248;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _disableAnimations = MediaQuery.of(context).disableAnimations;
+    _syncTimer();
+  }
+
+  @override
+  void didUpdateWidget(covariant _FeaturedCarousel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_currentPage >= widget.events.length && widget.events.isNotEmpty) {
+      _currentPage = widget.events.length - 1;
+      if (_pageController.hasClients) {
+        _pageController.jumpToPage(_currentPage);
+      }
+    }
+    _syncTimer();
+  }
+
+  void _syncTimer() {
+    final shouldRun = widget.isActive &&
+        widget.events.length > 1 &&
+        !_userTouching &&
+        !_disableAnimations;
+    if (!shouldRun) {
+      _autoTimer?.cancel();
+      _autoTimer = null;
+      return;
+    }
+    _autoTimer ??= Timer.periodic(const Duration(seconds: 4), (_) {
+      if (!mounted || !_pageController.hasClients || widget.events.length <= 1) {
+        return;
+      }
+      final next = (_currentPage + 1) % widget.events.length;
+      _pageController.animateToPage(
+        next,
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _autoTimer?.cancel();
+    _autoTimer = null;
+    _pageController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final c = context.c;
     return Column(
-      key: const Key('trending_strip'),
+      key: const Key('featured_carousel'),
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsetsDirectional.fromSTEB(16, 8, 16, 6),
-          child: Text(
-            'الأكثر تفاعلاً هذا الأسبوع',
-            style: TextStyle(
-              fontSize: 13.5,
-              fontWeight: FontWeight.w800,
-              color: c.ink,
-            ),
+          padding: const EdgeInsetsDirectional.fromSTEB(12, 10, 12, 8),
+          child: Row(
+            children: [
+              const Icon(Icons.star_rounded, size: 18, color: cardGold),
+              const SizedBox(width: 6),
+              Text(
+                'الأعراس المميزة',
+                style: TextStyle(
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.w900,
+                  color: c.ink,
+                ),
+              ),
+            ],
           ),
         ),
         SizedBox(
-          height: _stripHeight,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            itemCount: events.length,
-            separatorBuilder: (_, _) => const SizedBox(width: 10),
-            itemBuilder: (context, index) {
-              final event = events[index];
-              // سطر التاريخ/البلدة بنفس مُهيّئات الكرت (`arabicEventDate`،
-              // واسم القرية تحت البند الجامع) — نصّ واحد لكل مناسبة في الشاشة.
-              final meta = [
-                arabicEventDate(event.eventDate),
-                event.villageDisplayName ?? event.town,
-              ].where((part) => part.isNotEmpty).join(' — ');
+          height: _carouselHeight,
+          child: Listener(
+            onPointerDown: (_) {
+              _userTouching = true;
+              _syncTimer();
+            },
+            onPointerUp: (_) {
+              _userTouching = false;
+              _syncTimer();
+            },
+            onPointerCancel: (_) {
+              _userTouching = false;
+              _syncTimer();
+            },
+            child: PageView.builder(
+              controller: _pageController,
+              padEnds: false,
+              itemCount: widget.events.length,
+              onPageChanged: (index) {
+                if (mounted) setState(() => _currentPage = index);
+              },
+              itemBuilder: (context, index) {
+                final event = widget.events[index];
+                final meta = [
+                  arabicEventDate(event.eventDate),
+                  event.villageDisplayName ?? event.town,
+                ].where((part) => part.isNotEmpty).join(' — ');
 
-              return SizedBox(
-                width: _cardWidth,
-                child: Material(
-                  color: c.surface,
-                  clipBehavior: Clip.antiAlias,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    side: BorderSide(color: c.line),
+                return Padding(
+                  padding: EdgeInsetsDirectional.only(
+                    start: index == 0 ? 12 : 5,
+                    end: index == widget.events.length - 1 ? 12 : 5,
                   ),
-                  child: InkWell(
-                    key: Key('trending_card_${event.id}'),
-                    onTap: () => onOpen(event.id),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        SizedBox(
-                          height: _imageHeight,
-                          width: double.infinity,
-                          child: event.posterUrl == null
-                              ? _placeholder(c)
-                              : Image.network(
-                                  event.posterUrl!,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, _, _) => _placeholder(c),
+                  child: Material(
+                    color: c.surface,
+                    clipBehavior: Clip.antiAlias,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(18),
+                      side: const BorderSide(color: cardGold, width: 1.5),
+                    ),
+                    child: InkWell(
+                      key: Key('featured_card_${event.id}'),
+                      onTap: () => widget.onOpen(event.id),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(
+                            child: ColoredBox(
+                              color: cardGround,
+                              child: event.posterUrl == null
+                                  ? _placeholder(c)
+                                  : Image.network(
+                                      event.posterUrl!,
+                                      fit: BoxFit.contain,
+                                      errorBuilder: (_, _, _) =>
+                                          _placeholder(c),
+                                    ),
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(10, 8, 10, 9),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  event.cardHeadline,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    height: 1.3,
+                                    fontWeight: FontWeight.w800,
+                                    color: c.ink,
+                                  ),
                                 ),
-                        ),
-                        Padding(
-                          padding: const EdgeInsetsDirectional.fromSTEB(8, 6, 8, 0),
-                          child: Text(
-                            event.cardHeadline,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 11.5,
-                              height: 1.35,
-                              fontWeight: FontWeight.w800,
-                              color: c.ink,
+                                const SizedBox(height: 2),
+                                Text(
+                                  meta,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    height: 1.3,
+                                    fontWeight: FontWeight.w600,
+                                    color: c.inkSoft,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                        ),
-                        Padding(
-                          padding: const EdgeInsetsDirectional.fromSTEB(8, 2, 8, 0),
-                          child: Text(
-                            meta,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 10.5,
-                              height: 1.35,
-                              fontWeight: FontWeight.w600,
-                              color: c.inkSoft,
-                            ),
-                          ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           ),
         ),
       ],
@@ -3223,10 +3476,11 @@ class _TrendingStrip extends StatelessWidget {
   }
 
   /// بديل الصورة الغائبة أو الفاشلة — نفس رمز الفرح الذي يستعمله الكرت بلا ملصق.
-  Widget _placeholder(NegevPalette c) => Container(
-        color: c.surfaceSunk,
-        alignment: Alignment.center,
-        child: Icon(Icons.celebration_outlined, size: 22, color: c.inkFaint),
+  Widget _placeholder(NegevPalette c) => ColoredBox(
+        color: cardGround,
+        child: Center(
+          child: Icon(Icons.celebration_outlined, size: 28, color: c.inkFaint),
+        ),
       );
 }
 
@@ -3402,91 +3656,13 @@ class _FeedEntry {
   final int adIndex;
 }
 
-/// كبسة البث في أول الشريط: مربّع متدرّج بزوايا ١٨، ظاهر دائماً حتى بلا بثّ،
-/// وشارة «مباشر» وحدها تتبع `channel.isLive` — داخل المربّع كي لا يُقصّ رسمها.
-class _LiveStoryTile extends StatelessWidget {
-  const _LiveStoryTile({required this.channel, required this.onTap});
-
-  final LiveChannel? channel;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final live = channel?.isLive ?? false;
-    return GestureDetector(
-      key: const Key('stories_live_tile'),
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: SizedBox(
-        width: 72,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 54,
-              height: 54,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(18),
-                // الأحمران الجديدان الوحيدان في هذه المهمة.
-                gradient: const LinearGradient(
-                  colors: [Color(0xFFEF4444), Color(0xFFF59E0B)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-              ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.live_tv_rounded, color: Colors.white, size: 22),
-                  if (live) ...[
-                    const SizedBox(height: 3),
-                    Container(
-                      key: const Key('stories_live_badge'),
-                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: context.c.danger,
-                        borderRadius: BorderRadius.circular(999),
-                        border: Border.all(color: Colors.white, width: 0.8),
-                      ),
-                      child: const Text(
-                        'مباشر',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 8,
-                          height: 1.1,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            const SizedBox(height: 5),
-            // تصغير لا قصّ: التسمية تُقرأ كاملة حتى على شاشة ضيّقة.
-            FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(
-                'البث المباشر',
-                maxLines: 1,
-                style: TextStyle(fontSize: 11, color: context.c.inkSoft),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// بطاقة الدخول التسويقية (T-14): قصة واحدة في عمود التغذية عند فتحها، **تحت**
-/// شريط الستوريات مباشرة، تشير إلى أوّل ستوري فيه.
+/// بطاقة الدخول التسويقية (T-14): قصة واحدة في عمود التغذية عند فتحها، فوق
+/// البطاقة الإعلانية والكروت، تشير إلى الستوري.
 ///
 /// دفعٌ لا تغطية: عنصر عادي في `Column` التغذية، فيزيح الكروت تحته قليلاً ثم
-/// يعود التخطيط كما كان بعد إخفائها — رأس التغذية وشريط الستوريات ورقاقة
-/// الألبومات تبقى مرئية وقابلة للكبس وهي المقصودة بالبطاقة. الظهور والإخفاء
-/// والمؤقّت في `_EventsScreenState` وحدها — هذا الكلاس يرسم ويرسل حدثَي
-/// فتح/إغلاق.
+/// يعود التخطيط كما كان بعد إخفائها — رأس التغذية ورقاقة الألبومات تبقى
+/// مرئية وقابلة للكبس. الظهور والإخفاء والمؤقّت في `_EventsScreenState` وحدها
+/// — هذا الكلاس يرسم ويرسل حدثَي فتح/إغلاق.
 class _EntryCard extends StatelessWidget {
   const _EntryCard({
     required this.story,
@@ -3628,8 +3804,8 @@ Widget _storyFallbackAvatar(BuildContext context) => ColoredBox(
       child: Icon(Icons.celebration, size: 22, color: context.c.sky),
     );
 
-/// بديل صورة الستوري في البانر وبطاقة الإعلان (تذكرة #173): يملأ الإطار
-/// الضيّق كاملاً بلا صورة، بخلاف [_storyFallbackAvatar] الذي يسكن كرةً صغيرة.
+/// بديل صورة الستوري في البطاقة الكبيرة وبطاقة الإعلان (تذكرة #173): يملأ الإطار
+/// كاملاً بلا صورة، بخلاف [_storyFallbackAvatar] الذي يسكن كرةً صغيرة.
 Widget _storyPlaceholder(BuildContext context) => SizedBox.expand(
       child: ColoredBox(
         color: context.c.surfaceSunk,
@@ -3638,58 +3814,6 @@ Widget _storyPlaceholder(BuildContext context) => SizedBox.expand(
         ),
       ),
     );
-
-/// الشكل الواحد لعنصر شريط القصص: حلقة دائرية ٥٤ ثم تسمية سطر واحد تحتها.
-class _StripItem extends StatelessWidget {
-  const _StripItem({
-    required this.avatar,
-    required this.label,
-    required this.highlighted,
-    required this.onTap,
-  });
-
-  /// ما يملأ داخل الحلقة — صورة القصة أو نائبها؛ القصّ الدائري هنا.
-  final Widget avatar;
-  final String label;
-
-  /// لون القصة الحيّة (`context.c.success`) بدل لون الحدّ العادي.
-  final bool highlighted;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: SizedBox(
-        width: 66,
-        child: Column(
-          children: [
-            Container(
-              width: 54,
-              height: 54,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: highlighted ? context.c.success : context.c.line,
-                  width: 2,
-                ),
-              ),
-              child: ClipOval(child: avatar),
-            ),
-            const SizedBox(height: 5),
-            Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 11, color: context.c.inkSoft),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 /// جرس الإشعارات — مركز داخل التطبيق بلا push نظام (#19). يُبنى فقط عند
 /// تسجيل الدخول، ويشترك في قناة `new_notification_<userId>` لتحديث العدّاد

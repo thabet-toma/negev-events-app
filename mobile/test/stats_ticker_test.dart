@@ -16,11 +16,9 @@ import 'package:negev_events/state/welcome.dart';
 import 'package:negev_events/theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// شريط الإحصائيات في الرئيسية (تذكرة #172): عدد المناسبات القادمة في كل
-/// محافظة، والمجموع، و«حُدّث HH:MM» — والتعميم الحيّ يحلّ محلّه كاملاً.
-///
-/// الخادم جاهز (`GET /api/stats/ticker` و`GET /api/broadcasts/live`) ولا
-/// يُلمس هنا: الردّان يُصنَّعان بالعقد الموثَّق نفسه، والأعداد تُعرض كما وصلت.
+/// التعميم الحيّ في الرئيسية (تذكرة #172): يُعرض التعميم الحيّ وحده حين
+/// يوجد، وشريط الإحصائيات أُزيل من الواجهة ولا يُرسم حتى مع وصول بياناته من
+/// الخادم (المخزن المشترك `HomeTickerStore` يبقى كما هو للهيكل).
 
 /// لحظة الحساب: 09:07 بالتوقيت **المحلي** للجهاز. تُبنى محلياً ثم تُرسَل UTC في
 /// الردّ، فتحويل العميل إلى المحلي يجب أن يعيد 09:07 على أي جهاز وفي أي منطقة
@@ -124,52 +122,34 @@ void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
   testWidgets(
-    'الشريط يرسم محافظةً لكل صفّ وعددها كما وصل، والمجموع، و«حُدّث HH:MM» بالساعة المحلية',
+    'شريط الإحصائيات لا يظهر حتى مع وجود بياناته، والتغذية تعمل طبيعياً',
     (tester) async {
-      await _pumpFeed(tester, _api(stats: _statsBody()));
-
-      expect(find.byKey(const Key('home_stats_ticker')), findsOneWidget,
-          reason: 'رقم وصل من الخادم ⇒ الشريط ظاهر');
-
-      final negevChip = find.byKey(const Key('home_stats_region_1'));
-      expect(negevChip, findsOneWidget, reason: 'صفّ لكل محافظة');
-      expect(
-        find.descendant(of: negevChip, matching: find.text('النقب')),
-        findsOneWidget,
-        reason: 'اسم المحافظة كما وصل',
-      );
-      expect(
-        find.descendant(of: negevChip, matching: find.text('12')),
-        findsOneWidget,
-        reason: 'عدد المحافظة كما وصل — لا جمع في العميل',
+      await _pumpFeed(
+        tester,
+        _api(
+          stats: _statsBody(),
+          events: const [
+            {
+              'id': 77,
+              'groom_name': 'اسم 77',
+              'town': 'رهط',
+              'event_date': '2026-09-20',
+            },
+          ],
+        ),
       );
 
-      final tulkarmChip = find.byKey(const Key('home_stats_region_2'));
-      expect(
-        find.descendant(of: tulkarmChip, matching: find.text('محافظة طولكرم')),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(of: tulkarmChip, matching: find.text('3')),
-        findsOneWidget,
-      );
-
-      expect(find.text('المجموع 16'), findsOneWidget,
-          reason: 'total يُعرض كما أعاده الخادم — لو جمعه العميل لصار 15 وسقط هنا');
-
-      final updated = tester.widget<Text>(
-        find.byKey(const Key('home_stats_ticker_updated')),
-      );
-      expect(
-        updated.data,
-        'حُدّث 09:07',
-        reason: '«حُدّث HH:MM» بالساعة المحلية: 09:07 محلياً = 06:07 UTC في '
-            'هذا الـfixture، فأي قراءة عالمية أو صيغة بساعة واحدة تسقط هنا',
-      );
+      expect(find.text('اسم 77'), findsOneWidget,
+          reason: 'شاهد موجب: التغذية بُنيت فعلاً');
+      expect(find.byKey(const Key('home_stats_ticker')), findsNothing,
+          reason: 'شريط الإحصائيات أُزيل عمداً حتى مع وجود بياناته');
+      expect(find.byKey(const Key('home_stats_region_1')), findsNothing);
+      expect(find.text('المجموع 16'), findsNothing);
+      expect(find.text('حُدّث 09:07'), findsNothing);
     },
   );
 
-  testWidgets('تعميم حيّ يحلّ محلّ الشريط: يُعرض التعميم ولا يُرسم الشريط',
+  testWidgets('تعميم حيّ يُعرض في مكان الشريط ولا يُرسم شريط الإحصاءات',
       (tester) async {
     final requests = <Uri>[];
     await _pumpFeed(
@@ -189,24 +169,16 @@ void main() {
     );
 
     expect(find.byKey(const Key('home_broadcast_ticker')), findsOneWidget,
-        reason: 'التعميم الحيّ معروض في مكان الشريط');
+        reason: 'التعميم الحيّ معروض في الرأس');
     expect(find.text('تعميم المنصة'), findsOneWidget);
     expect(find.text('غداً صيانة مسائية'), findsOneWidget);
 
     expect(find.byKey(const Key('home_stats_ticker')), findsNothing,
-        reason: 'الشريط غاب: التعميم حلّ محلّه لا شاركه');
-    expect(find.text('المجموع 16'), findsNothing,
-        reason: 'ولا أرقام الشريط تُرسم تحته');
-
-    // شاهد موجب: الشريط لم يغب لأننا لم نسأل عنه — الطلب وقع فعلاً.
-    expect(
-      requests.where((url) => url.path.endsWith('/api/stats/ticker')),
-      hasLength(1),
-      reason: 'العدّ طُلب ثم أُخفي لأن تعميماً حيّاً حلّ محلّه',
-    );
+        reason: 'لا شريط إحصائيات مع التعميم');
+    expect(find.text('المجموع 16'), findsNothing);
   });
 
-  testWidgets('داخل HomeShell: شريط تعميم واحد مشترك، وإغلاقه يعيد شريط الإحصاءات',
+  testWidgets('داخل HomeShell: شريط تعميم واحد مشترك، وإغلاقه يخفيه بلا شريط إحصاءات',
       (tester) async {
     // نافذة أعلى من الافتراضية: الهيكل يحمل ترويسة وكبستين وشريط تنقّل،
     // والكرت لا يفيض في ارتفاع هاتف فعلي.
@@ -255,10 +227,8 @@ void main() {
     expect(find.byKey(const Key('home_broadcast_ticker')), findsOneWidget);
     expect(find.byKey(const Key('shell_broadcast_banner')), findsNothing,
         reason: 'شريط التعميم واحد: التغذية ترسمه من الحالة المشتركة نفسها');
-    expect(find.byKey(const Key('home_stats_ticker')), findsNothing,
-        reason: 'التعميم الحيّ حلّ محلّ شريط الإحصاءات');
-    expect(find.text('المجموع 16'), findsNothing,
-        reason: 'ولا أرقام الإحصاء تُرسم تحته');
+    expect(find.byKey(const Key('home_stats_ticker')), findsNothing);
+    expect(find.text('المجموع 16'), findsNothing);
 
     // على وجهة أخرى: شريط الهيكل يقف مكانه — تبادلٌ لا اجتماع.
     final navBar = find.byType(NavigationBar);
@@ -278,31 +248,20 @@ void main() {
 
     expect(find.byKey(const Key('home_broadcast_ticker')), findsNothing,
         reason: 'التعميم أُغلق من الحالة المشتركة');
-    expect(find.byKey(const Key('home_stats_ticker')), findsOneWidget,
-        reason: 'وشريط الإحصاءات عاد فوراً: الإغلاق واحد للهيكل والتغذية');
-    expect(find.text('المجموع 16'), findsOneWidget);
+    expect(find.byKey(const Key('home_stats_ticker')), findsNothing,
+        reason: 'ولا يعود شريط الإحصاءات بعد الإغلاق');
+    expect(find.text('المجموع 16'), findsNothing);
   });
 
-  testWidgets('بلا تعميم حيّ: الشريط ظاهر وشريط التعميم غائب',
+  testWidgets('بلا تعميم حيّ: شريط التعميم غائب وشريط الإحصائيات لا يظهر أيضاً',
       (tester) async {
     await _pumpFeed(tester, _api(stats: _statsBody(), broadcasts: const []));
 
     expect(find.byKey(const Key('home_broadcast_ticker')), findsNothing,
         reason: 'لا تعميم حيّ ⇒ لا شريط تعميم');
-    expect(find.byKey(const Key('home_stats_ticker')), findsOneWidget,
-        reason: 'وما بقي معروضاً هو الشريط — الإخفاء مشروط بالتعميم لا دائم');
-    expect(
-      tester.widget<Text>(find.byKey(const Key('home_stats_ticker_updated'))).data,
-      'حُدّث 09:07',
-    );
-  });
-
-  testWidgets('شريط بلا محافظات لا يُرسم — لا إطار فارغ',
-      (tester) async {
-    await _pumpFeed(tester, _api(stats: _statsBody(regions: const [], total: 0)));
-
     expect(find.byKey(const Key('home_stats_ticker')), findsNothing,
-        reason: 'قائمة محافظات فارغة (لا محافظة نشطة) ⇒ لا شريط أرقام فارغ');
+        reason: 'ولا شريط إحصائيات');
+    expect(find.text('المجموع 16'), findsNothing);
   });
 
   testWidgets('فشل مسار الإحصاء صامت: لا شريط، والتغذية تُبنى كما هي',
@@ -330,18 +289,5 @@ void main() {
     expect(find.byKey(const Key('home_broadcast_ticker')), findsNothing);
     expect(find.text('اسم 77'), findsOneWidget,
         reason: 'كرت التغذية بُني رغم فشل شريط الإحصاء — ولو أُفرغت التغذية لسقط هذا');
-  });
-
-  testWidgets('updated_at غائب لا يكتب وقتاً مخترعاً — الشريط يبقى بأرقامه',
-      (tester) async {
-    await _pumpFeed(tester, _api(stats: _statsBody(withUpdatedAt: false)));
-
-    expect(find.byKey(const Key('home_stats_ticker')), findsOneWidget);
-    expect(find.text('المجموع 16'), findsOneWidget);
-    // `updated_at` غائب من الجسم في هذا الـfixture.
-    final updated = tester.widget<Text>(
-      find.byKey(const Key('home_stats_ticker_updated')),
-    );
-    expect(updated.data, '', reason: 'لا «حُدّث» بوقت غير معروف');
   });
 }
