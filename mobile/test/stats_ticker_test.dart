@@ -14,6 +14,7 @@ import 'package:negev_events/state/realtime.dart';
 import 'package:negev_events/state/region_onboarding.dart';
 import 'package:negev_events/state/welcome.dart';
 import 'package:negev_events/theme.dart';
+import 'package:negev_events/widgets/event_card.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// التعميم الحيّ في الرئيسية (تذكرة #172): يُعرض التعميم الحيّ وحده حين
@@ -118,6 +119,15 @@ Future<void> _pumpFeed(WidgetTester tester, NegevApi api) async {
   await tester.pumpAndSettle();
 }
 
+/// ينزل إلى كروت التغذية — الرأس في الرئيسية الجديدة أطول من الشاشة، فلا كرت
+/// مبنيّ عند الموضع صفر.
+Future<void> jumpToFeedCards(WidgetTester tester) async {
+  final feed = find.byKey(const Key('feed_pager'));
+  final scroll = tester.widget<CustomScrollView>(feed).controller!;
+  scroll.jumpTo(scroll.position.maxScrollExtent);
+  await tester.pumpAndSettle();
+}
+
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
@@ -139,13 +149,15 @@ void main() {
         ),
       );
 
-      expect(find.text('اسم 77'), findsOneWidget,
-          reason: 'شاهد موجب: التغذية بُنيت فعلاً');
       expect(find.byKey(const Key('home_stats_ticker')), findsNothing,
           reason: 'شريط الإحصائيات أُزيل عمداً حتى مع وجود بياناته');
       expect(find.byKey(const Key('home_stats_region_1')), findsNothing);
       expect(find.text('المجموع 16'), findsNothing);
       expect(find.text('حُدّث 09:07'), findsNothing);
+      // شاهد موجب: التغذية بُنيت فعلاً — كرتها يُبنى بعد النزول إليه لأن
+      // الرأس أطول من الشاشة.
+      await jumpToFeedCards(tester);
+      expect(find.byType(EventCard), findsOneWidget);
     },
   );
 
@@ -291,7 +303,11 @@ void main() {
     expect(find.byKey(const Key('home_stats_ticker')), findsNothing,
         reason: 'ردّ فاشل ⇒ لا أرقام كاذبة');
     expect(find.byKey(const Key('home_broadcast_ticker')), findsNothing);
-    expect(find.text('اسم 77'), findsOneWidget,
-        reason: 'كرت التغذية بُني رغم فشل شريط الإحصاء — ولو أُفرغت التغذية لسقط هذا');
+    // شاهدٌ من محتوى التغذية نفسه: كرت المناسبة نفسه يُبنى رغم فشل مسار
+    // الإحصاء — ولو أُفرغت التغذية لسقط هذا. والرأس أطول من الشاشة، فيُكشف
+    // بالنزول إليه.
+    await jumpToFeedCards(tester);
+    expect(find.byType(EventCard), findsOneWidget,
+        reason: 'كرت التغذية بُني رغم فشل شريط الإحصاء');
   });
 }

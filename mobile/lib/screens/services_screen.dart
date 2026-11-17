@@ -52,6 +52,9 @@ class ServicesScreen extends StatefulWidget {
 class _ServicesScreenState extends State<ServicesScreen> {
   Future<List<ServiceCategory>>? _categories;
 
+  /// إشارة «افتح الفئة كذا» القادمة من الرئيسية — تُفكّ عند `dispose`.
+  ValueNotifier<int?>? _categoryRequest;
+
   int? _categoryId;
   String _town = 'الكل';
   final _searchController = TextEditingController();
@@ -79,6 +82,7 @@ class _ServicesScreenState extends State<ServicesScreen> {
   void dispose() {
     _searchController.dispose();
     _searchDebounce?.cancel();
+    _categoryRequest?.removeListener(_applyRequestedCategory);
     super.dispose();
   }
 
@@ -87,11 +91,30 @@ class _ServicesScreenState extends State<ServicesScreen> {
     super.didChangeDependencies();
     _categories ??= AppServices.of(context).api.serviceCategories();
 
+    if (_categoryRequest == null) {
+      _categoryRequest = AppServices.of(context).servicesCategoryRequest;
+      _categoryRequest!.addListener(_applyRequestedCategory);
+    }
+
     if (!_didInit) {
       _didInit = true;
       _loadDisplayMode();
       _loadFirstPage();
     }
+
+    // فئة مطلوبة من شرائط الرئيسية (`servicesCategoryRequest`): تُطبَّق على
+    // فلتر الشاشة نفسه (`_categoryId`) ثم يُعاد الطلب إلى `null` — نفس فلتر
+    // الرقاقة، فلا نسخة ثانية منه ولا جلبٌ مزدوج عند إعادة البناء.
+    _applyRequestedCategory();
+  }
+
+  /// تطبيق الفئة المطلوبة — مرة واحدة لكل طلب، ولا شيء حين لا طلب.
+  void _applyRequestedCategory() {
+    final requested = _categoryRequest?.value;
+    if (requested == null || !mounted) return;
+    AppServices.of(context).consumeServicesCategoryRequest();
+    if (requested == _categoryId) return;
+    _onCategorySelected(requested);
   }
 
   /// يقرأ `providers_display` من `GET /api/settings/public` — القيمة الفعّالة

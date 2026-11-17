@@ -150,6 +150,7 @@ class AppServices extends InheritedWidget {
     RegionStore? regions,
     HomeTickerStore? homeTicker,
     ValueNotifier<int>? tabRequest,
+    ValueNotifier<int?>? servicesCategoryRequest,
     ValueNotifier<int>? myListRevision,
     ValueNotifier<int>? myListNowCount,
     ValueNotifier<({int eventId, bool saved})?>? savedChange,
@@ -160,6 +161,7 @@ class AppServices extends InheritedWidget {
         places = places ?? PlacesStore(api),
         homeTicker = homeTicker ?? HomeTickerStore(api: api),
         tabRequest = tabRequest ?? ValueNotifier<int>(_noTabRequest),
+        servicesCategoryRequest = servicesCategoryRequest ?? ValueNotifier<int?>(null),
         myListRevision = myListRevision ?? ValueNotifier<int>(0),
         myListNowCount = myListNowCount ?? ValueNotifier<int>(0),
         savedChange = savedChange ??
@@ -177,6 +179,10 @@ class AppServices extends InheritedWidget {
 
   /// فهرس وجهة «خدمات الأعراس» — دليل مزوّدي الخدمة.
   static const int servicesTabIndex = 2;
+
+  /// فهرس وجهة «مناسباتي» — منشورات المستخدم ثمّ «قائمتي» تحتها. وفيها
+  /// «استوديو الدعوات» لأن التصميم يحتاج مناسبةً بعينها.
+  static const int myHubTabIndex = 3;
 
   /// «لا طلب تبديل» — القيمة الابتدائية الوحيدة التي لا تُقرأ كطلب.
   static const int _noTabRequest = -1;
@@ -203,6 +209,12 @@ class AppServices extends InheritedWidget {
   /// طلب تبديل تبويب من خارج الشريط السفلي — يستهلكه `HomeShell` ويعيده إلى
   /// [_noTabRequest]. قيمة لا استدعاء: الكرت لا يستورد هيكل الشريط لأجل رقم.
   final ValueNotifier<int> tabRequest;
+
+  /// طلب فتح «خدمات الأعراس» مفلترةً على فئة — من شرائط فئات الخدمات في
+  /// الرئيسية. الفئة تُطلب هنا لأن `tabRequest` يحمل رقم الوجهة وحده،
+  /// و`ServicesScreen` يستهلكها ويعيدها إلى `null` كي لا تتكرّر مع كل بناء.
+  /// الفلتر نفسه هو فلتر الشاشة القائم (`_categoryId`)، لا نسخة ثانية.
+  final ValueNotifier<int?> servicesCategoryRequest;
 
   /// عدّاد يُزاد بعد كل تبديل تذكير ناجح من أيّ شاشة — «قائمتي» تسمعه فتعيد
   /// الجلب عند ظهورها. عدّاد لا قيمة منطقية: التغيير نفسه هو الخبر.
@@ -248,6 +260,11 @@ class AppServices extends InheritedWidget {
     tabRequest.value = _noTabRequest;
   }
 
+  /// يستهلك طلب فئة الخدمات بعد أن يطبّقه `ServicesScreen` — `null` = لا طلب.
+  void consumeServicesCategoryRequest() {
+    servicesCategoryRequest.value = null;
+  }
+
   static AppServices of(BuildContext context) {
     final services =
         context.dependOnInheritedWidgetOfExactType<AppServices>();
@@ -267,6 +284,7 @@ class AppServices extends InheritedWidget {
       homeTicker != oldWidget.homeTicker ||
       regions != oldWidget.regions ||
       tabRequest != oldWidget.tabRequest ||
+      servicesCategoryRequest != oldWidget.servicesCategoryRequest ||
       myListRevision != oldWidget.myListRevision ||
       myListNowCount != oldWidget.myListNowCount ||
       savedChange != oldWidget.savedChange;

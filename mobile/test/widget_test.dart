@@ -774,7 +774,7 @@ void main() {
               (w) => w is AspectRatio && (w.aspectRatio - 4 / 5).abs() < 0.001,
             );
 
-        // العادي: بلا صندوق ٤:٥ وعدّاد «باقي ١٠ أيام» في شريط التعريف.
+        // العادي: بلا صندوق ٤:٥ وشارة العدّ «بعد 10 أيام» على زاوية الملصق.
         await tester.pumpWidget(
           MaterialApp(
             theme: AppTheme.light(),
@@ -787,7 +787,7 @@ void main() {
           ),
         );
         expect(aspectRatioFourToFive(), findsNothing);
-        expect(find.text('باقي 10 أيام'), findsOneWidget);
+        expect(find.text('بعد 10 أيام'), findsOneWidget);
 
         // العزاء: بلا صندوق ٤:٥ وبلا عدّاد إطلاقاً، والتاريخ نفسه ظاهر بلا فتح «مزيد من التفاصيل».
         await tester.pumpWidget(

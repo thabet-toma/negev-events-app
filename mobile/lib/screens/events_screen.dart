@@ -9,8 +9,10 @@ import '../main.dart';
 import '../models/event.dart';
 import '../models/live.dart';
 import '../models/notification.dart' as notif;
+import '../models/service.dart';
 import '../state/audio_coordinator.dart';
 import '../state/home_ticker.dart';
+import '../state/home_welcome.dart';
 import '../state/rate_us.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart'
@@ -19,6 +21,7 @@ import '../widgets/auth_action_button.dart';
 import '../widgets/congratulations.dart';
 import '../widgets/event_card.dart';
 import '../widgets/filter_sheet.dart';
+import '../widgets/home_sections.dart';
 import '../widgets/motion.dart';
 import '../widgets/rate_us_prompt.dart';
 import '../widgets/region_banner.dart';
@@ -28,6 +31,8 @@ import 'albums_screen.dart';
 import 'edit_event_screen.dart';
 import 'event_details_screen.dart';
 import 'live_screen.dart';
+import 'news_screen.dart';
+import 'services_screen.dart' show openSubmitServiceSheet;
 import 'story_viewer_screen.dart';
 
 /// أقصى ارتفاع لشريط الإعلانات في الكروم الثابت: كرت إعلان واحد كاملاً — شريط
@@ -206,6 +211,29 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   /// تسلسل نداءات القسم: ردٌّ متأخر لمحافظة أو وضع سابق يُهمَل، ولا يرسم
   /// بطاقاتٍ فوق ما يخصّ الشاشة الآن.
   int _featuredSeq = 0;
+
+  /// «هذا الأسبوع قربك» — مناسبات اليوم وستّة أيام بعده في محافظة التغذية
+  /// (`GET /api/events?date_from=&date_to=&limit=10`). فارغة = لا قسم.
+  List<Event> _weekEvents = const [];
+  int _weekSeq = 0;
+
+  /// «جديد عنا» — أحدث المناسبات (`?sort=newest&limit=10`). فارغة = لا قسم.
+  List<Event> _newestEvents = const [];
+  int _newestSeq = 0;
+
+  /// «الأكثر تفاعلاً» — `GET /api/events/trending`. فارغة = لا قسم.
+  List<Event> _trending = const [];
+  int _trendingSeq = 0;
+
+  /// فئات الخدمات لشريط «خدمات الأعراس» — بيانات وقت تشغيل من الخادم وحده.
+  List<ServiceCategory> _serviceCategories = const [];
+  int _serviceCategoriesSeq = 0;
+
+  /// بطاقة الترحيب التي يكتبها السوبر أدمن (`home_welcome`) — `null` حين لا
+  /// تصل أو أُغلقت بصمتها من قبل.
+  ({String title, String message})? _welcome;
+  int _welcomeSeq = 0;
+
   bool _initialLoading = true;
   bool _loadingMore = false;
   Object? _error;
@@ -295,6 +323,13 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
       // «الأعراس المميزة» مع أول تحميل — قسمٌ واحد لا ينتظر أي سطح آخر.
       _loadFeatured();
       _loadLiveChannel();
+      // أقسام الرئيسية الجديدة كلها بالتوازي مع التغذية: لا واحدٌ منها
+      // يؤخّر أوّل كرت، وفشل أيّها يُخفيه وحده.
+      _loadWeekEvents();
+      _loadNewestEvents();
+      _loadTrending();
+      _loadServiceCategories();
+      _loadWelcome();
       // التعميم الحيّ (#172): المخزن المشترك يحمّل مرّة واحدة، وإن سبقه
       // الهيكل (وهو الأصل) لا يتضاعف النداء.
       AppServices.of(context).homeTicker.ensureLoaded();
@@ -713,6 +748,112 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     if (!mounted || seq != _featuredSeq) return;
     setState(() => _featured = events);
   }
+
+  /// «هذا الأسبوع قربك» — مناسبات اليوم وستّة أيام بعده في محافظة التغذية
+  /// نفسها (نفس `X-Region`/`all_regions`). الحدّ الأعلى عشرة، والفشل يُخفي
+  /// القسم بصمت: الرئيسية لا تسقط لأجل قسم.
+  Future<void> _loadWeekEvents() async {
+    final seq = ++_weekSeq;
+    if (_weekEvents.isNotEmpty) setState(() => _weekEvents = const []);
+    final today = jerusalemToday();
+    final end = DateTime(today.year, today.month, today.day + 6);
+    List<Event> events;
+    try {
+      final page = await AppServices.of(context).api.listEvents(
+            dateFrom: _isoDay(today),
+            dateTo: _isoDay(end),
+            allRegions: _allRegions,
+            limit: 10,
+          );
+      events = page.events;
+    } catch (_) {
+      events = const [];
+    }
+    if (!mounted || seq != _weekSeq) return;
+    setState(() => _weekEvents = events);
+  }
+
+  /// «جديد عنا» — أحدث المناسبات من `?sort=newest` (خادم أقدم يتجاهل المفتاح
+  /// فيعيد ترتيبه القائم بدل أن يفشل الطلب). الفشل يُخفي القسم بصمت.
+  Future<void> _loadNewestEvents() async {
+    final seq = ++_newestSeq;
+    if (_newestEvents.isNotEmpty) setState(() => _newestEvents = const []);
+    List<Event> events;
+    try {
+      final page = await AppServices.of(context).api.listEvents(
+            sort: 'newest',
+            allRegions: _allRegions,
+            limit: 10,
+          );
+      events = page.events;
+    } catch (_) {
+      events = const [];
+    }
+    if (!mounted || seq != _newestSeq) return;
+    setState(() => _newestEvents = events);
+  }
+
+  /// «الأكثر تفاعلاً» — `/api/events/trending`. الفشل يُخفي القسم بصمت.
+  Future<void> _loadTrending() async {
+    final seq = ++_trendingSeq;
+    if (_trending.isNotEmpty) setState(() => _trending = const []);
+    List<Event> events;
+    try {
+      events = await AppServices.of(context)
+          .api
+          .trendingEvents(allRegions: _allRegions);
+    } catch (_) {
+      events = const [];
+    }
+    if (!mounted || seq != _trendingSeq) return;
+    setState(() => _trending = events);
+  }
+
+  /// فئات الخدمات لشريط الأقسام. الفشل يُخفي الشريط بصمت.
+  Future<void> _loadServiceCategories() async {
+    final seq = ++_serviceCategoriesSeq;
+    List<ServiceCategory> categories;
+    try {
+      categories = await AppServices.of(context).api.serviceCategories();
+    } catch (_) {
+      categories = const [];
+    }
+    if (!mounted || seq != _serviceCategoriesSeq) return;
+    setState(() => _serviceCategories = categories);
+  }
+
+  /// بطاقة الترحيب: تُقرأ من `home_welcome`، وتُخفى إن كانت بصمة نصّها قد
+  /// أُغلقت على هذا الجهاز — فالنصّ الجديد يعود، والقديم لا يُزعج مرّتين.
+  ///
+  /// **وردٌّ بلا رسالة يرفع البطاقة**: رسالة حُذفت من اللوحة أو أُفرغت لا يجوز
+  /// أن تبقى معروضةً من لقطة سابقة بعد تحديث. والفشل صامت كبقية الأقسام.
+  Future<void> _loadWelcome() async {
+    final seq = ++_welcomeSeq;
+    final welcome = await AppServices.of(context).api.homeWelcome();
+    if (!mounted || seq != _welcomeSeq) return;
+    if (welcome == null) {
+      if (_welcome != null) setState(() => _welcome = null);
+      return;
+    }
+    final dismissed =
+        await isHomeWelcomeDismissed(homeWelcomeHash(welcome.title, welcome.message));
+    if (!mounted || seq != _welcomeSeq || dismissed) return;
+    setState(() => _welcome = welcome);
+  }
+
+  /// إغلاق بطاقة الترحيب: تُسجَّل بصمة نصّها ثم تختفي فوراً.
+  void _dismissWelcome() {
+    final welcome = _welcome;
+    if (welcome == null) return;
+    markHomeWelcomeDismissed(homeWelcomeHash(welcome.title, welcome.message));
+    setState(() => _welcome = null);
+  }
+
+  /// `YYYY-MM-DD` لفلتر التاريخ — الصيغة نفسها التي يرسلها [FeedDateFilter].
+  static String _isoDay(DateTime day) =>
+      '${day.year.toString().padLeft(4, '0')}-'
+      '${day.month.toString().padLeft(2, '0')}-'
+      '${day.day.toString().padLeft(2, '0')}';
 
   /// يلتقط ما هو معروض الآن قبل أي تغيير فلتر فعلي — القائمة وموضعها والفلتر
   /// كاملاً — كي يُعاد المستخدم إلى نتائجه بضغطة واحدة.
@@ -1419,6 +1560,13 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                       _loadStories();
                       _loadLiveChannel();
                       _loadFeatured();
+                      // السحب للتحديث يجدّد أقسام الرئيسية الجديدة مع التغذية،
+                      // كلٌّ منها بنداءه المستقل فلا يُبطئ الآخر.
+                      _loadWeekEvents();
+                      _loadNewestEvents();
+                      _loadTrending();
+                      _loadServiceCategories();
+                      _loadWelcome();
                       // السحب للتحديث يقرأ التعميم من جديد كذلك.
                       services.homeTicker.refresh();
                       // السحب للتحديث يلتقط أيضاً مقطعاً افتراضياً رفعه الأدمن للتوّ.
@@ -1498,15 +1646,40 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                                       onCta: (story) =>
                                           openStoryTarget(context, story),
                                     ),
-                                  // «الأعراس المميزة»: تحت البطاقة الكبيرة وفوق الكروت.
-                                  // بلا نتيجة لا عنصر في الشجرة إطلاقاً — لا عنوان بلا
-                                  // بطاقات ولا مساحة محجوزة تُزيح الكرت الأول.
+                                  // أقسام الرئيسية الجديدة بترتيبها، كلٌّ يغيب وحده
+                                  // حين لا بيانات له: لا عنوان بلا بطاقات ولا مساحة
+                                  // محجوزة تُزيح الكرت الأول.
+                                  _tickerBar(),
+                                  if (_welcome != null)
+                                    HomeWelcomeCard(
+                                      title: _welcome!.title,
+                                      message: _welcome!.message,
+                                      onDismiss: _dismissWelcome,
+                                    ),
                                   if (_featured.isNotEmpty)
-                                    _FeaturedCarousel(
+                                    FeaturedCarousel(
                                       events: _featured,
                                       isActive: widget.isActive && !_covered,
                                       onOpen: (eventId) => _openEvent(eventId),
+                                      onRemind: _toggleRemind,
+                                      onRsvp: _rsvpGoingFromCard,
+                                      onCongratulate: _openMessages,
                                     ),
+                                  if (_weekEvents.isNotEmpty)
+                                    _weekSection(),
+                                  _quickActions(),
+                                  if (_newestEvents.isNotEmpty)
+                                    _newestSection(),
+                                  if (_trending.isNotEmpty)
+                                    TrendingSection(
+                                      events: _trending,
+                                      onOpen: (eventId) => _openEvent(eventId),
+                                    ),
+                                  if (_serviceCategories.isNotEmpty)
+                                    _serviceCategoriesSection(),
+                                  ProviderCtaBanner(
+                                    onAdd: () => openSubmitServiceSheet(context),
+                                  ),
                                 ],
                               ),
                             ),
@@ -1806,6 +1979,12 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
               _loadStories();
               _loadLiveChannel();
               _loadFeatured();
+              // تحديث أقسام الرئيسية مع التغذية — كلٌّ بندائه المستقل.
+              _loadWeekEvents();
+              _loadNewestEvents();
+              _loadTrending();
+              _loadServiceCategories();
+              _loadWelcome();
               // تحديث في المكان: الصفحة الأولى تُستبدل والكرت المعروض يبقى
               // أمام المستخدم بدل أن يقفز إلى أوّله.
               await _refreshInPlace();
@@ -1856,11 +2035,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       ),
       tooltip: 'إعلان مناسبة',
-      onPressed: () {
-        Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => const AddEventScreen()),
-        );
-      },
+      onPressed: _openAddEvent,
       icon: const Icon(Icons.add, size: 20),
     );
   }
@@ -1900,9 +2075,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
         width: double.infinity,
         child: FilledButton.icon(
           key: const Key('feed_empty_add_event'),
-          onPressed: () => Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const AddEventScreen()),
-          ),
+          onPressed: _openAddEvent,
           icon: const Icon(Icons.add, size: 20),
           label: const Text('أضف مناسبتك'),
         ),
@@ -1975,6 +2148,136 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
           ),
         ),
       ),
+    );
+  }
+
+  /// الشريط الإخباري — سطوره من `HomeTickerStore` المشترك (إحصاء الخادم صار
+  /// يحمل الأسعار وآخر خبر معه). يستمع للمخزن فيرسم حين تصل بياناته بعد أول
+  /// إطار، ولا ينتظرها أول كرت.
+  Widget _tickerBar() {
+    final store = AppServices.of(context).homeTicker;
+    return ListenableBuilder(
+      listenable: store,
+      builder: (context, _) => HomeTickerBar(
+        items: buildHomeTickerItems(stats: store.stats, onNewsTap: _openNews),
+        isActive: widget.isActive && !_covered,
+      ),
+    );
+  }
+
+  /// «آخر خبر» — الشاشة القائمة نفسها التي يفتحها «خدماتنا»، بلا نسخة ثانية.
+  void _openNews() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const NewsScreen()),
+    );
+  }
+
+  /// «هذا الأسبوع قربك» — مناسبات اليوم وستّة أيام بعده في محافظة التغذية.
+  Widget _weekSection() {
+    return Column(
+      key: const Key('home_week_section'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const HomeSectionHeader(
+          title: 'هذا الأسبوع قربك',
+          icon: Icons.event_available_outlined,
+        ),
+        CompactEventRow(events: _weekEvents, onOpen: _openEvent),
+      ],
+    );
+  }
+
+  /// «جديد عنا» — أحدث المناسبات، ورقاقة «أحدث المناسبات» تقول ترتيبها.
+  Widget _newestSection() {
+    return Column(
+      key: const Key('home_newest_section'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const HomeSectionHeader(
+          title: 'جديد عنا',
+          icon: Icons.auto_awesome_outlined,
+          pill: 'أحدث المناسبات',
+        ),
+        CompactEventRow(events: _newestEvents, onOpen: _openEvent),
+      ],
+    );
+  }
+
+  /// شرائط فئات الخدمات — كل قرص يفتح «خدمات الأعراس» مفلترةً على فئته.
+  Widget _serviceCategoriesSection() {
+    return Column(
+      key: const Key('home_service_categories'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const HomeSectionHeader(
+          title: 'خدمات الأعراس',
+          icon: Icons.handyman_outlined,
+        ),
+        ServiceCategoriesStrip(
+          categories: _serviceCategories,
+          onTap: _openServicesCategory,
+        ),
+      ],
+    );
+  }
+
+  /// فئة من الشريط: تُطلب الفئة في فلتر «خدمات الأعراس» القائم نفسه
+  /// (`servicesCategoryRequest`) ثم تُطلب وجهته — لا فلتر ثانٍ في التغذية ولا
+  /// نسخة ثانية من شاشة الدليل.
+  void _openServicesCategory(int categoryId) {
+    final services = AppServices.of(context);
+    services.servicesCategoryRequest.value = categoryId;
+    services.tabRequest.value = AppServices.servicesTabIndex;
+  }
+
+  /// صفّ الأفعال السريعة: كل فعل يمرّ بمعالجه القائم — تبديل وجهة بـ
+  /// `tabRequest`، أو دفع شاشة، أو شاشة النشر نفسها التي يفتحها زرّ النشر.
+  Widget _quickActions() {
+    final services = AppServices.of(context);
+    return QuickActionsRow(
+      actions: [
+        QuickAction(
+          key: const Key('home_quick_invites'),
+          icon: Icons.mail_outline_rounded,
+          label: 'دعواتي',
+          onTap: () => services.tabRequest.value = AppServices.myHubTabIndex,
+        ),
+        QuickAction(
+          key: const Key('home_quick_agenda'),
+          icon: Icons.calendar_month_outlined,
+          label: 'تقويمي',
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const AgendaScreen()),
+          ),
+        ),
+        QuickAction(
+          key: const Key('home_quick_create'),
+          icon: Icons.add_circle_outline,
+          label: 'أنشئ مناسبة',
+          onTap: _openAddEvent,
+        ),
+        QuickAction(
+          key: const Key('home_quick_studio'),
+          icon: Icons.auto_awesome_outlined,
+          label: 'استوديو الدعوات',
+          onTap: () => services.tabRequest.value = AppServices.myHubTabIndex,
+        ),
+        QuickAction(
+          key: const Key('home_quick_providers'),
+          icon: Icons.handyman_outlined,
+          label: 'المزوّدون',
+          onTap: () => services.tabRequest.value = AppServices.servicesTabIndex,
+        ),
+      ],
+    );
+  }
+
+  /// يفتح شاشة النشر — المعالج الوحيد: زرّ النشر في الترويسة، وحالة الفراغ،
+  /// و«أنشئ مناسبة» في الأفعال السريعة. وحاجز الحساب داخل الشاشة نفسها
+  /// (`_submit` في add_event_screen.dart)، فلا نسخة ثانية هنا.
+  void _openAddEvent() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const AddEventScreen()),
     );
   }
 
@@ -2197,10 +2500,14 @@ class _FeedSnapPhysics extends ScrollPhysics {
     final tolerance = toleranceFor(position);
 
     // 1) داخل منطقة الرأس (0 <= p < h):
+    //
+    // **حركة حرّة تماماً:** الرأس صار أطول من الشاشة بأقسامه الجديدة، فسحبة
+    // واحدة فيه يجب أن تُحرّكه بقدرها ولا تقفز إلى أوّل كرت (كانت السحبة التي
+    // تتجاوز نهاية الرأس تُسوّى على `h` فتقفز فوق أقسام كاملة). والتسوية تبدأ
+    // عند الكروت وحدها، كما كانت.
     if (p < h) {
-      if (velocity < -tolerance.velocity) {
-        return super.createBallisticSimulation(position, velocity);
-      }
+      final freeSim = super.createBallisticSimulation(position, velocity);
+      if (velocity < -tolerance.velocity) return freeSim;
       if (velocity.abs() <= tolerance.velocity) {
         // تثبيت على h عند الاقتراب منها (مثل خسارة touchSlop بعد سحبٍ بقدر الرأس).
         if (h - p <= 24.0) {
@@ -2212,16 +2519,19 @@ class _FeedSnapPhysics extends ScrollPhysics {
             tolerance: tolerance,
           );
         }
-        return null;
-      }
-      final freeSim = super.createBallisticSimulation(position, velocity);
-      if (freeSim != null && freeSim.x(double.infinity) < h - 24.0) {
         return freeSim;
       }
+      final landing = freeSim?.x(double.infinity);
+      if (landing == null || landing < h) return freeSim;
+      // السحبة تعبر من الرأس إلى الكروت: تُسوَّى على أقرب حدّ كرت من موضع
+      // نهايتها الطبيعية، لا على أوّل كرت.
+      final page = ((landing - h) / c).round();
+      final targetPixels = (h + page * c)
+          .clamp(position.minScrollExtent, position.maxScrollExtent);
       return ScrollSpringSimulation(
         spring,
         p,
-        h.clamp(position.minScrollExtent, position.maxScrollExtent),
+        targetPixels,
         velocity,
         tolerance: tolerance,
       );
@@ -3267,221 +3577,6 @@ class _BigStoryCardState extends State<_BigStoryCard> {
       ),
     );
   }
-}
-
-/// «الأعراس المميزة» — كاروسيل تحت البطاقة الإعلانية الكبيرة وفوق الكروت:
-/// `PageView` بنسبة عرض ~0.86 يظهر فيه طرف البطاقة التالية، يتقدّم وحده كل
-/// ٤ ثوانٍ ويتوقّف عند اللمس أو عدم النشاط. بلا مميزة: لا عنوان ولا مساحة.
-class _FeaturedCarousel extends StatefulWidget {
-  const _FeaturedCarousel({
-    required this.events,
-    required this.isActive,
-    required this.onOpen,
-  });
-
-  final List<Event> events;
-  final bool isActive;
-  final void Function(int eventId) onOpen;
-
-  @override
-  State<_FeaturedCarousel> createState() => _FeaturedCarouselState();
-}
-
-class _FeaturedCarouselState extends State<_FeaturedCarousel> {
-  final PageController _pageController = PageController(viewportFraction: 0.86);
-  int _currentPage = 0;
-  Timer? _autoTimer;
-  bool _userTouching = false;
-  bool _disableAnimations = false;
-
-  static const double _carouselHeight = 248;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _disableAnimations = MediaQuery.of(context).disableAnimations;
-    _syncTimer();
-  }
-
-  @override
-  void didUpdateWidget(covariant _FeaturedCarousel oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (_currentPage >= widget.events.length && widget.events.isNotEmpty) {
-      _currentPage = widget.events.length - 1;
-      if (_pageController.hasClients) {
-        _pageController.jumpToPage(_currentPage);
-      }
-    }
-    _syncTimer();
-  }
-
-  void _syncTimer() {
-    final shouldRun = widget.isActive &&
-        widget.events.length > 1 &&
-        !_userTouching &&
-        !_disableAnimations;
-    if (!shouldRun) {
-      _autoTimer?.cancel();
-      _autoTimer = null;
-      return;
-    }
-    _autoTimer ??= Timer.periodic(const Duration(seconds: 4), (_) {
-      if (!mounted || !_pageController.hasClients || widget.events.length <= 1) {
-        return;
-      }
-      final next = (_currentPage + 1) % widget.events.length;
-      _pageController.animateToPage(
-        next,
-        duration: const Duration(milliseconds: 350),
-        curve: Curves.easeOutCubic,
-      );
-    });
-  }
-
-  @override
-  void dispose() {
-    _autoTimer?.cancel();
-    _autoTimer = null;
-    _pageController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.c;
-    return Column(
-      key: const Key('featured_carousel'),
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsetsDirectional.fromSTEB(12, 10, 12, 8),
-          child: Row(
-            children: [
-              const Icon(Icons.star_rounded, size: 18, color: cardGold),
-              const SizedBox(width: 6),
-              Text(
-                'الأعراس المميزة',
-                style: TextStyle(
-                  fontSize: 14.5,
-                  fontWeight: FontWeight.w900,
-                  color: c.ink,
-                ),
-              ),
-            ],
-          ),
-        ),
-        SizedBox(
-          height: _carouselHeight,
-          child: Listener(
-            onPointerDown: (_) {
-              _userTouching = true;
-              _syncTimer();
-            },
-            onPointerUp: (_) {
-              _userTouching = false;
-              _syncTimer();
-            },
-            onPointerCancel: (_) {
-              _userTouching = false;
-              _syncTimer();
-            },
-            child: PageView.builder(
-              controller: _pageController,
-              padEnds: false,
-              itemCount: widget.events.length,
-              onPageChanged: (index) {
-                if (mounted) setState(() => _currentPage = index);
-              },
-              itemBuilder: (context, index) {
-                final event = widget.events[index];
-                final meta = [
-                  arabicEventDate(event.eventDate),
-                  event.villageDisplayName ?? event.town,
-                ].where((part) => part.isNotEmpty).join(' — ');
-
-                return Padding(
-                  padding: EdgeInsetsDirectional.only(
-                    start: index == 0 ? 12 : 5,
-                    end: index == widget.events.length - 1 ? 12 : 5,
-                  ),
-                  child: Material(
-                    color: c.surface,
-                    clipBehavior: Clip.antiAlias,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18),
-                      side: const BorderSide(color: cardGold, width: 1.5),
-                    ),
-                    child: InkWell(
-                      key: Key('featured_card_${event.id}'),
-                      onTap: () => widget.onOpen(event.id),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Expanded(
-                            child: ColoredBox(
-                              color: cardGround,
-                              child: event.posterUrl == null
-                                  ? _placeholder(c)
-                                  : Image.network(
-                                      event.posterUrl!,
-                                      fit: BoxFit.contain,
-                                      errorBuilder: (_, _, _) =>
-                                          _placeholder(c),
-                                    ),
-                            ),
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(10, 8, 10, 9),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  event.cardHeadline,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    height: 1.3,
-                                    fontWeight: FontWeight.w800,
-                                    color: c.ink,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  meta,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    height: 1.3,
-                                    fontWeight: FontWeight.w600,
-                                    color: c.inkSoft,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  /// بديل الصورة الغائبة أو الفاشلة — نفس رمز الفرح الذي يستعمله الكرت بلا ملصق.
-  Widget _placeholder(NegevPalette c) => ColoredBox(
-        color: cardGround,
-        child: Center(
-          child: Icon(Icons.celebration_outlined, size: 28, color: c.inkFaint),
-        ),
-      );
 }
 
 /// صفحة إعلانٍ بين الكروت (تذكرة #173): ستوري موضع `feed` في صفحة كاملة من

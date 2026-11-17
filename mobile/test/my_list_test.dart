@@ -326,6 +326,18 @@ List<Map<String, dynamic>> sixBuckets() => [
       ),
     ];
 
+/// ينزل بالقائمة حتى تُبنى كروت التغذية.
+///
+/// الرأس في الرئيسية الجديدة أطول من الشاشة و`scrollCacheExtent: 0`، فلا كرت
+/// مبنيّ عند الموضع صفر. والنزول بلا إصبع (مباشرةً على المتحكّم) لأن هذه
+/// الاختبارات قد تُبقي تبويباً آخر معروضاً فوق التغذية.
+Future<void> revealFeedCards(WidgetTester tester) async {
+  final feed = find.byKey(const Key('feed_pager'));
+  final scroll = tester.widget<CustomScrollView>(feed).controller!;
+  scroll.jumpTo(scroll.position.maxScrollExtent);
+  await tester.pumpAndSettle();
+}
+
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
@@ -981,6 +993,9 @@ void main() {
         );
         await tester.pumpWidget(services);
         await tester.pumpAndSettle();
+        // الرأس أطول من الشاشة (أقسام الرئيسية الجديدة)، فلا كرت مبنيّ عند
+        // الموضع صفر: ننزل إلى الكروت قبل قراءة كرتها.
+        await revealFeedCards(tester);
 
         EventCard card() => tester.widget<EventCard>(find.byType(EventCard));
         expect(card().event.isReminded, isTrue);
@@ -1073,6 +1088,8 @@ void main() {
         Future<void> showFeed() async {
           tab.value = 0;
           await tester.pumpAndSettle();
+          // الرأس أطول من الشاشة: الكرت يُبنى بعد النزول إلى شريحة الكروت.
+          await revealFeedCards(tester);
         }
 
         Future<void> showList() async {
