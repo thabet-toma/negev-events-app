@@ -82,6 +82,39 @@ async function coordinatesByName() {
 }
 
 /**
+ * إحداثيات مكان يطلب منه العميل شيئاً محسوباً من موقعه (مواقيت الصلاة، M3) —
+ * نفس ما يعدّه `isActivePlace` مكاناً صالحاً: بلدة نشطة أو محافظة نشطة، بلا
+ * قاعدة ثانية هنا. المقارنة حرفية في JS كـ`isActiveTown`، فالصيغة الإملائية
+ * الأخرى لا تطابق.
+ *
+ * **والبلدة بلا مركز تأخذ مركز محافظتها:** «القرى والتجمعات» ليست مكاناً بل
+ * بندٌ جامع، ومعناها «بلا بلدة محدّدة **داخل محافظتها**» — فمركز المحافظة أقرب
+ * إحداثية صادقة لها، ولا إحداثية مخترعة. والاسم والنوع يبقيان اسم البلدة
+ * المطلوبة (`kind: 'town'`): الإحداثيات احتياطية، وهوية المكان ليست.
+ *
+ * يعيد `{ name, kind: 'town'|'region', latitude, longitude }`، أو `null` لاسم
+ * غير معروف أو غير نشط — والرفض (400 عربي) في طبقة المسار لا هنا.
+ */
+async function placeCoordinates(name) {
+  if (!name) return null;
+  const [towns, regions] = await Promise.all([listActive(), listActiveRegions()]);
+
+  const town = towns.find(row => row.name === name);
+  if (town) {
+    if (town.latitude !== null && town.longitude !== null) {
+      return { name: town.name, kind: 'town', latitude: town.latitude, longitude: town.longitude };
+    }
+    const region = regions.find(row => row.id === town.region_id);
+    if (!region) return null;
+    return { name: town.name, kind: 'town', latitude: region.latitude, longitude: region.longitude };
+  }
+
+  const region = regions.find(row => row.name === name);
+  if (!region) return null;
+  return { name: region.name, kind: 'region', latitude: region.latitude, longitude: region.longitude };
+}
+
+/**
  * Whether `name` is an active town. Compared in JS, not with `WHERE name = ?`,
  * so matching stays byte-exact like `TOWNS.includes` — the column's
  * utf8mb4_unicode_ci collation would otherwise let a spelling variant through
@@ -665,6 +698,7 @@ module.exports = {
   listActive,
   activeNames,
   coordinatesByName,
+  placeCoordinates,
   isActiveTown,
   listActiveRegions,
   listDiscoveryRegions,

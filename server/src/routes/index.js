@@ -26,6 +26,7 @@ const albumsRoutes = require('./albums.routes');
 const archivePhotosRoutes = require('./archivePhotos.routes');
 const peopleRoutes = require('./people.routes');
 const newsRoutes = require('./news.routes');
+const prayerRoutes = require('./prayer.routes');
 const cardsRoutes = require('./cards.routes');
 
 const router = express.Router();
@@ -76,6 +77,9 @@ router.use(albumsRoutes);
 router.use(archivePhotosRoutes);
 router.use(peopleRoutes);
 router.use(newsRoutes);
+// مواقيت الصلاة (M3): `GET /prayer-times` عام، وتُحسب من إحداثيات بلدة أو
+// محافظة الطلب — بلا طرف خارجي ولا SQL خارج `towns.service.js`.
+router.use(prayerRoutes);
 // ستوديو بطاقة الدعوة (#180): `GET /card-templates` عام، والبقية
 // `GET/POST/PATCH/DELETE /events/:id/cards…` بعد `authenticate` وحراسة الملكية
 // داخل الراوتر نفسه. يُركَّب بعد `eventRoutes` ولا يتعارض معه: مساراته كلها

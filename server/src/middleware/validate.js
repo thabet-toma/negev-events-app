@@ -31,6 +31,21 @@ function isValidDate(value) {
   return !Number.isNaN(date.getTime());
 }
 
+/**
+ * تاريخ حقيقي لا صيغةٌ مقبولة فقط — لما يُحسَب لليوم نفسه لا لما يُخزَّن كيوم
+ * تقريبي: `isValidDate` تقبل `2026-02-30` و`2026-04-31` لأن `new Date` يُدوّر
+ * اليوم الزائد إلى الشهر التالي، فطلبُ مواقيت يومٍ لا وجود له (M3) كان سيعود
+ * مواقيت ٢ آذار بصمت بدل 400. يُعاد بناء التاريخ من أجزائه ويُقارَن.
+ */
+function isRealDate(value) {
+  if (!isValidDate(value)) return false;
+  const [year, month, day] = String(value).split('-').map(Number);
+  const rebuilt = new Date(Date.UTC(year, month - 1, day));
+  return rebuilt.getUTCFullYear() === year
+    && rebuilt.getUTCMonth() === month - 1
+    && rebuilt.getUTCDate() === day;
+}
+
 function requireDate(value, fieldLabel = 'التاريخ') {
   if (!isValidDate(value)) {
     throw ApiError.badRequest(`${fieldLabel} غير صالح — الصيغة المطلوبة YYYY-MM-DD`);
@@ -446,6 +461,7 @@ module.exports = {
   cleanString,
   requireFields,
   isValidDate,
+  isRealDate,
   requireDate,
   optionalDate,
   requireMonth,
