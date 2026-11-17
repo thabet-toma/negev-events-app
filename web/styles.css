@@ -1535,15 +1535,6 @@ button.carousel-dot.is-active::before {
   font-size: 11.5px;
 }
 
-/* «غداً» كبسولة حمراء (تذكرة #170): الغد هو ما يحرّك الناس فعلاً، ولونه يفصلها
-   عن شارة «باقي N أيام» الخضراء. التعديل على الشارة الواحدة لا شارة ثانية،
-   فالنصّ والأيقونة والحجم تبقى كما هي. */
-.card-datechip.card-datechip-tomorrow {
-  background: var(--danger-wash);
-  color: var(--danger);
-  border-color: var(--danger);
-}
-
 /*
  * «مناسبة كبرى» (تذكرة #171). الشارة ذهبية **أبداً** — وسامٌ من المنصّة لا وسمُ
  * نوع — ولذلك تحمل متغيّرها الخاصّ `--featured-gold` ولا تقرأ `--card-gold`:
@@ -1666,7 +1657,8 @@ button.carousel-dot.is-active::before {
 }
 
 .card-caption-actions .card-action-btn,
-.card-caption-actions .record-nokoot-btn {
+.card-caption-actions .record-nokoot-btn,
+.featured-event-actions .card-action-btn {
   flex: 1;
   min-width: 0;
   display: inline-flex;
@@ -1688,7 +1680,8 @@ button.carousel-dot.is-active::before {
 }
 
 .card-caption-actions .card-action-btn:hover,
-.card-caption-actions .record-nokoot-btn:hover {
+.card-caption-actions .record-nokoot-btn:hover,
+.featured-event-actions .card-action-btn:hover {
   background: var(--line-soft);
 }
 
@@ -6941,8 +6934,10 @@ body.news-screen-open { overflow: hidden; }
 }
 
 /*
- * «الأعراس المميزة» — من GET /api/events/featured، شريط بطاقات كبيرة
- * يظهر فيه طرف البطاقة التالية بـscroll-snap، وإطار ذهبي وبوستر كامل.
+ * «الأعراس المميزة» (M1-W) — من GET /api/events/featured، بطاقة واحدة كاملة
+ * تُعرض في كل لحظة وتتبدّل في مكانها كل ٥ ثوانٍ: كل البطاقات في المستند
+ * وواحدة `is-active` ظاهرة، فلا تمرير أفقي ولا قفزة تخطيط. إطار ذهبي متوهّج،
+ * ودعوة كاملة (object-fit: contain) على أرضية داكنة، ونقاط تحت الشريط.
  */
 .featured-events-section {
   width: 100%;
@@ -6973,47 +6968,50 @@ body.news-screen-open { overflow: hidden; }
 }
 
 .featured-events-track {
-  display: flex;
-  gap: 10px;
-  overflow-x: auto;
-  scroll-snap-type: x mandatory;
+  position: relative;
+  display: block;
   padding: 2px 0 6px;
-  scrollbar-width: none;
-  scroll-behavior: smooth;
-}
-.featured-events-track::-webkit-scrollbar { display: none; }
-@media (prefers-reduced-motion: reduce) {
-  .featured-events-track { scroll-behavior: auto; }
 }
 
 .featured-event-card {
-  flex: 0 0 calc(100% - 44px);
-  width: calc(100% - 44px);
-  min-height: 44px;
-  scroll-snap-align: start;
-  display: flex;
+  display: none;
   flex-direction: column;
   padding: 0;
+  min-height: 44px;
   border: 1.5px solid var(--card-gold);
   border-radius: var(--radius-md);
   background: var(--surface);
-  box-shadow: var(--shadow);
+  box-shadow: 0 0 0 1px var(--card-gold-soft), 0 10px 26px rgba(197, 148, 37, 0.22), var(--shadow);
   color: var(--ink);
   font-family: var(--font-main);
   text-align: start;
   cursor: pointer;
   overflow: hidden;
 }
+.featured-event-card.is-active {
+  display: flex;
+  animation: featuredCardIn 0.45s ease;
+}
 .featured-event-card:focus-visible { outline: 3px solid var(--sky); outline-offset: 2px; }
 
+@keyframes featuredCardIn {
+  from { opacity: 0; transform: translateX(18px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
 .featured-event-shot {
+  position: relative;
   width: 100%;
-  height: 210px;
+  aspect-ratio: 4 / 5;
+  max-height: 560px;
+  padding: 0;
+  border: none;
   background: #0c1b2a;
   overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
+  cursor: pointer;
 }
 
 .featured-event-img {
@@ -7030,28 +7028,575 @@ body.news-screen-open { overflow: hidden; }
   font-size: 1.8rem;
 }
 
+/* وسم «مناسبة مميزة» على زاوية الملصق — ذهبي أبداً، وحبره الداكن فوقه مقروء. */
+.featured-event-badge {
+  position: absolute;
+  top: 10px;
+  inset-inline-start: 10px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 11px;
+  border-radius: var(--radius-pill);
+  background: var(--card-gold);
+  border: 1px solid var(--card-gold);
+  color: #2b2000;
+  font-size: 11.5px;
+  font-weight: 800;
+  box-shadow: var(--shadow);
+}
+
 .featured-event-body {
-  padding: 9px 12px 10px;
+  padding: 10px 14px 12px;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
 }
 
 .featured-event-name {
-  font-size: 0.86rem;
-  font-weight: 800;
+  font-size: 1rem;
+  font-weight: 900;
   color: var(--ink);
   line-height: 1.4;
 }
 
 .featured-event-meta {
-  font-size: 0.72rem;
+  font-size: 0.76rem;
   font-weight: 600;
   color: var(--ink-soft);
 }
 
+.featured-event-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.featured-events-dots {
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px 0 0;
+}
+.featured-events-dots[hidden] { display: none; }
+
+.featured-events-dot {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+.featured-events-dot::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--card-gold);
+  background: transparent;
+}
+.featured-events-dot.is-active::before { background: var(--card-gold); }
+
+@media (prefers-reduced-motion: reduce) {
+  .featured-event-card.is-active { animation: none; }
+}
+
 .featured-events-section.featured-drawer-section {
   margin: 4px 0 8px;
+}
+.featured-drawer-section .featured-event-shot {
+  max-height: 380px;
+}
+
+/*
+ * الرئيسية الجديدة (M1-W) — الشريط الإخباري، بطاقة الترحيب، الأزرار السريعة،
+ * وأقسام «هذا الأسبوع قربك» و«جديد عنا» و«الأكثر تفاعلاً» وفئات الخدمات ودعوة
+ * المزوّدين. كل الألوان من متغيّرات هذا الملف وحدها (الوضع الداكن #179)، إلا
+ * تعبئةً داكنة ثابتة في الوضعين (أرضية الملصق وتدرّج دعوة المزوّدين) فحبرُها
+ * أبيض ثابتٌ عمداً لأن أرضيتها لا تتبع المظهر.
+ */
+
+/* الشريط الإخباري: صفّان متطابقان ينزلقان صفّاً كاملاً ثم يعودان بلا فجوة.
+   الحركة نحو اليمين — بداية القراءة العربية على اليمين، فالبند التالي يدخل
+   من اليسار. يتوقف عند التحويم/التركيز، ويصير صفّاً قابلاً للتمرير بلا حركة
+   عند طلب تقليل الحركة. */
+.home-news-ticker {
+  overflow: hidden;
+  margin: 8px 0 10px;
+  border: 1px solid var(--card-gold-soft);
+  border-radius: var(--radius-pill);
+  background: var(--gold-wash);
+  color: var(--ink);
+  direction: rtl;
+}
+.home-news-ticker[hidden] { display: none; }
+
+.home-news-ticker-track {
+  display: flex;
+  width: max-content;
+  animation: homeNewsTickerScroll 48s linear infinite;
+}
+.home-news-ticker:hover .home-news-ticker-track,
+.home-news-ticker:focus-within .home-news-ticker-track {
+  animation-play-state: paused;
+}
+
+@keyframes homeNewsTickerScroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(50%); }
+}
+
+.home-ticker-row {
+  display: flex;
+  align-items: center;
+}
+.home-ticker-item {
+  padding: 9px 6px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--ink);
+  white-space: nowrap;
+}
+/* زرّ الخبر: قياس البند نفسه، وحبره الأزرق الداكن، ووزنه أثقل. */
+.home-ticker-link {
+  padding: 9px 6px;
+  font-size: 0.8rem;
+  font-weight: 800;
+  color: var(--sky-deep);
+  white-space: nowrap;
+  border: none;
+  background: transparent;
+  font-family: var(--font-main);
+  cursor: pointer;
+}
+.home-ticker-link:hover { text-decoration: underline; }
+/* أسعار الذهب بنبرة الذهب نفسها، وبقية البنود بحبر الصفحة. */
+.home-ticker-item.is-gold { color: var(--gold); }
+.home-ticker-sep {
+  color: var(--card-gold);
+  font-size: 0.72rem;
+  padding: 0 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-news-ticker { overflow-x: auto; }
+  .home-news-ticker-track { animation: none; }
+  /* بلا حركة لا حاجة للنسخة الزخرفية الثانية — بقاؤها كان يعرض كل بند مرتين. */
+  .home-ticker-row[aria-hidden="true"] { display: none; }
+}
+
+/* بطاقة الترحيب — إطار ذهبي ووردة، و× يغلقها ويحفظ بصمة نصوصها. */
+.home-welcome-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 8px 0 12px;
+  padding: 12px 14px;
+  border: 1.5px solid var(--card-gold);
+  border-radius: var(--radius-md);
+  background: var(--gold-wash);
+  box-shadow: var(--shadow);
+}
+.home-welcome-card[hidden] { display: none; }
+.home-welcome-icon {
+  font-size: 1.4rem;
+  line-height: 1;
+}
+.home-welcome-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.home-welcome-title {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 900;
+  color: var(--ink);
+}
+.home-welcome-message {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+  line-height: 1.6;
+}
+.home-welcome-close {
+  flex: 0 0 auto;
+  min-width: 44px;
+  min-height: 44px;
+  border: none;
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+/* الأزرار السريعة — بلاطات دائرية بإطار ذهبي. */
+.home-quick-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  margin: 10px 0 14px;
+}
+.home-quick-action {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--font-main);
+  cursor: pointer;
+}
+.home-quick-icon {
+  width: 48px;
+  height: 48px;
+  max-width: 100%;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--card-gold);
+  background: var(--surface);
+  color: var(--card-gold);
+  font-size: 1rem;
+  box-shadow: var(--shadow);
+}
+.home-quick-action:hover .home-quick-icon { background: var(--gold-wash); }
+.home-quick-label {
+  font-size: 0.68rem;
+  font-weight: 800;
+  color: var(--ink-soft);
+  text-align: center;
+  line-height: 1.3;
+}
+
+/* عناوين الأقسام وشريحة «أحدث المناسبات». */
+.home-section { margin: 10px 0 14px; }
+.home-section[hidden] { display: none; }
+.home-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 2px 8px;
+}
+.home-section-title {
+  margin: 0;
+  font-size: 0.96rem;
+  font-weight: 900;
+  color: var(--ink);
+}
+.home-section-pill {
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--gold-wash);
+  border: 1px solid var(--card-gold-soft);
+  color: var(--gold);
+  font-size: 0.68rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+/* صفّ الكروت المصغّرة — «هذا الأسبوع قربك» و«جديد عنا» (مكوّن واحد). */
+.home-compact-row {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+  scrollbar-width: none;
+  scroll-snap-type: x proximity;
+}
+.home-compact-row::-webkit-scrollbar { display: none; }
+.home-compact-card {
+  flex: 0 0 250px;
+  scroll-snap-align: start;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  font-family: var(--font-main);
+  text-align: start;
+  cursor: pointer;
+}
+.home-compact-card:hover { border-color: var(--card-gold); }
+.home-compact-thumb {
+  flex: 0 0 58px;
+  width: 58px;
+  height: 58px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-sunk);
+  color: var(--ink-faint);
+}
+.home-compact-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.home-compact-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.home-compact-weekday {
+  align-self: flex-start;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--gold-wash);
+  color: var(--gold);
+  font-size: 0.64rem;
+  font-weight: 800;
+}
+.home-compact-title {
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.home-compact-place {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* «الأكثر تفاعلاً» — إطار ذهبي وصفّ كروت كبيرة بشارات ترتيب. */
+.home-trending-section {
+  margin: 10px 0 14px;
+  padding: 10px;
+  border: 1.5px solid var(--card-gold-soft);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(160deg, var(--gold-wash), var(--surface));
+}
+.home-trending-section[hidden] { display: none; }
+.home-trending-row {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: none;
+}
+.home-trending-row::-webkit-scrollbar { display: none; }
+.home-trending-card {
+  flex: 0 0 210px;
+  display: flex;
+  flex-direction: column;
+  min-height: 44px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  font-family: var(--font-main);
+  text-align: start;
+  cursor: pointer;
+}
+.home-trending-shot {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 5;
+  max-height: 260px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0c1b2a;
+}
+.home-trending-shot img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.home-trending-shot-empty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-faint);
+  font-size: 1.8rem;
+}
+.home-trending-rank {
+  position: absolute;
+  top: 8px;
+  inset-inline-start: 8px;
+  z-index: 2;
+  padding: 3px 9px;
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.68rem;
+  font-weight: 900;
+  box-shadow: var(--shadow);
+}
+/* البرتقالي الثابت علامة الصدارة وحدها — لا يتبدّل مع المظهر. */
+.home-trending-rank.is-first {
+  background: #f97316;
+  color: #2b1500;
+}
+.home-trending-body {
+  padding: 8px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.home-trending-title {
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.home-trending-meta {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* فئات الخدمات — بلاطات دائرية. */
+.home-category-row {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: none;
+}
+.home-category-row::-webkit-scrollbar { display: none; }
+.home-category-tile {
+  flex: 0 0 auto;
+  width: 76px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--font-main);
+  cursor: pointer;
+}
+.home-category-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--card-gold);
+  background: var(--surface);
+  color: var(--card-gold);
+  font-size: 1.3rem;
+  box-shadow: var(--shadow);
+}
+.home-category-tile:hover .home-category-icon { background: var(--gold-wash); }
+.home-category-emoji { font-size: 1.3rem; line-height: 1; }
+.home-category-name {
+  font-size: 0.66rem;
+  font-weight: 800;
+  color: var(--ink-soft);
+  text-align: center;
+  line-height: 1.3;
+}
+
+/* دعوة المزوّدين — تدرّج أخضر/فيروزي ثابت في الوضعين، فحبره أبيض ثابت. */
+.home-provider-cta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 0 16px;
+  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, #0f766e 0%, #15803d 100%);
+  box-shadow: var(--shadow);
+}
+.home-provider-cta-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.home-provider-cta-title {
+  margin: 0;
+  color: #ffffff;
+  font-size: 0.92rem;
+  font-weight: 900;
+}
+.home-provider-cta-sub {
+  margin: 0;
+  color: #d7f3e6;
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+.home-provider-cta-btn {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 10px 18px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: #ffffff;
+  color: #0f5a52;
+  font-family: var(--font-main);
+  font-size: 0.8rem;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+/* شريحة العدّ على زاوية الملصق — نفسها في كرت التغذية والمميزة و«الأكثر تفاعلاً». */
+.poster-countdown-chip {
+  position: absolute;
+  top: 10px;
+  inset-inline-end: 10px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  padding: 3.5px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--success-wash);
+  color: var(--success);
+  border: 1px solid var(--success);
+  font-size: 11.5px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.poster-countdown-chip.is-soon {
+  background: var(--danger-wash);
+  color: var(--danger);
+  border-color: var(--danger);
 }
 
 /* =========================================================================

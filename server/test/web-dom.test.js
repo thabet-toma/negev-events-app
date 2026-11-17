@@ -4529,8 +4529,8 @@ async function run() {
 
   console.log('\nEvent card — the image-first redesign (#85 batch 6a, stories 47-52)');
 
-  await test('a card with a poster emits the four nested layers, media covers from top, no blur, and badges sit in caption', () => {
-    const { document } = renderCardFixtures();
+  await test('a card with a poster emits the four nested layers, media covers from top, no blur, and the kind badge in caption', () => {
+    const { document, dom, events } = renderCardFixtures();
     const card = document.getElementById('eventCard-910');
     assert.ok(card, 'expected the poster-bearing card to render');
 
@@ -4561,9 +4561,25 @@ async function run() {
       'expected the poster image to load poster910.jpg'
     );
 
-    // Badges sit in caption
+    // الشارات: شارة النوع في الكابشن، وشريحة العدّ على زاوية الملصق وحدها —
+    // عدّ واحد على الكرت لا عدّان (M1-W). وموضع العدّ يُفحص بتاريخ متحرّك لا
+    // بتاريخ الـfixture الثابت، كي لا يتقادم التأكيد مع الزمن.
     assert.ok(caption.querySelector('.card-kindchip'), 'expected the kind badge inside caption');
-    assert.ok(caption.querySelector('.card-datechip'), 'expected the countdown badge inside caption (festive tone)');
+    const aheadDay = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Jerusalem', year: 'numeric', month: '2-digit', day: '2-digit'
+    }).format(new Date(Date.now() + 3 * 24 * 60 * 60 * 1000));
+    const aheadBox = document.createElement('div');
+    aheadBox.innerHTML = dom.window.renderSingleEventCardHtml({
+      ...events.find(evt => evt.id === 910), event_date: aheadDay
+    });
+    assert.ok(
+      aheadBox.querySelector('.card-media .poster-countdown-chip'),
+      'expected the countdown badge on the poster corner'
+    );
+    assert.strictEqual(
+      aheadBox.querySelector('.card-caption .card-datechip'), null,
+      'and no second countdown chip in the caption'
+    );
   });
 
   await test('a card with NO poster builds the short caption plus the icon, not a tall empty box', () => {
@@ -4665,10 +4681,12 @@ async function run() {
 
     const noPosterMourning = document.getElementById('eventCard-903');
     assert.strictEqual(noPosterMourning.querySelector('.card-datechip'), null, 'no countdown on a solemn card without a poster');
+    assert.strictEqual(noPosterMourning.querySelector('.poster-countdown-chip'), null, 'and none on its poster corner either');
     assert.ok(noPosterMourning.querySelector('.card-kindchip'), 'the kind badge should still show');
 
     const posterMourning = document.getElementById('eventCard-911');
-    assert.strictEqual(posterMourning.querySelector('.card-datechip'), null, 'no countdown on a solemn card WITH a poster either — "باقي ٣ أيام" is a bad word choice on a condolence');
+    assert.strictEqual(posterMourning.querySelector('.card-datechip'), null, 'no countdown on a solemn card WITH a poster either — a countdown is a bad word choice on a condolence');
+    assert.strictEqual(posterMourning.querySelector('.poster-countdown-chip'), null, 'not even on the poster corner');
     assert.ok(posterMourning.querySelector('.card-kindchip'), 'the kind badge should still show');
   });
 
@@ -4686,6 +4704,7 @@ async function run() {
     assert.ok(dateLine, 'expected a visible quiet date line on a mourning card');
     assert.ok(card.querySelector('.card-caption').contains(dateLine), 'the date line sits on the card face — visible immediately, not on the details page only');
     assert.ok(dateLine.textContent.length > 0, 'expected an actual formatted date, not an empty line');
+    assert.strictEqual(card.querySelector('.poster-countdown-chip'), null, 'and no countdown chip anywhere on its face');
 
     const festiveCard = document.getElementById('eventCard-901');
     const festiveDateLine = festiveCard.querySelector('.card-date-line');
@@ -8504,7 +8523,14 @@ async function run() {
     assert.strictEqual(doc.getElementById('statsTicker'), null, '#statsTicker must be removed from the DOM');
     assert.strictEqual(typeof dom.window.renderStatsTicker, 'undefined', 'renderStatsTicker must be removed');
     assert.strictEqual(typeof dom.window.fetchStatsTicker, 'undefined', 'fetchStatsTicker must be removed');
-    assert.strictEqual(statsRequested, false, 'startup must no longer call GET /api/stats/ticker');
+    // الشريط الإخباري الجديد (M1-W) هو المستهلك الوحيد لهذا المسار الآن: شريط
+    // الأرقام القديم ما زال غائباً، والمصدر نفسه صار يغذّي الشريط المتحرّك أعلى
+    // الرئيسية — فالتأكيد على أن أحداً لم يعد يطلبه كان سيُسقط الميزة نفسها.
+    assert.strictEqual(statsRequested, true, 'the new home news ticker is the only caller of GET /api/stats/ticker');
+    const homeTicker = doc.getElementById('homeNewsTicker');
+    await waitFor(() => homeTicker && homeTicker.hidden === false);
+    assert.strictEqual(homeTicker.hidden, false, 'the ticker payload reaches the new home marquee');
+    assert.ok(homeTicker.textContent.includes('12 مناسبة في النقب'), 'and its region count is drawn from that reply');
 
     const ticker = doc.getElementById('broadcastTicker');
     assert.ok(ticker, 'live broadcast ticker remains');
@@ -8852,9 +8878,12 @@ async function run() {
         dismissCalled = true;
         return jsonResponse({ success: true });
       }
-      // `/api/events/featured` مسارُ قائمةٍ عام لا مناسبة؛ يُجلب
-      // عند الإقلاع قبل النقر، وعدّه «فتحَ مناسبة» يجعل هذا التأكيد يسقط.
-      if (requestPath.startsWith('/api/events/') && requestPath !== '/api/events/featured') {
+      // `/api/events/featured` و`/api/events/trending` مسارا قائمةٍ عامَّان لا
+      // مناسبتان؛ يُجلبان عند الإقلاع قبل النقر، وعدّهما «فتحَ مناسبة» يجعل هذا
+      // التأكيد يسقط (trending أُضيف مع أقسام الرئيسية الجديدة، M1-W).
+      if (requestPath.startsWith('/api/events/')
+        && requestPath !== '/api/events/featured'
+        && requestPath !== '/api/events/trending') {
         eventGetCalled = true;
         return jsonResponse({ success: false });
       }
@@ -9617,9 +9646,11 @@ async function run() {
     const dom = buildAgendaEnv({
       calendarDays: [],
       feedResponder: (params, opts) => {
-        // تغذية الصفحة عند الإقلاع تطلب `/api/events` بلا `date_from` — تُجاب
-        // فارغةً فوراً كي لا تلتبس بطلبات الأجندة (هي أيضاً بلا ترويسة محافظة).
-        if (!params.get('date_from')) {
+        // تغذية الصفحة عند الإقلاع تطلب `/api/events` بلا `date_from`، وقسم
+        // «هذا الأسبوع قربك» في الرئيسية (M1-W) يطلب نطاق أسبوع بلا `page` —
+        // كلاهما يُجاب فارغاً فوراً كي لا يلتبس بطلبات الأجندة (وحدها تحمل
+        // `page`).
+        if (!params.get('date_from') || !params.get('page')) {
           return jsonResponse({
             success: true, events: [], pagination: { page: 1, limit: 30, total: 0, totalPages: 0 }, announcements: []
           });
@@ -9800,8 +9831,8 @@ async function run() {
       event_date: keyFor(0),
       occasion_type: { name: 'عرس', color: '#8f6a20' }
     });
-    assert(cardToday.includes('card-datechip">اليوم</span>'), 'Today event must show "اليوم"');
-    assert(!cardToday.includes('card-datechip-tomorrow'), 'only tomorrow is the red capsule');
+    assert(cardToday.includes('poster-countdown-chip is-soon">اليوم</span>'), 'Today event must show "اليوم" in the red poster chip');
+    assert(!cardToday.includes('card-datechip'), 'and the caption carries no second countdown');
 
     const cardTomorrow = dom.window.renderSingleEventCardHtml({
       id: 102,
@@ -9810,8 +9841,8 @@ async function run() {
       occasion_type: { name: 'عرس', color: '#8f6a20' }
     });
     assert(
-      cardTomorrow.includes('card-datechip card-datechip-tomorrow">غداً</span>'),
-      'Tomorrow event must show "غداً" as the red capsule'
+      cardTomorrow.includes('poster-countdown-chip is-soon">غداً</span>'),
+      'Tomorrow event must show "غداً" in the red poster chip'
     );
 
     const cardTwoDays = dom.window.renderSingleEventCardHtml({
@@ -9820,7 +9851,7 @@ async function run() {
       event_date: keyFor(2),
       occasion_type: { name: 'عرس', color: '#8f6a20' }
     });
-    assert(cardTwoDays.includes('card-datechip">باقي 2 أيام</span>'), 'Event in 2 days must show "باقي 2 أيام"');
+    assert(cardTwoDays.includes('poster-countdown-chip is-soon">بعد 2 أيام</span>'), 'Event in 2 days must show "بعد 2 أيام"');
   });
 
   await test('«غداً» is computed in Jerusalem time — a device in another zone cannot shift the day', () => {
@@ -9836,13 +9867,24 @@ async function run() {
     assert.strictEqual(dom.window.eventCountdownDays({ event_date: '2026-11-07' }, at), 1, 'and the seventh is tomorrow');
     assert.strictEqual(dom.window.eventCountdownDays({ event_date: '2026-11-05' }, at), -1, 'the fifth has passed there');
     assert.strictEqual(dom.window.eventCountdownDays({ event_date: '' }, at), null, 'an unreadable date draws no chip');
+
+    // النصّ نفسه على شريحة الملصق (M1-W): «اليوم» و«غداً» و«بعد N أيام» من الحساب
+    // نفسه، فلا تُزيحه منطقة الجهاز — وشريحة القريب حمراء.
+    assert.strictEqual(dom.window.eventCountdownLabel({ event_date: '2026-11-06' }, at), 'اليوم');
+    assert.strictEqual(dom.window.eventCountdownLabel({ event_date: '2026-11-07' }, at), 'غداً');
+    assert.strictEqual(dom.window.eventCountdownLabel({ event_date: '2026-11-10' }, at), 'بعد 4 أيام');
+    assert.strictEqual(dom.window.eventCountdownLabel({ event_date: '2026-11-05' }, at), '', 'the fifth has passed there — no chip');
+    assert.ok(
+      dom.window.posterCountdownChipHtml({ event_date: '2026-11-07' }, at).includes('poster-countdown-chip is-soon'),
+      'and the near chip carries the red style'
+    );
   });
 
   /**
    * «انتهت» (#167): الحكم على نهاية أيام المناسبة يأتي من الخادم (`is_ended`،
    * محسوباً بامتداد الأيام كاملاً) لا من حساب العميل — فمناسبة متعددة الأيام
-   * تنتهي بعد يومها الأول. والشارة تحلّ محلّ العدّاد، فلا يقول الكرت «مناسبة
-   * سابقة» و«انتهت» معاً، ولا تحملها مناسبة قائمة.
+   * تنتهي بعد يومها الأول. وشريحة العدّ على الملصق لا تُرسم لمناسبة انتهت، فتبقى
+   * «انتهت» وحدها في الكابشن ولا تحملها مناسبة قائمة.
    */
   await test('كرت التغذية يحمل «انتهت» حين يقول الخادم إن أيام المناسبة مضت، ولا يحملها لمناسبة قائمة (#167)', async () => {
     const dom = buildEnv({ loggedIn: false });
@@ -9854,10 +9896,11 @@ async function run() {
     const ended = dom.window.renderSingleEventCardHtml({ ...base, event_date: '2020-01-01', is_ended: true });
     assert.ok(ended.includes('card-datechip is-ended">انتهت</span>'), 'an ended event says «انتهت» in the card chip');
     assert.ok(!ended.includes('مناسبة سابقة'), 'and not also «مناسبة سابقة» — one chip, one meaning');
+    assert.ok(!ended.includes('poster-countdown-chip'), 'and the poster carries no countdown for it');
 
     const live = dom.window.renderSingleEventCardHtml({ ...base, event_date: today, is_ended: false });
     assert.ok(!live.includes('انتهت'), 'an event still running carries no «انتهت»');
-    assert.ok(live.includes('card-datechip">اليوم</span>'), 'and keeps its countdown chip — the badge replaced nothing that still applies');
+    assert.ok(live.includes('poster-countdown-chip is-soon">اليوم</span>'), 'and keeps its countdown chip — on the poster corner now');
   });
 
   await test('services tab has filter chips, search input, filter modals, and renders luxury service cards', async () => {
@@ -19274,7 +19317,8 @@ async function run() {
     assert.ok(!mourning.includes('rsvp-card-btn'), 'no «جاي» on a funeral');
     assert.ok(!mourning.includes('reminder-btn'), 'and no «ذكّرني» either — «العزاء لا أزرار»');
     assert.ok(!mourning.includes('بارك'), 'the festive wording never reaches a funeral');
-    assert.ok(!mourning.includes('card-datechip'), 'and no counter chip of any kind');
+    assert.ok(!mourning.includes('card-datechip'), 'and no caption chip of any kind');
+    assert.ok(!mourning.includes('poster-countdown-chip'), 'nor a countdown on its poster corner');
   });
 
   await test('«جاي» من الكرت يسجّل الجواب بعدد 1 ويُفعّل «ذكّرني» ظاهراً', async () => {
@@ -20742,6 +20786,398 @@ async function run() {
       document.getElementById('accountMyQuotesList').children.length,
       0,
       'ولا بطاقة عرض تبقى'
+    );
+  });
+
+  console.log('\nالرئيسية الجديدة (M1-W) — العدّ التنازلي والشريط الإخباري والترحيب والأقسام');
+
+  /** مفتاح يوم القدس بعد `offset` يوماً — نفس صيغة `jerusalemTodayKey` في app.js. */
+  const jerusalemKeyFor = offsetDays => new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jerusalem', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).format(new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000));
+
+  await test('عدّاد زاوية الملصق: «اليوم» و«غداً» و«بعد N أيام» بتوقيت القدس، ولا شيء لمناسبة انتهت', () => {
+    const dom = buildEnv();
+    const win = dom.window;
+
+    assert.strictEqual(win.eventCountdownLabel({ event_date: jerusalemKeyFor(0) }), 'اليوم');
+    assert.strictEqual(win.eventCountdownLabel({ event_date: jerusalemKeyFor(1) }), 'غداً');
+    assert.strictEqual(win.eventCountdownLabel({ event_date: jerusalemKeyFor(3) }), 'بعد 3 أيام');
+    assert.strictEqual(win.eventCountdownLabel({ event_date: jerusalemKeyFor(9) }), 'بعد 9 أيام');
+    assert.strictEqual(win.eventCountdownLabel({ event_date: jerusalemKeyFor(-1) }), '', 'a past day draws no chip');
+    assert.strictEqual(
+      win.eventCountdownLabel({ event_date: jerusalemKeyFor(2), is_ended: true }), '',
+      'an ended event draws no chip even when its day has not passed'
+    );
+    assert.strictEqual(win.eventCountdownLabel({ event_date: '' }), '', 'an unreadable date draws no chip');
+
+    const todayChip = win.posterCountdownChipHtml({ event_date: jerusalemKeyFor(0) });
+    assert.ok(todayChip.includes('poster-countdown-chip is-soon'), 'the last three days carry the red style');
+    assert.ok(todayChip.includes('اليوم'), 'and the label itself');
+    const threeDaysChip = win.posterCountdownChipHtml({ event_date: jerusalemKeyFor(3) });
+    assert.ok(threeDaysChip.includes('is-soon'), 'day three is still inside the red window');
+    const farChip = win.posterCountdownChipHtml({ event_date: jerusalemKeyFor(8) });
+    assert.ok(!farChip.includes('is-soon'), 'a far day is not red');
+    assert.ok(farChip.includes('بعد 8 أيام'), 'but still counts the days');
+    assert.strictEqual(win.posterCountdownChipHtml({ event_date: jerusalemKeyFor(-2) }), '', 'nothing for an ended day');
+  });
+
+  await test('باني بنود الشريط الإخباري: المحافظات والمجموع والذهب والعملات والخبر، والغائب يُسقَط وحده', () => {
+    const dom = buildEnv();
+    const win = dom.window;
+
+    const full = win.buildHomeTickerItems({
+      success: true,
+      regions: [
+        { region_id: 1, name: 'النقب', upcoming_count: 12 },
+        { region_id: 2, name: 'طولكرم', upcoming_count: 0 }
+      ],
+      total: 12,
+      updated_at: '2026-11-02T06:07:00.000Z',
+      prices: {
+        gold: { k24: 320.456, k21: 280.4, k18: 240.34 },
+        currencies: [
+          { code: 'USD', ils_per_unit: 3.71 },
+          { code: 'JOD', ils_per_unit: 5.23 },
+          { code: 'EUR', ils_per_unit: 4.02 }
+        ]
+      },
+      latest_news: { id: 77, title: 'خبر المحافظة', published_at: '2026-11-01T10:00:00.000Z' }
+    });
+    const texts = full.map(item => item.text);
+
+    assert.ok(texts.includes('📍 12 مناسبة في النقب'), 'each region with upcoming events is one item');
+    assert.ok(!texts.some(text => text.includes('طولكرم')), 'a region with zero upcoming events is omitted');
+    assert.ok(texts.includes('🎉 12 مناسبة قادمة'), 'the server total is shown as it came');
+    assert.ok(texts.includes('الذهب عيار 24: ₪320.46 للغرام'), 'gold 24 to two decimals');
+    assert.ok(texts.includes('الذهب عيار 21: ₪280.40 للغرام'), 'gold 21 to two decimals');
+    assert.ok(texts.includes('الذهب عيار 18: ₪240.34 للغرام'), 'gold 18 to two decimals');
+    assert.ok(texts.includes('الدولار ₪3.71'), 'the dollar rate');
+    assert.ok(texts.includes('الدينار الأردني ₪5.23'), 'the Jordanian dinar rate');
+    assert.ok(texts.includes('اليورو ₪4.02'), 'the euro rate');
+    assert.ok(texts.includes('📰 خبر المحافظة'), 'the latest news headline');
+    const newsItem = full.find(item => item.action === 'news');
+    assert.strictEqual(newsItem.newsId, 77, 'and its id is what opens the item itself');
+    assert.ok(texts.some(text => text.startsWith('🕒 حُدّث ')), 'the update time in Jerusalem time');
+    assert.ok(texts.some(text => text.startsWith('📅 ')), 'and today as the closing item');
+
+    // خادم أقدم: بلا `prices` وبلا `latest_news` وبلا وقت مقروء — يُسقَط كل بند
+    // غائب وحده، ويبقى ما وصل.
+    const bare = win.buildHomeTickerItems({
+      success: true,
+      regions: [{ region_id: 1, name: 'النقب', upcoming_count: 2 }],
+      total: 2,
+      updated_at: null
+    });
+    const bareTexts = bare.map(item => item.text);
+    assert.ok(bareTexts.includes('📍 2 مناسبة في النقب'), 'the region item survives');
+    assert.ok(!bareTexts.some(text => text.includes('الذهب')), 'no gold item without prices');
+    assert.ok(!bareTexts.some(text => text.includes('الدولار')), 'no currency items without prices');
+    assert.ok(!bareTexts.some(text => text.startsWith('📰')), 'no news item without latest_news');
+    assert.ok(!bareTexts.some(text => text.startsWith('🕒')), 'no clock item for an unreadable updated_at');
+
+    // مصفوفات النافذة من عالم jsdom آخر، فلا `deepStrictEqual` عليها — الطول.
+    assert.strictEqual(win.buildHomeTickerItems(null).length, 0, 'no reply means no items');
+    assert.strictEqual(win.buildHomeTickerItems({ success: false }).length, 0, 'a failed reply means no items');
+  });
+
+  await test('الشريط الإخباري يُخفى كاملاً حين لا بنود، ويُعرض بصفّين متطابقين حين تصل', async () => {
+    const dom = buildEnv();
+    const win = dom.window;
+    await flushBoot();
+    const doc = win.document;
+    const bar = doc.getElementById('homeNewsTicker');
+    const track = doc.getElementById('homeNewsTickerTrack');
+    assert.ok(bar && track, 'the marquee element exists in web/index.html');
+
+    win.fetch = async url => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/stats/ticker') return jsonResponse({ success: false });
+      return buildFetchStub()(url);
+    };
+    await win.loadHomeNewsTicker();
+    assert.strictEqual(bar.hidden, true, 'a failed reply hides the whole bar');
+    assert.strictEqual(track.children.length, 0, 'and empties it');
+
+    win.fetch = async url => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/stats/ticker') {
+        return jsonResponse({
+          success: true,
+          regions: [{ region_id: 1, name: 'النقب', upcoming_count: 4 }],
+          total: 4,
+          updated_at: null
+        });
+      }
+      return buildFetchStub()(url);
+    };
+    await win.loadHomeNewsTicker();
+    assert.strictEqual(bar.hidden, false, 'a reply with items shows the bar');
+    assert.ok(bar.textContent.includes('4 مناسبة في النقب'), 'and draws the item text');
+    const rows = [...track.querySelectorAll('.home-ticker-row')];
+    assert.strictEqual(rows.length, 2, 'two identical rows so the scroll loops with no gap');
+    assert.strictEqual(rows[0].hasAttribute('aria-hidden'), false, 'the first row is the real, interactive one');
+    assert.strictEqual(rows[1].getAttribute('aria-hidden'), 'true', 'the second is the decorative copy');
+    // jsdom بلا محرّك تخطيط: التخطيط والحركة نفسيهما لا يُقاسان هنا — يُفحص
+    // نصّاً في CSS أن النسخة الزخرفية وحدها (الموسومة aria-hidden) تُخفى تحت
+    // prefers-reduced-motion، فلا يظهر كل بند مرتين حين يتوقف الشريط.
+    assert.match(
+      STYLES_CSS_RAW,
+      /@media \(prefers-reduced-motion: reduce\) \{\s*\.home-news-ticker\b[\s\S]{0,600}\.home-ticker-row\[aria-hidden="true"\]\s*\{[^}]*display:\s*none/,
+      'the decorative ticker copy is hidden under reduced motion — items would otherwise show twice'
+    );
+    assert.strictEqual(
+      track.querySelectorAll('.home-ticker-link').length, 0,
+      'a news-free reply carries no button'
+    );
+  });
+
+  await test('بطاقة الترحيب: تُغلق ببصمة نصّها، ورسالة جديدة ببصمة جديدة تعود', async () => {
+    const dom = buildEnv();
+    const win = dom.window;
+    await flushBoot();
+    const doc = win.document;
+    const card = doc.getElementById('homeWelcomeCard');
+    assert.strictEqual(card.hidden, true, 'no home_welcome on the server means no card');
+
+    win.applyHomeWelcomeSetting({ title: 'أهلاً بكم', message: 'رسالة أولى' });
+    assert.strictEqual(card.hidden, false, 'a welcome from the settings reply shows the card');
+    assert.strictEqual(doc.getElementById('homeWelcomeTitle').textContent, 'أهلاً بكم');
+    assert.strictEqual(doc.getElementById('homeWelcomeMessage').textContent, 'رسالة أولى');
+
+    win.dismissHomeWelcome();
+    assert.strictEqual(card.hidden, true, '× hides it');
+    win.renderHomeWelcome();
+    assert.strictEqual(card.hidden, true, 'and the same message stays dismissed on a later render');
+
+    win.applyHomeWelcomeSetting({ title: 'أهلاً بكم', message: 'رسالة ثانية' });
+    assert.strictEqual(card.hidden, false, 'a new message has a new fingerprint, so it appears again');
+
+    win.applyHomeWelcomeSetting(null);
+    assert.strictEqual(card.hidden, true, 'a null welcome hides the card again');
+  });
+
+  await test('«الأعراس المميزة»: بطاقة واحدة نشِطة من بطاقتين، ونقطتان، والنقر ينقل البطاقة', async () => {
+    const featuredEvents = [
+      {
+        id: 1201, title: 'مناسبة أولى', family_clan: 'آل سالم', town: 'رهط',
+        event_date: jerusalemKeyFor(4), honorees: [{ name: 'سالم النباري', role: 'العريس' }],
+        occasion_type: { id: 1, name: 'عرس', tone: 'festive', reactions: [], rsvp_enabled: true },
+        reactions: {}, is_ended: false, is_featured: true, poster_url: 'https://example.test/p1.jpg'
+      },
+      {
+        id: 1202, title: 'مناسبة ثانية', family_clan: 'آل خالد', town: 'حورة',
+        event_date: jerusalemKeyFor(6), honorees: [{ name: 'هند أبو خالد', role: 'العروس' }],
+        occasion_type: { id: 3, name: 'خطوبة', tone: 'festive', reactions: [] },
+        reactions: {}, is_ended: false, is_featured: true
+      }
+    ];
+    const dom = buildEnv({
+      onBeforeEval: (w) => {
+        const base = buildFetchStub();
+        w.fetch = async (url, opts = {}) => (
+          String(url).split('?')[0] === '/api/events/featured'
+            ? jsonResponse({ success: true, events: featuredEvents })
+            : base(url, opts)
+        );
+      }
+    });
+    const win = dom.window;
+    await flushBoot();
+    const doc = win.document;
+    await waitFor(() => doc.querySelectorAll('#featuredEventsTrack .featured-event-card').length === 2);
+
+    const cards = [...doc.querySelectorAll('#featuredEventsTrack .featured-event-card')];
+    assert.strictEqual(cards.filter(card => card.classList.contains('is-active')).length, 1,
+      'exactly one slide is visible at a time');
+    assert.strictEqual(cards[0].classList.contains('is-active'), true, 'the first slide is the one shown');
+
+    const dots = [...doc.querySelectorAll('#featuredEventsDots .featured-events-dot')];
+    assert.strictEqual(dots.length, 2, 'one dot per featured event');
+    assert.strictEqual(dots[0].getAttribute('aria-current'), 'true', 'the first dot marks the visible slide');
+
+    assert.ok(cards[0].querySelector('.featured-event-shot .featured-event-badge'), 'the gold badge sits on the poster');
+    assert.ok(
+      cards[0].querySelector('.featured-event-shot .poster-countdown-chip'),
+      'the countdown chip sits on the poster corner'
+    );
+    assert.ok(cards[0].querySelector('.featured-event-actions .reminder-btn'), 'the existing remind action is reused');
+    assert.ok(cards[0].textContent.includes('مهتم'), 'with «مهتم»');
+    assert.ok(cards[0].textContent.includes('بارك'), 'and «بارك» from the feed card\'s own handler');
+
+    dots[1].click();
+    assert.strictEqual(cards[1].classList.contains('is-active'), true, 'clicking a dot moves the slide');
+    assert.strictEqual(cards[0].classList.contains('is-active'), false, 'and hides the previous one');
+    assert.strictEqual(dots[1].getAttribute('aria-current'), 'true', 'the dot state follows the slide');
+  });
+
+  await test('أقسام الرئيسية تُخفى كاملة حين لا بيانات، وتُملأ من ردودها حين تصل', async () => {
+    const dom = buildEnv();
+    const win = dom.window;
+    await flushBoot();
+    const doc = win.document;
+    await delay(30);
+    const sectionIds = ['homeWeekSection', 'homeNewestSection', 'homeTrendingSection', 'homeCategoriesSection'];
+
+    // فراغ من الخادم: كل قسم يختفي وصفّه يُفرَّغ — لا رسالة خطأ ولا بقايا.
+    win.fetch = async url => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/events' || requestPath === '/api/events/trending') {
+        return jsonResponse({ success: true, events: [] });
+      }
+      if (requestPath === '/api/services/categories') return jsonResponse({ success: true, categories: [] });
+      return buildFetchStub()(url);
+    };
+    await win.loadThisWeekEvents();
+    await win.loadNewestEvents();
+    await win.loadTrendingEvents();
+    await win.loadHomeServiceCategories();
+    sectionIds.forEach(id => {
+      assert.strictEqual(doc.getElementById(id).hidden, true, `${id} must be hidden when its data is empty`);
+    });
+    assert.strictEqual(doc.getElementById('homeWeekRow').children.length, 0, 'and its row is emptied');
+
+    // فشل الشبكة: القسم يختفي وحده بلا توست وبلا مساس بالتغذية.
+    win.fetch = async () => { throw new Error('offline'); };
+    await win.loadThisWeekEvents();
+    assert.strictEqual(doc.getElementById('homeWeekSection').hidden, true, 'a failed request hides its own section');
+
+    const events = [{
+      id: 940, title: 'مناسبة الأسبوع', town: 'رهط', event_date: jerusalemKeyFor(2),
+      honorees: [{ name: 'أحمد أبو سالم', role: 'العريس' }],
+      occasion_type: { id: 1, name: 'عرس', tone: 'festive', reactions: [] }
+    }];
+    win.fetch = async url => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/events' || requestPath === '/api/events/trending') {
+        return jsonResponse({ success: true, events });
+      }
+      if (requestPath === '/api/services/categories') {
+        return jsonResponse({ success: true, categories: [{ id: 5, name: 'بيوت شعر', icon: '⛺' }] });
+      }
+      return buildFetchStub()(url);
+    };
+    await win.loadThisWeekEvents();
+    await win.loadNewestEvents();
+    await win.loadTrendingEvents();
+    await win.loadHomeServiceCategories();
+
+    assert.strictEqual(doc.getElementById('homeWeekSection').hidden, false, 'the week row shows when it has rows');
+    assert.strictEqual(doc.querySelectorAll('#homeWeekRow .home-compact-card').length, 1, 'one compact card');
+    assert.ok(
+      doc.querySelector('#homeWeekRow .home-compact-weekday').textContent.trim().length > 0,
+      'the compact card carries its weekday chip'
+    );
+    assert.ok(
+      doc.querySelector('#homeWeekRow .home-compact-title').textContent.includes('عرس أحمد أبو سالم'),
+      'and the same headline the feed card uses'
+    );
+    assert.strictEqual(doc.getElementById('homeNewestSection').hidden, false, '«جديد عنا» uses the same component');
+    assert.strictEqual(doc.querySelectorAll('#homeNewestRow .home-compact-card').length, 1, 'with the same card');
+    assert.strictEqual(doc.getElementById('homeTrendingSection').hidden, false, 'the trending section shows');
+    assert.ok(
+      doc.querySelector('#homeTrendingRow .home-trending-rank.is-first').textContent.includes('الأكثر تفاعلاً'),
+      'the first rank badge is the orange «الأكثر تفاعلاً»'
+    );
+    assert.strictEqual(doc.getElementById('homeCategoriesSection').hidden, false, 'the categories strip shows');
+    assert.ok(
+      doc.querySelector('#homeCategoryRow .home-category-emoji').textContent.includes('⛺'),
+      'the category tile uses the category\'s own icon'
+    );
+  });
+
+  await test('كرت التغذية يحمل شريحة عدّ واحدة على زاوية الملصق — ولا يحملها لمناسبة انتهت ولا لكرت عزاء', () => {
+    const dom = buildEnv();
+    const win = dom.window;
+    const event = {
+      id: 950, title: 'عرس', town: 'رهط', event_date: jerusalemKeyFor(2),
+      occasion_type: { id: 1, name: 'عرس', tone: 'festive', reactions: [] }
+    };
+
+    const html = win.renderSingleEventCardHtml(event);
+    const box = win.document.createElement('div');
+    box.innerHTML = html;
+    const chips = box.querySelectorAll('.poster-countdown-chip');
+    assert.strictEqual(chips.length, 1, 'exactly one countdown chip on the card');
+    assert.strictEqual(
+      box.querySelector('.card-media .poster-countdown-chip'), chips[0],
+      'and it sits on the poster corner'
+    );
+    assert.ok(chips[0].classList.contains('is-soon'), 'red inside three days');
+    assert.ok(chips[0].textContent.includes('بعد 2 أيام'), 'with the single helper\'s label');
+    assert.strictEqual(
+      box.querySelector('.card-caption .card-datechip'), null,
+      'the legacy caption countdown chip is gone — one countdown, not two'
+    );
+
+    const endedHtml = win.renderSingleEventCardHtml({ ...event, is_ended: true });
+    assert.ok(!endedHtml.includes('poster-countdown-chip'), 'an ended event carries no poster chip');
+    assert.ok(
+      endedHtml.includes('card-datechip is-ended">انتهت</span>'),
+      'and keeps the caption «انتهت» chip exactly as it was'
+    );
+
+    assert.ok(
+      !win.renderSingleEventCardHtml({
+        ...event, occasion_type: { id: 2, name: 'عزا', tone: 'solemn', reactions: [] }
+      }).includes('poster-countdown-chip'),
+      'a solemn card stays quiet — no countdown on the poster either'
+    );
+  });
+
+  await test('ترتيب أقسام الرئيسية من أعلى لأسفل كما في المواصفة، والتغذية آخرها', () => {
+    const dom = buildEnv();
+    const doc = dom.window.document;
+    const Node = dom.window.Node;
+    const ordered = [
+      'storyCarouselSection',
+      'homeNewsTicker',
+      'homeWelcomeCard',
+      'featuredEventsSection',
+      'homeWeekSection',
+      'homeNewestSection',
+      'homeTrendingSection',
+      'homeCategoriesSection',
+      'eventsContainer'
+    ].map(id => doc.getElementById(id));
+
+    ordered.forEach((el, index) => {
+      assert.ok(el, `expected #${['storyCarouselSection', 'homeNewsTicker', 'homeWelcomeCard', 'featuredEventsSection', 'homeWeekSection', 'homeNewestSection', 'homeTrendingSection', 'homeCategoriesSection', 'eventsContainer'][index]} in web/index.html`);
+      if (index === 0) return;
+      assert.ok(
+        ordered[index - 1].compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING,
+        `${el.id} must come after ${ordered[index - 1].id}`
+      );
+    });
+
+    const quick = doc.querySelector('.home-quick-actions');
+    const cta = doc.querySelector('.home-provider-cta');
+    assert.ok(quick, 'the quick actions row exists');
+    assert.ok(cta, 'the provider CTA exists');
+    assert.ok(
+      doc.getElementById('homeWeekSection').compareDocumentPosition(quick) & Node.DOCUMENT_POSITION_FOLLOWING,
+      'the quick actions row sits after «هذا الأسبوع قربك»'
+    );
+    assert.ok(
+      quick.compareDocumentPosition(doc.getElementById('homeNewestSection')) & Node.DOCUMENT_POSITION_FOLLOWING,
+      'and before «جديد عنا»'
+    );
+    assert.ok(
+      doc.getElementById('homeCategoriesSection').compareDocumentPosition(cta) & Node.DOCUMENT_POSITION_FOLLOWING,
+      'the provider CTA comes after the service categories'
+    );
+    assert.ok(
+      cta.compareDocumentPosition(doc.getElementById('eventsContainer')) & Node.DOCUMENT_POSITION_FOLLOWING,
+      'and right before the existing feed'
+    );
+    assert.strictEqual(
+      doc.querySelectorAll('.home-quick-actions .home-quick-action').length, 5,
+      'five quick action tiles'
+    );
+    assert.strictEqual(
+      [...doc.querySelectorAll('.home-quick-actions .home-quick-label')].map(node => node.textContent).join('|'),
+      'دعواتي|تقويمي|أنشئ مناسبة|استوديو الدعوات|المزوّدون',
+      'with the reference wording, in order'
     );
   });
 

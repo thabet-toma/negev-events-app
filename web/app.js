@@ -213,6 +213,18 @@ let featuredCarouselIndex = 0;
 let featuredCarouselTimer = null;
 let featuredMenuOpen = false;
 let featuredMenuReturnFocusEl = null;
+// إيقاف مؤقّت لتقدّم «الأعراس المميزة» ما دام المؤشّر/اللمس/التركيز داخل القسم.
+let featuredSlidePaused = false;
+
+// الرئيسية الجديدة (M1-W): الشريط الإخباري وبطاقة الترحيب وأقسام الاكتشاف.
+// كل جلب فيها مستقلّ تماماً — فشله يُخفي قسمه وحده، ولا يحجب التغذية ولا يُظهر
+// توست خطأ. `homeTickerData` آخر ردّ GET /api/stats/ticker (أو null قبل أول
+// جلب/عند فشله)، و`homeWelcome` ترحيب `home_welcome` من GET /api/settings/public.
+let homeTickerData = null;
+let homeWelcome = null;
+// عدّاد محافظة الاكتشاف لهذه الأقسام: تبديل المحافظة يبطل أي ردّ قديم في الطريق
+// فلا تُرسم مناسبات المحافظة السابقة فوق الجديدة.
+let homeDiscoveryRegionToken = 0;
 
 // المصدر الحقيقي الوحيد لهذا التعداد هو تعليق عمود broadcasts.tone في
 // server/src/db/schema.sql — لا استيراد ممكن هنا (web/ بلا خطوة بناء)، فهذه
@@ -342,6 +354,13 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchEvents();
   // «الأعراس المميزة» — من GET /api/events/featured لمحافظة الاكتشاف الحالية.
   loadFeaturedEvents();
+  // الرئيسية الجديدة (M1-W): الشريط الإخباري وأقسام الاكتشاف. كلها تُطلق مع
+  // التغذية لا بعدها، وكل جلب منها مستقلّ فلا يحجبها ولا يحجب بعضه.
+  loadHomeNewsTicker();
+  loadThisWeekEvents();
+  loadNewestEvents();
+  loadTrendingEvents();
+  loadHomeServiceCategories();
   fetchStories();
   renderStickerCanvas();
   recordAnalyticsEvent('app_opened');
@@ -905,6 +924,163 @@ async function dismissBroadcastById(broadcastId) {
   }
 }
 
+/*
+ * «الشريط الإخباري» (M1-W) — شريط نصّ متحرّك أعلى الرئيسية من
+ * GET /api/stats/ticker، منفصل تماماً عن شريط التعميم الحيّ (#broadcastTicker)
+ * الذي يبقى سلوكه كما هو. البنود تُبنى في `buildHomeTickerItems` وحدها كنصوص
+ * خام (بلا HTML) فيهرّبها الرسم، والجزء الغائب من الردّ يُسقط بنده وحده: أسعار
+ * غائبة أو خبر غائب أو وقت غير مقروء لا تُخفي الشريط.
+ */
+
+/** أسماء العملات الثلاث المعروضة — تُطابَق بـ`currencies[].code` لا بالاسم العربي. */
+const HOME_TICKER_CURRENCIES = [
+  { code: 'USD', label: 'الدولار' },
+  { code: 'JOD', label: 'الدينار الأردني' },
+  { code: 'EUR', label: 'اليورو' }
+];
+
+/** «حُدّث HH:MM» بتوقيت القدس لا بتوقيت جهاز القارئ — '' لتاريخ غائب أو لا يُقرأ. */
+function homeTickerClockLabel(iso) {
+  // `new Date(null)` تاريخ صالح (١٩٧٠) — الغياب وحده لا يُقرأ وقتاً.
+  if (iso === null || iso === undefined || iso === '') return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('ar-EG', {
+    timeZone: JERUSALEM_TIME_ZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23'
+  }).format(date);
+}
+
+/** «الأحد، ٣ نوفمبر» — يوم اليوم في القدس لا في جهاز القارئ. */
+function homeTickerTodayLabel(now = new Date()) {
+  return new Intl.DateTimeFormat('ar-EG', {
+    timeZone: JERUSALEM_TIME_ZONE,
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long'
+  }).format(now);
+}
+
+/**
+ * بنود الشريط من ردّ GET /api/stats/ticker — مصفوفة `{ text, action?, newsId? }`.
+ * الترتيب هو ترتيب المواصفة: محافظات ← مجموع ← ذهب ← عملات ← آخر خبر ← وقت
+ * التحديث ← اليوم. `action: 'news'` وحدها تجعل البند زرّاً يفتح «آخر خبر».
+ */
+function buildHomeTickerItems(data) {
+  if (!data || data.success !== true) return [];
+  const items = [];
+
+  const regions = Array.isArray(data.regions) ? data.regions : [];
+  regions.forEach(region => {
+    const count = Number(region && region.upcoming_count);
+    const name = String((region && region.name) || '').trim();
+    if (Number.isFinite(count) && count > 0 && name) {
+      items.push({ text: `📍 ${count} مناسبة في ${name}` });
+    }
+  });
+
+  const total = Number(data.total);
+  if (Number.isFinite(total) && total > 0) items.push({ text: `🎉 ${total} مناسبة قادمة` });
+
+  const prices = data.prices && typeof data.prices === 'object' ? data.prices : null;
+  const gold = prices && prices.gold && typeof prices.gold === 'object' ? prices.gold : null;
+  if (gold) {
+    [['24', 'k24'], ['21', 'k21'], ['18', 'k18']].forEach(([karat, key]) => {
+      const value = Number(gold[key]);
+      if (Number.isFinite(value) && value > 0) {
+        items.push({ text: `الذهب عيار ${karat}: ₪${value.toFixed(2)} للغرام`, tone: 'gold' });
+      }
+    });
+  }
+
+  const currencies = prices && Array.isArray(prices.currencies) ? prices.currencies : [];
+  HOME_TICKER_CURRENCIES.forEach(({ code, label }) => {
+    const row = currencies.find(currency => currency && currency.code === code);
+    const value = row ? Number(row.ils_per_unit) : NaN;
+    if (Number.isFinite(value) && value > 0) items.push({ text: `${label} ₪${value.toFixed(2)}` });
+  });
+
+  const news = data.latest_news && typeof data.latest_news === 'object' ? data.latest_news : null;
+  const newsTitle = news ? String(news.title || '').trim() : '';
+  if (newsTitle) {
+    const newsId = Number(news.id);
+    items.push({
+      text: `📰 ${newsTitle}`,
+      action: 'news',
+      newsId: Number.isInteger(newsId) && newsId > 0 ? newsId : null
+    });
+  }
+
+  const updated = homeTickerClockLabel(data.updated_at);
+  if (updated) items.push({ text: `🕒 حُدّث ${updated}` });
+
+  // اليوم لا يغيب: بند أخير ثابت في كل ردّ ناجح (وإن خلا ما سواه).
+  items.push({ text: `📅 ${homeTickerTodayLabel()}` });
+  return items;
+}
+
+/** صفّ بنود واحد؛ `interactive` وحدها تحمل زرّ الخبر، ونسخة الزينة لا تحمل زرّاً. */
+function homeTickerRowHtml(items, interactive) {
+  const separator = '<span class="home-ticker-sep" aria-hidden="true">✦</span>';
+  const body = items.map(item => {
+    const text = escapeHtml(item.text);
+    if (interactive && item.action === 'news') {
+      return `<button type="button" class="home-ticker-link" onclick="openHomeTickerNews(${item.newsId === null ? 'null' : item.newsId})">${text}</button>`;
+    }
+    return `<span class="home-ticker-item${item.tone === 'gold' ? ' is-gold' : ''}">${text}</span>`;
+  }).join(separator);
+  return body + separator;
+}
+
+/**
+ * فتح «آخر خبر» من الشريط: الشاشة أولاً، ثم الخبر نفسه إن كان معرّفه معروفاً
+ * (الخادم الأقدم بلا `latest_news` يفتح القائمة وحدها).
+ */
+function openHomeTickerNews(newsId) {
+  openNewsScreen();
+  const id = Number(newsId);
+  if (Number.isInteger(id) && id > 0) openNewsItem(id);
+}
+
+/**
+ * الرسم: نسختان متطابقتان من الصفّ في مسار واحد، فالحركة تنزلق صفّاً كاملاً
+ * وتعود إلى المشهد نفسه بلا فجوة. النسخة الثانية زخرفية (`aria-hidden` وبلا
+ * أزرار) فلا يُقرأ الشريط مرتين ولا يُكرَّر زرّه على قارئ الشاشة.
+ */
+function renderHomeNewsTicker() {
+  const bar = document.getElementById('homeNewsTicker');
+  const track = document.getElementById('homeNewsTickerTrack');
+  if (!bar || !track) return;
+
+  const items = buildHomeTickerItems(homeTickerData);
+  if (!items.length) {
+    track.innerHTML = '';
+    bar.hidden = true;
+    return;
+  }
+
+  track.innerHTML = `<div class="home-ticker-row">${homeTickerRowHtml(items, true)}</div>`
+    + `<div class="home-ticker-row" aria-hidden="true">${homeTickerRowHtml(items, false)}</div>`;
+  bar.hidden = false;
+}
+
+/**
+ * جلب الشريط — بلا `auth`: المسار عام ولا يخصّ صاحب الحساب. فشله يُخفي الشريط
+ * وحده (لا توست، ولا مساس بالتغذية).
+ */
+async function loadHomeNewsTicker() {
+  try {
+    const res = await apiFetch('/api/stats/ticker');
+    const data = await res.json();
+    homeTickerData = data && data.success === true ? data : null;
+  } catch (e) {
+    homeTickerData = null;
+  }
+  renderHomeNewsTicker();
+}
+
 // 1.6 زرّ الدعم الفني (#85 خطوة 34-35، 39) — يفتح واتساب على الرقم من
 // GET /api/settings/public، برقم كما يعيده الخادم حرفياً («972XXXXXXXXX» بلا
 // «+») بلا أي إعادة تهيئة هنا؛ wa.me يقبله كما هو.
@@ -918,6 +1094,9 @@ async function initSupportEntry() {
       // «شكل عرض المزوّدين» (تذكرة #158) يصل من نفس الاستجابة: يُطبَّق فوراً
       // ويُعاد رسم الدليل إن كان مفتوحاً، فلا إعادة تحميل يدوية للإعداد.
       applyProvidersDisplaySetting(data.settings.providers_display);
+      // «ترحيب الرئيسية» (M1-W) من نفس استجابة الإعدادات العامة — لا نداء ثانٍ،
+      // وغياب المفتاح (خادم أقدم) يعني «لا بطاقة».
+      applyHomeWelcomeSetting((data.settings && data.settings.home_welcome) || data.home_welcome || null);
       // التغذية قد تكون رُسمت قبل وصول الإعدادات — أعِد رسمها كي تظهر كتلة
       // المقطع الافتراضي على كروتها بلا انتظار جلب جديد.
       if (defaultEventAudioUrl && allEvents.length) renderEvents(allEvents);
@@ -944,6 +1123,68 @@ function updateSupportButtonState() {
     fab.classList.toggle('support-btn-disabled', !configured);
     fab.title = configured ? 'الدعم الفني عبر واتساب' : 'الدعم الفني غير مُفعَّل بعد';
   }
+}
+
+/*
+ * بطاقة ترحيب الرئيسية (M1-W) — `home_welcome` في GET /api/settings/public.
+ * الإغلاق يُحفظ ببصمة عنوان+نصّ لا بقيمة ثابتة: رسالة جديدة (بصمة جديدة) تعود،
+ * والقديمة تبقى مغلقة على هذا الجهاز. غياب المفتاح — خادم أقدم — لا بطاقة.
+ */
+const HOME_WELCOME_DISMISSED_KEY = 'negev_home_welcome_dismissed';
+
+/** بصمة النصّ: تغيّر حرف واحد يجعل الرسالة «جديدة» فتعود. */
+function homeWelcomeFingerprint(welcome) {
+  const text = `${(welcome && welcome.title) || ''}\u0000${(welcome && welcome.message) || ''}`;
+  let hash = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    hash = (hash * 31 + text.charCodeAt(i)) | 0;
+  }
+  return `v${hash}`;
+}
+
+function isHomeWelcomeDismissed(welcome) {
+  try {
+    return localStorage.getItem(HOME_WELCOME_DISMISSED_KEY) === homeWelcomeFingerprint(welcome);
+  } catch (e) {
+    return false; // تخزين معطّل — البطاقة تُعرض ولا يُحفظ إغلاقها
+  }
+}
+
+/** × يُخفي البطاقة ويسجّل بصمة نصوصها الحالية. */
+function dismissHomeWelcome() {
+  if (homeWelcome) {
+    try {
+      localStorage.setItem(HOME_WELCOME_DISMISSED_KEY, homeWelcomeFingerprint(homeWelcome));
+    } catch (e) {
+      // تخزين معطّل أو ممتلئ — الإغلاق نافذ لهذه الجلسة على الأقل.
+    }
+  }
+  const card = document.getElementById('homeWelcomeCard');
+  if (card) card.hidden = true;
+}
+
+/** يرسم البطاقة من `homeWelcome` أو يخفيها (لا ترحيب، أو ترحيب أُغلق). */
+function renderHomeWelcome() {
+  const card = document.getElementById('homeWelcomeCard');
+  if (!card) return;
+  if (!homeWelcome || isHomeWelcomeDismissed(homeWelcome)) {
+    card.hidden = true;
+    return;
+  }
+  const title = document.getElementById('homeWelcomeTitle');
+  const message = document.getElementById('homeWelcomeMessage');
+  if (title) title.textContent = homeWelcome.title;
+  if (message) message.textContent = homeWelcome.message;
+  card.hidden = false;
+}
+
+/** يقرأ `home_welcome` كما وصل — كائن بعنوان ورسالة، وأي شكل آخر يعني لا ترحيب. */
+function applyHomeWelcomeSetting(raw) {
+  const source = raw && typeof raw === 'object' ? raw : null;
+  const title = source ? String(source.title || '').trim() : '';
+  const message = source ? String(source.message || '').trim() : '';
+  homeWelcome = title || message ? { title, message } : null;
+  renderHomeWelcome();
 }
 
 /**
@@ -2786,6 +3027,16 @@ function jerusalemTodayKey(now = new Date()) {
 }
 
 /**
+ * مفتاح يوم 'YYYY-MM-DD' بعد `offsetDays` من اليوم في القدس — حساب تقويمي
+ * (`Date.UTC` على مكوّنات اليوم) لا إضافة ساعات، فلا تُزيحه ساعة صيفية.
+ * يستعمله نطاق «هذا الأسبوع قربك» وحده.
+ */
+function jerusalemDayKey(offsetDays) {
+  const [year, month, day] = jerusalemTodayKey().split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day + offsetDays)).toISOString().slice(0, 10);
+}
+
+/**
  * ساعة حائط القدس الآن بصيغة 'YYYY-MM-DDTHH:MM:SS' — الشكل نفسه الذي يصل به
  * `publish_at` من الخادم (عمود `DATETIME` يقرأه `pool.js` بتوقيت غرينتش كما
  * كتبه صاحب المناسبة، فيصل ISO ينتهي بـ`Z`). تُقارَن نصّاً: «مجدولة لم يبلغ
@@ -2824,6 +3075,34 @@ function eventCountdownDays(evt, now = new Date()) {
   const diff = Date.parse(`${dayKey}T00:00:00Z`) - Date.parse(`${jerusalemTodayKey(now)}T00:00:00Z`);
   if (Number.isNaN(diff)) return null;
   return Math.round(diff / (1000 * 60 * 60 * 24));
+}
+
+/**
+ * نصّ شريحة العدّ التنازلي — الموضع الوحيد الذي يصوغها (M1-W): «اليوم»،
+ * «غداً»، «بعد N أيام»، و'' لمناسبة انتهت أو بلا تاريخ يُقرأ — بنفس صياغة
+ * تطبيق الموبايل (`eventCountdownChip` في `event_card.dart`). الأيام بتوقيت
+ * القدس (`eventCountdownDays`) لا بتوقيت جهاز القارئ، و`now` للتثبيت في الاختبار.
+ */
+function eventCountdownLabel(evt, now = new Date()) {
+  if (evt && evt.is_ended) return '';
+  const days = eventCountdownDays(evt, now);
+  if (days === null || days < 0) return '';
+  if (days === 0) return 'اليوم';
+  if (days === 1) return 'غداً';
+  return `بعد ${days} أيام`;
+}
+
+/**
+ * شريحة العدّ على زاوية الملصق: حمراء حين يقترب الموعد (ثلاثة أيام أو أقل)،
+ * ولا شيء لمناسبة انتهت. هي نفسها في كرت التغذية وبطاقة «الأعراس المميزة»
+ * وكرت «الأكثر تفاعلاً» — النصّ من `eventCountdownLabel` وحدها.
+ */
+function posterCountdownChipHtml(evt, now = new Date()) {
+  const label = eventCountdownLabel(evt, now);
+  if (!label) return '';
+  const days = eventCountdownDays(evt, now);
+  const soon = days !== null && days <= 3;
+  return `<span class="poster-countdown-chip${soon ? ' is-soon' : ''}">${escapeHtml(label)}</span>`;
 }
 
 /**
@@ -2967,6 +3246,19 @@ function cardImageUrl(url) {
 }
 
 /**
+ * زرّ «بارك»/«عزّي» — الموضع الوحيد الذي يبنيه، يستعمله كرت التغذية وبطاقة
+ * «الأعراس المميزة» معاً. تسميته من نغمة النوع لا من اسمه: العزاء «عزّي» وكل
+ * فرح «بارك»، والفتح على مسار التبريك القائم نفسه (`openMessageSheet`).
+ */
+function renderMessagesActionHtml(evt) {
+  const isMourning = isMourningTone(evt);
+  return `
+        <button type="button" class="chat-trigger-btn card-action-btn card-messages-btn" onclick="openMessageSheet(${evt.id}, ${evt.occasion_type && evt.occasion_type.id ? evt.occasion_type.id : 'null'})">
+          <i class="fa-regular fa-comments"></i> <span>${isMourning ? 'عزّي' : 'بارك'}</span>
+        </button>`;
+}
+
+/**
  * كرت مناسبة واحد — وهو نفسه كرت الإعلان حين يصل `opts.announcement`
  * (`{ event_id, old_value, new_value }`): شريط «إعلان تعديل موعد» أعلى الكرت
  * وسطر التغيير، وزرّ «التفاصيل» وحده. «ذكّرني» و«التبريكات» و«المشاركة» لا
@@ -2976,16 +3268,6 @@ function cardImageUrl(url) {
  */
 function renderSingleEventCardHtml(evt, opts = {}) {
   const announcement = opts.announcement || null;
-  // بتوقيت القدس لا بتوقيت الجهاز — انظر `eventCountdownDays`.
-  const diffDays = eventCountdownDays(evt);
-
-  // العدّ التنازلي يُقرأ على كل نوع — و«الفرح» ولهبُه على نعيٍ إساءة.
-  let countdownText = '';
-  if (diffDays === null) countdownText = '';
-  else if (diffDays === 0) countdownText = 'اليوم';
-  else if (diffDays === 1) countdownText = 'غداً';
-  else if (diffDays > 1) countdownText = `باقي ${diffDays} أيام`;
-  else countdownText = 'مناسبة سابقة';
 
   const formattedDate = formatEventDayLong(evt);
   const effectiveAudio = announcement ? null : effectiveEventAudio(evt);
@@ -3003,16 +3285,17 @@ function renderSingleEventCardHtml(evt, opts = {}) {
     <img src="${escapeHtml(cardImageUrl(evt.poster_url))}" alt="${escapeHtml(evt.title)}" class="card-media-img" loading="lazy">` : `
     <div class="card-media-placeholder"><i class="fa-solid ${isMourning ? 'fa-dove' : 'fa-champagne-glasses'}"></i></div>`;
 
-  // «انتهت» (#167): نهاية أيام المناسبة مضت — يحسبها الخادم بامتداد الأيام كاملاً
-  // (`is_ended` على الصفّ) لا العميل. تُحلّ محلّ شريحة العدّاد فلا يقول الكرت
-  // «مناسبة سابقة» و«انتهت» معاً، وتبقى بنفس لغة الشريحة (نفس الصنف) بنبرة
-  // خافتة. ولا تظهر لمناسبة قائمة: `is_ended` غير مرسل ⇒ لا شيء.
-  const endedChipHtml = evt.is_ended ? '<span class="card-datechip is-ended">انتهت</span>' : '';
+  // العدّ التنازلي على زاوية الملصق (M1-W) — «اليوم/غداً/بعد N أيام» من
+  // `eventCountdownLabel` وحدها، حمراء في آخر ثلاثة أيام، ولا شيء لمناسبة انتهت.
+  // **وهو العدّ الوحيد على الكرت**: شريحة الكابشن القديمة أُزيلت، فبقي في الكابشن
+  // «انتهت» وحدها. والعزاء بلا أي عدّ (هدوء النوع).
+  const posterCountdownHtml = isMourning ? '' : posterCountdownChipHtml(evt);
 
-  // «غداً» كبسولة حمراء وحدها (تذكرة #170): يوم الغد هو ما يحرّك الناس فعلاً،
-  // ولونه يفصلها عن شارة «باقي N أيام» الخضراء. والعزاء بلا أي شارة.
-  const countdownChipHtml = isMourning || evt.is_ended || !countdownText ? '' : `
-        <span class="card-datechip${diffDays === 1 ? ' card-datechip-tomorrow' : ''}">${escapeHtml(countdownText)}</span>`;
+  // «انتهت» (#167): نهاية أيام المناسبة مضت — يحسبها الخادم بامتداد الأيام كاملاً
+  // (`is_ended` على الصفّ) لا العميل. شريحة العدّ لا تُرسم لمناسبة انتهت
+  // (`posterCountdownChipHtml`)، فتبقى «انتهت» وحدها بلا شريحة ثانية، ولا تحملها
+  // مناسبة قائمة: `is_ended` غير مرسل ⇒ لا شيء.
+  const endedChipHtml = evt.is_ended ? '<span class="card-datechip is-ended">انتهت</span>' : '';
 
   // «مناسبة كبرى» (تذكرة #171): الخادم يحسبها على الصفّ (`is_featured`،
   // مشتقّة من `featured_until >= CURDATE()`)، فالعميل لا يقارن تواريخ ولا
@@ -3055,10 +3338,7 @@ function renderSingleEventCardHtml(evt, opts = {}) {
   // المناسبة على الفرح — «جاي» (حين يفتح النوع تأكيد الحضور) و«بارك» و«ذكّرني»
   // — ثم «المشاركة». **والعزاء لا أزرار ولا عدّادات إلا «عزّي»**: زرّ تبريك واحد
   // بلا قلبٍ ولا «جاي»، والتبريكات تُقرأ «عزّي» من نغمة النوع لا من اسمه.
-  const messagesActionHtml = `
-        <button type="button" class="chat-trigger-btn card-action-btn card-messages-btn" onclick="openMessageSheet(${evt.id}, ${evt.occasion_type && evt.occasion_type.id ? evt.occasion_type.id : 'null'})">
-          <i class="fa-regular fa-comments"></i> <span>${isMourning ? 'عزّي' : 'بارك'}</span>
-        </button>`;
+  const messagesActionHtml = renderMessagesActionHtml(evt);
   const actionsHtml = announcement ? `
       <div class="card-caption-actions">
         <button type="button" class="card-more-details-btn card-action-btn" onclick="openEventPage(${announcement.event_id != null ? announcement.event_id : evt.id})">
@@ -3078,7 +3358,7 @@ function renderSingleEventCardHtml(evt, opts = {}) {
     <div class="card-caption">
       <div class="card-caption-chips">${featuredBadgeHtml}
         <span class="card-kindchip">${occasionTypeBadgeHtml(evt.occasion_type)}</span>
-        ${endedChipHtml}${countdownChipHtml}
+        ${endedChipHtml}
       </div>
       <h2 class="event-main-title card-clamp-2-line"><a href="/e/${evt.id}" class="card-title-link" onclick="handleCardTitleClick(event, ${evt.id})">${escapeHtml(eventCardHeadline(evt))}</a></h2>
       ${subtitleHtml}
@@ -3094,7 +3374,7 @@ function renderSingleEventCardHtml(evt, opts = {}) {
       <div class="card-bezel"${bezelStyle}>
         <div class="card-framed">${announcementBannerHtml}
           <div class="card-media${hasShot ? '' : ' card-media-empty'}" onclick="openEventPage(${evt.id})">
-            ${mediaContent}
+            ${mediaContent}${posterCountdownHtml}
           </div>
           ${captionHtml}
           <div class="card-goldframe" aria-hidden="true"></div>
@@ -3937,7 +4217,7 @@ function playHeartPop(btn) {
  * والنبض يُطلَق على الزرّ الجديد المرسوم فعلاً.
  */
 function reminderButtonsFor(eventId) {
-  const buttons = Array.from(document.querySelectorAll(`#eventCard-${eventId} .reminder-btn, #announcementCard-${eventId} .reminder-btn`));
+  const buttons = Array.from(document.querySelectorAll(`#eventCard-${eventId} .reminder-btn, #announcementCard-${eventId} .reminder-btn, .featured-event-card[data-event-id="${eventId}"] .reminder-btn`));
   if (isEventPageOpen() && eventPageEvent && eventPageEvent.id === eventId) {
     buttons.push(...document.querySelectorAll('#eventPageBody .reminder-btn'));
   }
@@ -3972,6 +4252,9 @@ async function toggleReminder(eventId, isReminded, btnElement) {
     if (data.success) {
       const evt = allEvents.find(e => e.id === eventId);
       applySavedState(eventId, !isReminded);
+      // بطاقات «الأعراس المميزة» خارج `allEvents`، فلا يعيد `applySavedState`
+      // رسمها — حالتها تُزامَن هنا كي لا يبقى القلب فارغاً بعد الإضافة.
+      syncFeaturedReminderState(eventId, !isReminded);
       // القلب ينبض عند الإضافة وحدها — هو «ذكّرني ♥» في المواصفة، والإزالة
       // ليست لحظة قلب.
       if (!isReminded) reminderButtonsFor(eventId).forEach(playHeartPop);
@@ -5169,6 +5452,9 @@ async function selectRegion(regionId) {
   refreshPublishTownForRegion(previousRegionId);
   resetFeedForRegionChange();
   refreshPlaceFilterForRegion();
+  // الأقسام التابعة للمحافظة قبل طلب التغذية: كلها في الدورة نفسها، ويبقى طلب
+  // التغذية آخر طلب `/api/events` فيها.
+  reloadHomeDiscoverySections();
   fetchEvents({ force: true });
   reloadDiscoverySurfacesForRegion();
 }
@@ -5191,28 +5477,70 @@ function expandFeedToAllRegions() {
   syncRegionPickerSelection();
   resetFeedForRegionChange();
   refreshPlaceFilterForRegion();
+  // نفس ترتيب تبديل المحافظة: الأقسام التابعة للمحافظة أولاً ثم التغذية.
+  reloadHomeDiscoverySections();
   fetchEvents({ force: true });
   reloadDiscoverySurfacesForRegion();
 }
 
 /*
  * «الأعراس المميزة» — من GET /api/events/featured لمحافظة الاكتشاف الحالية.
- * شريط بطاقات كبيرة بـscroll-snap وإطار ذهبي وبوستر كامل (object-fit: contain).
- * يتقدّم ذاتياً كل ٤ ثوانٍ ويتوقف عند اللمس وعند إخفاء الصفحة أو تغطيتها
- * أو تفضيل تقليل الحركة.
+ * بطاقة واحدة كاملة تُعرض في كل لحظة (دعوة كاملة على أرضية داكنة، إطار ذهبي
+ * متوهّج، وسم «مناسبة مميزة»، شريحة عدّ تنازلي)، وتتبدّل في مكانها كل ٥ ثوانٍ
+ * بلا تمرير: البطاقات كلها في المستند وواحدة `is-active` والباقي `display:none`،
+ * وتحت الشريط نقاط تختار البطاقة. يتوقف التبديل عند تفضيل تقليل الحركة أو
+ * تغطية الرئيسية (نفس `shouldAutoAdvanceHomeCarousels`) وعند تحويم/لمس/تركيز
+ * داخل القسم، ولا يبدأ ببطاقة واحدة.
  */
 let featuredRequestSeq = 0;
 
 function featuredTargets() {
   return [
-    { sectionId: 'featuredEventsSection', rowId: 'featuredEventsTrack' },
-    { sectionId: 'drawerFeaturedEventsSection', rowId: 'drawerFeaturedEventsTrack' }
+    { sectionId: 'featuredEventsSection', rowId: 'featuredEventsTrack', dotsId: 'featuredEventsDots' },
+    { sectionId: 'drawerFeaturedEventsSection', rowId: 'drawerFeaturedEventsTrack', dotsId: 'drawerFeaturedEventsDots' }
   ]
-    .map(({ sectionId, rowId }) => ({
+    .map(({ sectionId, rowId, dotsId }) => ({
       section: document.getElementById(sectionId),
-      row: document.getElementById(rowId)
+      row: document.getElementById(rowId),
+      dots: document.getElementById(dotsId)
     }))
     .filter(target => target.section && target.row);
+}
+
+/** بطاقات الشريط المرسومة الآن — العدّ من المستند لا من متغيّر قد يتقادم. */
+function featuredCards() {
+  return Array.from(document.querySelectorAll('#featuredEventsTrack .featured-event-card'));
+}
+
+function featuredSlideCount() {
+  return featuredCards().length;
+}
+
+/**
+ * ينقل العرض إلى بطاقة بعينها في النسختين (الصفحة والدرج): `is-active` على
+ * بطاقة واحدة والنقاط تتبعها. لا إعادة بناء ولا تمرير — التبديل في مكانه.
+ */
+function syncFeaturedSlides(index) {
+  const total = featuredSlideCount();
+  if (!total) return;
+  featuredCarouselIndex = ((index % total) + total) % total;
+
+  featuredTargets().forEach(({ row, dots }) => {
+    row.querySelectorAll('.featured-event-card').forEach((card, cardIndex) => {
+      card.classList.toggle('is-active', cardIndex === featuredCarouselIndex);
+    });
+    if (!dots) return;
+    dots.querySelectorAll('.featured-events-dot').forEach((dot, dotIndex) => {
+      const active = dotIndex === featuredCarouselIndex;
+      dot.classList.toggle('is-active', active);
+      dot.setAttribute('aria-current', active ? 'true' : 'false');
+    });
+  });
+}
+
+/** نقرة نقطة تحت الشريط — تنتقل إلى بطاقتها. */
+function goToFeaturedSlide(index) {
+  syncFeaturedSlides(index);
 }
 
 function stopFeaturedAutoAdvance() {
@@ -5222,38 +5550,44 @@ function stopFeaturedAutoAdvance() {
   }
 }
 
+/**
+ * التبديل التلقائي كل ٥ ثوانٍ في المكان نفسه. الحارس في كل نبضة لا عند
+ * التشغيل وحده: نافذة/صفحة تُفتح فوق الرئيسية توقف التبديل فوراً حتى لو بقي
+ * المؤقّت حياً.
+ */
 function startFeaturedAutoAdvance() {
   stopFeaturedAutoAdvance();
   if (prefersReducedMotion()) return;
-  const track = document.getElementById('featuredEventsTrack');
-  if (!track) return;
-  const cards = track.querySelectorAll('.featured-event-card');
-  if (cards.length <= 1) return;
+  if (featuredSlidePaused) return;
+  if (featuredSlideCount() <= 1) return;
 
   featuredCarouselTimer = setInterval(() => {
+    if (featuredSlidePaused) return;
     if (!shouldAutoAdvanceHomeCarousels()) return;
-    const liveCards = track.querySelectorAll('.featured-event-card');
-    if (liveCards.length <= 1) return;
-    featuredCarouselIndex = (featuredCarouselIndex + 1) % liveCards.length;
-    const target = liveCards[featuredCarouselIndex];
-    if (!target || typeof track.scrollBy !== 'function') return;
-    const containerRect = track.getBoundingClientRect();
-    const cardRect = target.getBoundingClientRect();
-    if (containerRect.width > 0) {
-      const delta = cardRect.right - (containerRect.right - 12);
-      track.scrollBy({ left: delta, behavior: 'smooth' });
-    }
-  }, 4000);
+    if (featuredSlideCount() <= 1) return;
+    syncFeaturedSlides(featuredCarouselIndex + 1);
+  }, 5000);
 }
 
-function bindFeaturedTrackInteraction(track) {
-  if (!track || track.dataset.featuredBound === '1') return;
-  track.dataset.featuredBound = '1';
-  track.addEventListener('pointerdown', stopFeaturedAutoAdvance);
-  track.addEventListener('touchstart', stopFeaturedAutoAdvance, { passive: true });
-  track.addEventListener('pointerup', startFeaturedAutoAdvance);
-  track.addEventListener('pointercancel', startFeaturedAutoAdvance);
-  track.addEventListener('touchend', startFeaturedAutoAdvance, { passive: true });
+/** إيقاف/استئناف التبديل — من التحويم أو اللمس أو التركيز داخل القسم. */
+function setFeaturedSlidePaused(paused) {
+  featuredSlidePaused = Boolean(paused);
+  if (featuredSlidePaused) stopFeaturedAutoAdvance();
+  else startFeaturedAutoAdvance();
+}
+
+/** يربط الإيقاف المؤقّت بالنسختين مرة واحدة (الدرج يُبنى متأخّراً، فالحارس لازم). */
+function bindFeaturedInteraction() {
+  featuredTargets().forEach(({ section }) => {
+    if (section.dataset.featuredBound === '1') return;
+    section.dataset.featuredBound = '1';
+    // مؤشّر الفأرة واللمس كلاهما `pointerenter`/`pointerleave` (اللمس يرفع
+    // المؤشّر بعد الإفلات)، والتركيز لوحة المفاتيح له حدثاه.
+    section.addEventListener('pointerenter', () => setFeaturedSlidePaused(true));
+    section.addEventListener('pointerleave', () => setFeaturedSlidePaused(false));
+    section.addEventListener('focusin', () => setFeaturedSlidePaused(true));
+    section.addEventListener('focusout', () => setFeaturedSlidePaused(false));
+  });
 }
 
 async function loadFeaturedEvents() {
@@ -5264,8 +5598,12 @@ async function loadFeaturedEvents() {
   stopFeaturedAutoAdvance();
   featuredCarouselIndex = 0;
 
-  targets.forEach(({ section, row }) => {
+  targets.forEach(({ section, row, dots }) => {
     row.innerHTML = '';
+    if (dots) {
+      dots.innerHTML = '';
+      dots.hidden = true;
+    }
     section.hidden = true;
   });
 
@@ -5288,34 +5626,266 @@ async function loadFeaturedEvents() {
   const events = data && Array.isArray(data.events) ? data.events : [];
   if (!events.length) return;
 
-  const html = events.map(renderFeaturedCardHtml).join('');
-  targets.forEach(({ section, row }) => {
-    row.innerHTML = html;
+  const cardsHtml = events.map(renderFeaturedCardHtml).join('');
+  const dotsHtml = events.map((evt, index) => `
+        <button type="button" class="featured-events-dot${index === 0 ? ' is-active' : ''}" onclick="goToFeaturedSlide(${index})" aria-label="البطاقة ${index + 1} من ${events.length}" aria-current="${index === 0 ? 'true' : 'false'}"></button>`).join('');
+
+  targets.forEach(({ section, row, dots }) => {
+    row.innerHTML = cardsHtml;
+    if (dots) {
+      dots.innerHTML = events.length > 1 ? dotsHtml : '';
+      dots.hidden = events.length <= 1;
+    }
     section.hidden = false;
   });
 
-  bindFeaturedTrackInteraction(document.getElementById('featuredEventsTrack'));
+  bindFeaturedInteraction();
+  syncFeaturedSlides(0);
   startFeaturedAutoAdvance();
 }
 
-/** بطاقة «الأعراس المميزة» — بوستر كامل، عنوان، وسطر «التاريخ — البلدة» من مُهيّئات الكرت. */
+/**
+ * بطاقة «الأعراس المميزة» — الدعوة كاملة (object-fit: contain على أرضية داكنة)،
+ * وسم ذهبي على الزاوية، شريحة عدّ تنازلي، عنوان الكرت نفسه، سطر «مكان · تاريخ
+ * · وقت»، ثم أفعال كرت التغذية نفسها لا نسخة ثانية: «ذكّرني» و«مهتم» (فعل
+ * التذكير نفسه) و«جاي» (مسار تأكيد الحضور) و«بارك» (مسار التبريك، و«عزّي» على
+ * نغمة النوع). والنقر على البطاقة أو الملصق يفتح صفحة المناسبة، وأزرار الأفعال
+ * توقف تصعيد النقر إلى البطاقة.
+ */
 function renderFeaturedCardHtml(evt) {
-  const headline = eventCardHeadline(evt);
-  const place = eventPlaceName(evt);
-  const meta = [formatEventDayLong(evt), place].filter(Boolean).join(' — ');
+  const isMourning = isMourningTone(evt);
   const poster = evt.poster_url ? cardImageUrl(evt.poster_url) : '';
   const shot = poster
     ? `<img class="featured-event-img" src="${escapeHtml(poster)}" alt="" loading="lazy">`
     : '<span class="featured-event-img featured-event-img-empty" aria-hidden="true"><i class="fa-solid fa-champagne-glasses"></i></span>';
+  const meta = [
+    eventPlaceName(evt),
+    formatEventDayLong(evt),
+    typeShowsField(evt, 'dinner_time') ? evt.dinner_time : ''
+  ].filter(Boolean).map(text => escapeHtml(text)).join(' · ');
+
+  // «ذكّرني» القائم نفسه (قلب/محفوظة)، و«مهتم» فعل التذكير ذاته بلا تبديل:
+  // الضغط عليها يضيف ولا يزيل. العزاء بلا قلب ولا «جاي» كما في كرت التغذية.
+  const remindHtml = isMourning ? '' : renderReminderButtonHtml(evt, { compact: true });
+  const interestHtml = isMourning ? '' : `
+          <button type="button" class="card-action-btn featured-interest-btn" onclick="toggleReminder(${evt.id}, false, this)">
+            <i class="fa-solid fa-star"></i> <span>مهتم</span>
+          </button>`;
+  const rsvpHtml = isMourning ? '' : renderRsvpCardButtonHtml(evt);
 
   return `
-    <button type="button" class="featured-event-card" data-event-id="${evt.id}" onclick="openEventPage(${evt.id})">
-      <div class="featured-event-shot">${shot}</div>
+    <article class="featured-event-card" data-event-id="${evt.id}" onclick="openEventPage(${evt.id})">
+      <button type="button" class="featured-event-shot" onclick="event.stopPropagation(); openEventPage(${evt.id})" aria-label="فتح صفحة المناسبة">
+        ${shot}
+        <span class="featured-event-badge">✦ مناسبة مميزة</span>
+        ${isMourning ? '' : posterCountdownChipHtml(evt)}
+      </button>
       <div class="featured-event-body">
-        <span class="featured-event-name card-clamp-1-line">${escapeHtml(headline)}</span>
-        <span class="featured-event-meta card-clamp-1-line">${escapeHtml(meta)}</span>
+        <h3 class="featured-event-name card-clamp-1-line">${escapeHtml(eventCardHeadline(evt))}</h3>
+        <span class="featured-event-meta card-clamp-1-line">${meta}</span>
+        <div class="featured-event-actions" onclick="event.stopPropagation()">
+          ${remindHtml}${interestHtml}${rsvpHtml}${renderMessagesActionHtml(evt)}
+        </div>
       </div>
+    </article>`;
+}
+
+/**
+ * يوائم حالة «ذكّرني» في بطاقات «الأعراس المميزة» بعد نجاح الفعل: البطاقة
+ * خارج `allEvents`، فلا يعيد `applySavedState` رسمها وتبقى حالتها قديمة.
+ */
+function syncFeaturedReminderState(eventId, isSaved) {
+  document.querySelectorAll(`.featured-event-card[data-event-id="${eventId}"] .reminder-btn`).forEach(btn => {
+    btn.classList.toggle('is-saved', isSaved);
+    const icon = btn.querySelector('i');
+    if (icon) icon.className = `fa-${isSaved ? 'solid' : 'regular'} fa-heart`;
+    const label = btn.querySelector('span');
+    if (label) label.textContent = isSaved ? 'محفوظة' : 'ذكّرني';
+  });
+}
+
+/*
+ * أقسام الاكتشاف الجديدة في الرئيسية (M1-W) — «هذا الأسبوع قربك» و«جديد عنا»
+ * و«الأكثر تفاعلاً» وفئات الخدمات. كل قسم مستقلّ تماماً: جلبه لا يحجب التغذية،
+ * وفشله يُخفي قسمه وحده بلا توست خطأ. والأقسام الثلاثة الأولى تتبع محافظة
+ * الاكتشاف نفسها التي تتبعها التغذية (`apiFetch` بترويسة X-Region، وعلَم
+ * «كل المحافظات» عند التوسّع)، فتُعاد مع تبديل المحافظة وحده — لا مع كل تغيير
+ * فلتر، فذلك لا يغيّر محافظتها.
+ */
+
+/** يُخفي قسماً ويفرّغ صفّه — الفراغ والفشل لا يتركان بقايا رسم قديم. */
+function hideHomeSection(section, row) {
+  if (row) row.innerHTML = '';
+  if (section) section.hidden = true;
+}
+
+/**
+ * كرت مصغّر: صورة على جهة البداية، شريحة يوم الأسبوع، عنوان بسطر واحد واسم
+ * المكان. الموضع الوحيد الذي يبني هذا الشكل — يستعمله «هذا الأسبوع قربك»
+ * و«جديد عنا» معاً.
+ */
+function renderCompactEventCardHtml(evt) {
+  const poster = evt.poster_url ? cardImageUrl(evt.poster_url) : '';
+  const thumb = poster
+    ? `<span class="home-compact-thumb"><img src="${escapeHtml(poster)}" alt="" loading="lazy"></span>`
+    : '<span class="home-compact-thumb" aria-hidden="true"><i class="fa-solid fa-champagne-glasses"></i></span>';
+  const day = eventDayDate(evt);
+  const weekday = Number.isNaN(day.getTime())
+    ? ''
+    : new Intl.DateTimeFormat('ar-EG', { weekday: 'long' }).format(day);
+  const place = eventPlaceName(evt) || '';
+  return `
+    <button type="button" class="home-compact-card" data-event-id="${evt.id}" onclick="openEventPage(${evt.id})">
+      ${thumb}
+      <span class="home-compact-body">
+        ${weekday ? `<span class="home-compact-weekday">${escapeHtml(weekday)}</span>` : ''}
+        <span class="home-compact-title">${escapeHtml(eventCardHeadline(evt))}</span>
+        <span class="home-compact-place">${escapeHtml(place)}</span>
+      </span>
     </button>`;
+}
+
+/**
+ * «هذا الأسبوع قربك» — من اليوم إلى اليوم السابع بتوقيت القدس (نطاق أيام
+ * تقويمية لا ساعات)، وبمحافظة التغذية نفسها، بحدّ عشرة صفوف.
+ */
+async function loadThisWeekEvents() {
+  const section = document.getElementById('homeWeekSection');
+  const row = document.getElementById('homeWeekRow');
+  if (!section || !row) return;
+  const token = homeDiscoveryRegionToken;
+  try {
+    const params = new URLSearchParams();
+    params.set('date_from', jerusalemDayKey(0));
+    params.set('date_to', jerusalemDayKey(6));
+    params.set('limit', '10');
+    const res = await apiFetch(`/api/events?${params.toString()}`, { allRegions: feedAllRegions });
+    const data = await res.json();
+    if (token !== homeDiscoveryRegionToken) return;
+    const events = data && data.success === true && Array.isArray(data.events) ? data.events : [];
+    if (!events.length) {
+      hideHomeSection(section, row);
+      return;
+    }
+    row.innerHTML = events.map(renderCompactEventCardHtml).join('');
+    section.hidden = false;
+  } catch (e) {
+    if (token !== homeDiscoveryRegionToken) return;
+    hideHomeSection(section, row);
+  }
+}
+
+/** «جديد عنا» — أحدث المناسبات المنشورة (`sort=newest`)، بالكرت المصغّر نفسه. */
+async function loadNewestEvents() {
+  const section = document.getElementById('homeNewestSection');
+  const row = document.getElementById('homeNewestRow');
+  if (!section || !row) return;
+  const token = homeDiscoveryRegionToken;
+  try {
+    const res = await apiFetch('/api/events?sort=newest&limit=10', { allRegions: feedAllRegions });
+    const data = await res.json();
+    if (token !== homeDiscoveryRegionToken) return;
+    const events = data && data.success === true && Array.isArray(data.events) ? data.events : [];
+    if (!events.length) {
+      hideHomeSection(section, row);
+      return;
+    }
+    row.innerHTML = events.map(renderCompactEventCardHtml).join('');
+    section.hidden = false;
+  } catch (e) {
+    if (token !== homeDiscoveryRegionToken) return;
+    hideHomeSection(section, row);
+  }
+}
+
+/**
+ * كرت «الأكثر تفاعلاً»: ملصق، شارة ترتيب (الأولى «🔥 الأكثر تفاعلاً» والبقية
+ * أرقامها)، شريحة عدّ تنازلي، وعنوان وسطر مكان · تاريخ.
+ */
+function renderTrendingCardHtml(evt, index) {
+  const poster = evt.poster_url ? cardImageUrl(evt.poster_url) : '';
+  const shot = poster
+    ? `<img src="${escapeHtml(poster)}" alt="" loading="lazy">`
+    : '<span class="home-trending-shot-empty" aria-hidden="true"><i class="fa-solid fa-champagne-glasses"></i></span>';
+  const rank = index === 0
+    ? '<span class="home-trending-rank is-first">🔥 الأكثر تفاعلاً</span>'
+    : `<span class="home-trending-rank">#${index + 1}</span>`;
+  const meta = [eventPlaceName(evt), formatEventDayLong(evt)].filter(Boolean)
+    .map(text => escapeHtml(text)).join(' · ');
+  return `
+    <button type="button" class="home-trending-card" data-event-id="${evt.id}" onclick="openEventPage(${evt.id})">
+      <span class="home-trending-shot">${shot}${rank}${posterCountdownChipHtml(evt)}</span>
+      <span class="home-trending-body">
+        <span class="home-trending-title">${escapeHtml(eventCardHeadline(evt))}</span>
+        <span class="home-trending-meta">${escapeHtml(meta)}</span>
+      </span>
+    </button>`;
+}
+
+/** «الأكثر تفاعلاً» — من GET /api/events/trending بمحافظة التغذية نفسها. */
+async function loadTrendingEvents() {
+  const section = document.getElementById('homeTrendingSection');
+  const row = document.getElementById('homeTrendingRow');
+  if (!section || !row) return;
+  const token = homeDiscoveryRegionToken;
+  try {
+    const res = await apiFetch('/api/events/trending', { allRegions: feedAllRegions });
+    const data = await res.json();
+    if (token !== homeDiscoveryRegionToken) return;
+    const events = data && data.success === true && Array.isArray(data.events) ? data.events : [];
+    if (!events.length) {
+      hideHomeSection(section, row);
+      return;
+    }
+    row.innerHTML = events.map(renderTrendingCardHtml).join('');
+    section.hidden = false;
+  } catch (e) {
+    if (token !== homeDiscoveryRegionToken) return;
+    hideHomeSection(section, row);
+  }
+}
+
+/** بلاطة فئة: أيقونة الفئة نفسها إن كانت، وإلا أيقونة Font Awesome مناسبة. */
+function renderHomeCategoryTileHtml(category) {
+  const icon = category && String(category.icon || '').trim();
+  const iconHtml = icon
+    ? `<span class="home-category-emoji" aria-hidden="true">${escapeHtml(icon)}</span>`
+    : '<i class="fa-solid fa-screwdriver-wrench" aria-hidden="true"></i>';
+  return `
+    <button type="button" class="home-category-tile" onclick="openHomeServiceCategory(${Number(category.id)})">
+      <span class="home-category-icon">${iconHtml}</span>
+      <span class="home-category-name">${escapeHtml(category.name || '')}</span>
+    </button>`;
+}
+
+/** فئات الخدمات — من GET /api/services/categories، ونقرها يفلتر الدليل. */
+async function loadHomeServiceCategories() {
+  const section = document.getElementById('homeCategoriesSection');
+  const row = document.getElementById('homeCategoryRow');
+  if (!section || !row) return;
+  try {
+    const res = await apiFetch('/api/services/categories');
+    const data = await res.json();
+    const categories = data && data.success === true && Array.isArray(data.categories) ? data.categories : [];
+    if (!categories.length) {
+      hideHomeSection(section, row);
+      return;
+    }
+    row.innerHTML = categories.map(renderHomeCategoryTileHtml).join('');
+    section.hidden = false;
+  } catch (e) {
+    hideHomeSection(section, row);
+  }
+}
+
+/**
+ * «استوديو الدعوات» في الأزرار السريعة: الاستوديو لكل مناسبة على حِدة، فالوجهة
+ * قائمة مناسبات صاحب الحساب في «مناسباتي» (وفيها زرّا الستوديو لكل مناسبة).
+ * غير المسجَّل يمرّ بنافذة الدخول القائمة ثم يعود إلى «مناسباتي» نفسها.
+ */
+function openInvitationStudioFromHome() {
+  if (!requireAuth({ type: 'my_list' })) return;
+  switchTab('tabMyList');
 }
 
 /**
@@ -5325,6 +5895,9 @@ function renderFeaturedCardHtml(evt) {
  * نفسها كي لا يبقى أي كرت من المنطقة السابقة أثناء انتظار الردّ.
  */
 function resetFeedForRegionChange() {
+  // أقسام الاكتشاف الجديدة (M1-W) تتبع المحافظة نفسها: تبديلها يُبطل أي ردّ
+  // قديم في الطريق فلا تُرسم مناسبات المحافظة السابقة فوق الجديدة.
+  homeDiscoveryRegionToken += 1;
   currentPage = 1;
   currentPagination = null;
   feedBackSnapshot = null;
@@ -5335,6 +5908,19 @@ function resetFeedForRegionChange() {
   allEvents = [];
   const container = document.getElementById('eventsContainer');
   if (container) container.innerHTML = '';
+}
+
+/**
+ * أقسام الرئيسية التابعة للمحافظة (M1-W) — «هذا الأسبوع قربك» و«جديد عنا»
+ * و«الأكثر تفاعلاً». تُنادى في مساري تبديل المحافظة والتوسيع **قبل**
+ * `fetchEvents` فتبقى طلباتها وطلب التغذية في الدورة نفسها، ويبقى طلب التغذية
+ * آخر طلب `/api/events` فيها. ولا تُنادى مع تغيير فلتر: الفلتر لا يغيّر
+ * المحافظة، وهذه الأقسام لا تتبعه.
+ */
+function reloadHomeDiscoverySections() {
+  loadThisWeekEvents();
+  loadNewestEvents();
+  loadTrendingEvents();
 }
 
 /** يعيد تحميل بقية أسطح الاكتشاف الظاهرة بالمنطقة الجديدة (تذكرة #124). */
@@ -8861,6 +9447,9 @@ async function initServiceCategoryTabs() {
     </button>
   `).join('');
   container.innerHTML = allTab + catTabs;
+  // الرقاقة تقرأ اسم الفئة من هذه القائمة، وكانت تُحسب قبل وصولها فتظنّ
+  // «كل الفئات» — إعادة الحساب بعد الوصول تُبقي الاسم والفلتر متطابقين.
+  updateServiceFilterChipLabels();
 }
 
 function selectServiceCategory(categoryId) {
@@ -8871,6 +9460,20 @@ function selectServiceCategory(categoryId) {
   });
   updateServiceFilterChipLabels();
   fetchServiceProviders();
+}
+
+/**
+ * بلاطة فئة من الرئيسية (M1-W): تفتح «دليل خدمات المناسبات» على الفئة نفسها.
+ * الاختيار يُكتب في الحالة قبل `switchTab` كي يبنيه التبويب في أول فتح بالفئة
+ * الصحيحة، و`selectServiceCategory` تزامن الحبّة والرقاقة حين يكون مبنيّاً.
+ */
+function openHomeServiceCategory(categoryId) {
+  const resolved = Number(categoryId);
+  const id = Number.isInteger(resolved) && resolved > 0 ? resolved : null;
+  const alreadyBuilt = servicesInitialized;
+  selectedServiceCategoryId = id;
+  switchTab('tabServices');
+  if (alreadyBuilt) selectServiceCategory(id);
 }
 
 function updateServiceFilterChipLabels() {
