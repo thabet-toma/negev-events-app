@@ -1451,6 +1451,22 @@
               <span class="hint-text">يُطبَّق على الموقع والتطبيق معاً. حين لا يُحفظ شيء يعرض العميلان الصفوف المختصرة.</span>
             </div>
 
+            <!-- رسالة الترحيب في الرئيسية: إعدادان نصّيان يُحفظان مع النموذج نفسه،
+                 ويخرجان للعامة عبر `home_welcome` في GET /api/settings/public.
+                 نصّ الرسالة هو مفتاح الظهور: تركه فارغاً يُخفي البطاقة كلها
+                 (`home_welcome: null`)، فلا يحتاج الأدمن إلى مفتاح إظهار منفصل. -->
+            <div class="form-group" style="margin-top:18px;">
+              <label for="settingHomeWelcomeTitle">عنوان رسالة الترحيب في الرئيسية</label>
+              <input type="text" id="settingHomeWelcomeTitle" maxlength="80" placeholder="أهلاً بكم في أعراسنا!">
+              <span class="hint-text">سطر واحد فوق نصّ الرسالة. يمكن تركه فارغاً لعرض النصّ وحده.</span>
+            </div>
+
+            <div class="form-group">
+              <label for="settingHomeWelcomeMessage">نص رسالة الترحيب (اتركه فارغاً لإخفائها)</label>
+              <textarea id="settingHomeWelcomeMessage" rows="3" maxlength="300" placeholder="نطوّر التطبيق دائماً لتكون تجربتكم أسهل وأجمل — تابعوا الجديد وكونوا جزءاً منه" style="width:100%; padding:13px 16px; background:var(--surface-sunk); border:1px solid var(--admin-card-border); border-radius:var(--radius-sm); color:var(--text-main); font-family:var(--font-tajawal); font-size:0.92rem; outline:none; resize:vertical;"></textarea>
+              <span class="hint-text">بطاقة الترحيب أعلى الرئيسية في الموقع والتطبيق. ما يُحفظ هنا يظهر للزوار كما هو.</span>
+            </div>
+
             <div class="form-row" style="margin-top:18px; gap:12px;">
               <button type="submit" class="admin-btn-primary" id="saveSettingsBtn" style="flex:1;">
                 <i class="fa-solid fa-check"></i> حفظ الإعدادات

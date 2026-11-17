@@ -75,6 +75,23 @@ function parseTownListParam(raw) {
   return values;
 }
 
+/**
+ * ترتيب القائمة `?sort=` (الرئيسية الجديدة): القيمة المقبولة الوحيدة اليوم
+ * `newest` — أحدث ما أُضيف أولاً. الغياب بكل أشكاله (`undefined`، `null`، نصّ
+ * أبيض) يعني «بلا تغيير» فيبقى الترتيب القائم حرفاً بحرف، وقيمة أخرى **تُرفض
+ * 400 عربية** بدل الهبوط الصامت إلى ترتيب آخر لا يطلبه القارئ. والخدمة تستقبل
+ * هذه القيمة وتختار بها من قائمة بيضاء ثابتة (`EVENT_SORT_ORDERS`)، فلا يصل
+ * نصّ العميل إلى `ORDER BY` إطلاقاً.
+ */
+function parseEventSort(raw) {
+  const cleaned = cleanString(raw, 20);
+  if (!cleaned) return null;
+  if (cleaned !== 'newest') {
+    throw ApiError.badRequest('قيمة الترتيب غير صالحة');
+  }
+  return cleaned;
+}
+
 // `optionalAuthenticate`: an anonymous caller sees the list unchanged, but a
 // logged-in one also gets `is_reminded` on every card, so the client knows
 // which button state ("ذكّرني" on/off) to render without a second request.
@@ -92,6 +109,9 @@ router.get('/events', optionalAuthenticate, asyncHandler(async (req, res) => {
   const villageIds = parseIdListParam(req.query.village_id, 'القرية');
   const archive = req.query.archive === '1' || req.query.archive === 'true';
   const upcoming = req.query.upcoming === '1' || req.query.upcoming === 'true';
+  // ترتيب صريح اختياري (`?sort=newest`) — لا يمسّ أي مرشّح أو ترقيم، ويُتحقق
+  // منه هنا قبل الخدمة (قيمة غير معروفة ← 400 عربية).
+  const sort = parseEventSort(req.query.sort);
   const legacyOnly = isLegacyClient(req);
   // محافظة الاكتشاف (تذكرة #121): تُقرأ دائماً — ترويسة `X-Region`، أو محافظة
   // الحساب لمسجَّل بلا ترويسة، أو الافتراضية. الخدمة وحدها تقرّر كيف تُترجَم
@@ -105,7 +125,7 @@ router.get('/events', optionalAuthenticate, asyncHandler(async (req, res) => {
   const [result, announcements] = await Promise.all([
     events.listPublicEvents({
       towns, search, date, dateFrom, dateTo, occasionTypeIds, villageIds, archive, upcoming, legacyOnly,
-      regionId,
+      regionId, sort,
       page: req.query.page,
       limit: req.query.limit,
       userId: req.user ? req.user.id : null

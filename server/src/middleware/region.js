@@ -74,4 +74,20 @@ async function activeRegionOrFallback(region, source) {
   return townsService.defaultRegionId();
 }
 
-module.exports = { regionIdForRequest };
+/**
+ * المحافظة اسماً ورقماً معاً — القاعدة المشتركة لكل وجه يعرض اسم محافظة
+ * الطلب أو يمرّره إلى مصدر يعرف المحافظات **بالاسم** لا بالمعرّف.
+ *
+ * مكانها هنا لا في راوتر واحد: `GET /api/news` يعرضها في هيدر شاشته، و
+ * `GET /api/stats/ticker` يشتقّ منها أخبار الشريط، والاثنان يجب أن يحلّا
+ * المحافظة نفسها للطلب نفسه (ترويسة `X-Region`، أو محافظة الحساب، أو
+ * الافتراضية) — فنسخةٌ ثانية في أي مسار كانت ستفرق عنهما عند أول تغيير.
+ * `regionName: null` حين لا محافظة نشطة أصلاً (تنصيب بلا بذرة).
+ */
+async function regionForRequest(req) {
+  const regionId = await regionIdForRequest(req);
+  const region = regionId === null ? null : await townsService.findRegionById(regionId);
+  return { regionId, regionName: region ? region.name : null };
+}
+
+module.exports = { regionIdForRequest, regionForRequest };

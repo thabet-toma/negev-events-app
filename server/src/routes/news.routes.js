@@ -20,9 +20,8 @@ const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const news = require('../services/news.service');
 const prices = require('../services/prices.service');
-const townsService = require('../services/towns.service');
 const { optionalAuthenticate } = require('../middleware/auth');
-const { regionIdForRequest } = require('../middleware/region');
+const { regionForRequest } = require('../middleware/region');
 const { cleanString, parseId, parseLimit, parseFlag } = require('../middleware/validate');
 const { NEWS_PAGE_DEFAULT, NEWS_PAGE_MAX } = require('../constants');
 
@@ -38,13 +37,6 @@ function parseOffset(value) {
   const raw = cleanString(value, 12);
   if (raw === null || raw === '0') return 0;
   return parseId(raw, 'الإزاحة');
-}
-
-/** محافظة الطلب اسماً — تُبنى بها خريطة منطقة المصدر وتُعرض في هيدر الشاشة. */
-async function regionForRequest(req) {
-  const regionId = await regionIdForRequest(req);
-  const region = regionId === null ? null : await townsService.findRegionById(regionId);
-  return { regionId, regionName: region ? region.name : null };
 }
 
 router.get('/news', optionalAuthenticate, asyncHandler(async (req, res) => {

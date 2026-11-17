@@ -1224,6 +1224,16 @@ function buildPlaceCondition(towns, villageIds, villageColumn) {
 }
 
 /**
+ * ترتيب صريح لـ`GET /api/events?sort=` — **قائمة بيضاء ثابتة في الكود**، لا نصّ
+ * عميل يُوصل إلى `ORDER BY` أبداً: المسار يتحقق من القيمة (وغير `newest` 400
+ * عربية)، والخدمة هنا لا تقرأ من هذا الكائن إلا ما طابقه مفتاحه. غياب الترتيب
+ * (`null`) يُبقي كل ترتيب قائم حرفاً بحرف، فلا عميل منشور يتغيّر سلوكه.
+ */
+const EVENT_SORT_ORDERS = {
+  newest: 'events.created_at DESC, events.id DESC'
+};
+
+/**
  * Approved events, optionally filtered by town, date, occasion type and
  * free-text search — paginated, upcoming-first (or archived-first when
  * `archive` is set), with per-card congratulation stats attached.
@@ -1259,11 +1269,19 @@ function buildPlaceCondition(towns, villageIds, villageColumn) {
  * internal caller that knows nothing about regions keeps its behaviour
  * unchanged. The public route always passes a resolved region
  * (`middleware/region.js`), never `null`.
+ *
+ * `sort` is the one explicit ordering an editor surface may ask for: the
+ * whitelist key `newest` (`EVENT_SORT_ORDERS` above) makes the ORDER BY
+ * `events.created_at DESC, events.id DESC` and nothing else, so the newest
+ * published rows really come first on a home page — a featured event does not
+ * jump ahead of them. `null` (any caller that never sends it) leaves every
+ * ordering rule below exactly as it was. Filters, visibility, region scoping
+ * and pagination are all untouched by it.
  */
 async function listPublicEvents({
   towns = null, date, dateFrom = null, dateTo = null, search, occasionTypeIds = null, villageIds = null,
   legacyOnly = false, archive = false, upcoming = false, page = 1, limit = DEFAULT_PAGE_SIZE, userId = null,
-  regionId = null
+  regionId = null, sort = null
 } = {}) {
   const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
   const safePage = Math.max(Number.parseInt(page, 10) || 1, 1);
@@ -1347,19 +1365,29 @@ async function listPublicEvents({
   // ترتيب لا شرط — فالترقيم يُعدّ الصفوف نفسها التي تُعاد.
   const featuredFirst = regionId !== null && regionId !== undefined ? 'is_featured DESC, ' : '';
   let orderClause;
-  if (archive) {
-    orderClause = 'events.event_date DESC, events.id DESC';
-  } else if (upcoming || dateFrom || dateTo) {
-    orderClause = 'events.event_date ASC, events.id ASC';
+  // `hasOwnProperty` لا `EVENT_SORT_ORDERS[sort]` وحده: نصّ مثل `constructor` أو
+  // `__proto__` يجد خاصية على prototype الكائن فيصل إلى SQL. المفتاح يجب أن
+  // يكون مكتوباً في القائمة نفسها، لا موروثاً منها.
+  if (Object.prototype.hasOwnProperty.call(EVENT_SORT_ORDERS, sort || '')) {
+    // ترتيب صريح من العميل، من القائمة البيضاء وحدها: نستبدل العبارة كلها ولا
+    // نُضيف إليها. فأحدثُ ما أُضيف يجب أن يتصدّر فعلاً، ولو كانت في القائمة
+    // مناسبة مبرزة — «أحدث» طلبُ ترتيبٍ بنفسه لا تصفيةً تُرتَّب بعدها.
+    orderClause = EVENT_SORT_ORDERS[sort];
   } else {
-    // Default (all events): upcoming/active first (chronological), then ended (reverse-chronological)
-    orderClause = `(span_end_order >= CURDATE()) DESC,
+    if (archive) {
+      orderClause = 'events.event_date DESC, events.id DESC';
+    } else if (upcoming || dateFrom || dateTo) {
+      orderClause = 'events.event_date ASC, events.id ASC';
+    } else {
+      // Default (all events): upcoming/active first (chronological), then ended (reverse-chronological)
+      orderClause = `(span_end_order >= CURDATE()) DESC,
       CASE WHEN span_end_order >= CURDATE() THEN events.event_date END ASC,
       CASE WHEN span_end_order >= CURDATE() THEN events.id END ASC,
       CASE WHEN span_end_order < CURDATE() THEN events.event_date END DESC,
       CASE WHEN span_end_order < CURDATE() THEN events.id END DESC`;
+    }
+    orderClause = `${featuredFirst}${orderClause}`;
   }
-  orderClause = `${featuredFirst}${orderClause}`;
 
   // LIMIT/OFFSET as bound parameters, not string-concatenated — same
   // parameterization rule as every other value in this query. `village_name`

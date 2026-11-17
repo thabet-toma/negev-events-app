@@ -7142,6 +7142,69 @@ async function run() {
     assert.strictEqual(input.value, '', 'input must be empty after clearing');
   });
 
+  await test('the settings tab carries the two home-welcome fields and saves them through the same form', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const document = dom.window.document;
+
+    const titleInput = document.getElementById('settingHomeWelcomeTitle');
+    const messageInput = document.getElementById('settingHomeWelcomeMessage');
+    assert.ok(titleInput, 'expected #settingHomeWelcomeTitle in the settings tab');
+    assert.ok(messageInput, 'expected #settingHomeWelcomeMessage in the settings tab');
+    assert.ok(
+      document.querySelector('label[for="settingHomeWelcomeTitle"]').textContent.includes('عنوان رسالة الترحيب في الرئيسية'),
+      'the title field carries the Arabic label the ticket names'
+    );
+    assert.ok(
+      document.querySelector('label[for="settingHomeWelcomeMessage"]').textContent.includes('نص رسالة الترحيب (اتركه فارغاً لإخفائها)'),
+      'the message field says an empty value hides the card'
+    );
+
+    let savedSettings = {
+      support_whatsapp_number: null,
+      providers_display: 'compact',
+      home_welcome_title: 'عنوان الرئيسية',
+      home_welcome_message: 'نصّ الرئيسية'
+    };
+    const puts = [];
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = (options && options.method) || 'GET';
+      if (method === 'GET' && requestPath === '/api/admin/settings') {
+        return jsonResponse({ success: true, settings: savedSettings });
+      }
+      if (method === 'PUT' && requestPath === '/api/admin/settings') {
+        const body = JSON.parse(options.body);
+        puts.push(body);
+        savedSettings = { ...savedSettings, ...body };
+        return jsonResponse({ success: true, message: 'تم حفظ الإعدادات بنجاح', settings: savedSettings });
+      }
+      return jsonResponse({ success: true });
+    };
+
+    await dom.window.fetchAdminSettings();
+    assert.strictEqual(titleInput.value, 'عنوان الرئيسية', 'the saved title is what the field shows');
+    assert.strictEqual(messageInput.value, 'نصّ الرئيسية', 'and the saved message too');
+
+    titleInput.value = 'عنوان جديد';
+    messageInput.value = 'نصّ جديد';
+    await dom.window.handleSaveSettings({ preventDefault() {} });
+
+    const put = puts.find(body => 'home_welcome_title' in body);
+    assert.ok(put, 'expected the welcome fields to be saved in the same PUT as the rest of the form');
+    assert.strictEqual(put.home_welcome_title, 'عنوان جديد');
+    assert.strictEqual(put.home_welcome_message, 'نصّ جديد');
+
+    // الفراغ هو قرار الإخفاء، ويُرسل '' لا يُحذف من الجسم.
+    puts.length = 0;
+    messageInput.value = '   ';
+    await dom.window.handleSaveSettings({ preventDefault() {} });
+    assert.strictEqual(
+      puts[0].home_welcome_message,
+      '',
+      'an emptied message is sent as an empty string — the server reads that as «hide the card»'
+    );
+  });
+
   await test('invalid WhatsApp number displays the server\'s Arabic error without client format check', async () => {
     const dom = buildAdminEnv();
     dom.window.localStorage.setItem('negev_admin_role', 'super_admin');

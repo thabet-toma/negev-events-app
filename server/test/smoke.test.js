@@ -24,6 +24,13 @@ process.env.RATE_LIMIT_USER_MAX = process.env.RATE_LIMIT_USER_MAX || '6000';
 // صورة ١) — حالات الرفض تُحسَب من الدلو نفسه. اختبار 429 ينشئ مستخدماً جديداً
 // فلا يرث أي رصيد مستهلك. القيمة الافتراضية في الإنتاج (config.js) لا تتغيّر.
 process.env.CARD_PREVIEW_RATE_MAX = process.env.CARD_PREVIEW_RATE_MAX || '12';
+// شريط الإحصائيات (/api/stats/ticker) صار يطلب أحدث خبر في كل طلب، ومصدره طرفٌ
+// خارجي. وكما في كاش الأسعار أدناه، لا يجوز أن يعتمد هذا الملف على توفّر طرف
+// ثالث ولا أن ينتظر مهلته: العنوان الافتراضي هنا منفذ محلي مغلق (رفضٌ فوري لا
+// شبكة)، وقسم «آخر خبر» يوجّهه إلى خادمه الوهمي ثم يعيده إلى هذه القيمة نفسها
+// بدل حذفه — فحذفه كان يُعيد الشريط إلى العنوان الحقيقي في config.
+const KATRA_TEST_OFFLINE_URL = 'http://127.0.0.1:9';
+process.env.KATRA_NEWS_BASE_URL = process.env.KATRA_NEWS_BASE_URL || KATRA_TEST_OFFLINE_URL;
 const config = require('../src/config');
 const db = require('../src/db/pool');
 const migrate = require('../src/db/migrate');
@@ -9966,6 +9973,92 @@ async function run() {
     assert.strictEqual(stillSet.body.settings.support_whatsapp_number, '972501234567', 'a PUT that names no keys must change nothing');
   });
 
+  // ────────────────────────────────────────────────────────────────────────────
+  // رسالة الترحيب في الرئيسية: `home_welcome` في GET /api/settings/public.
+  //
+  // القاعدة كلها في تمييز واحد: **غياب صفّ الرسالة** = «لم تُضبط قطّ» فتخرج
+  // الافتراضية، و**صفّ فارغ** = «أخفاها الأدمن» فيخرج null. فالاختبار يمرّ
+  // بالثلاث حالات على الجدول نفسه، ثم يعيد صفوفه كما وجدها — app_settings لا
+  // تُصفَّر بين التشغيلات، وإعادة تشغيل لا تجد الحالة نفسها تعني اختباراً يعتمد
+  // على ما تركه سابقُه.
+  // ────────────────────────────────────────────────────────────────────────────
+  const homeWelcomeKeys = [settingsService.SETTING_KEYS.HOME_WELCOME_TITLE, settingsService.SETTING_KEYS.HOME_WELCOME_MESSAGE];
+  const homeWelcomeOriginalRows = await db.query(
+    `SELECT setting_key, setting_value FROM app_settings
+      WHERE setting_key IN (?, ?)`,
+    homeWelcomeKeys
+  );
+  await db.execute(
+    `DELETE FROM app_settings WHERE setting_key IN (?, ?)`,
+    homeWelcomeKeys
+  );
+
+  const HOME_WELCOME_DEFAULT = {
+    title: 'أهلاً بكم في أعراسنا!',
+    message: 'نطوّر التطبيق دائماً لتكون تجربتكم أسهل وأجمل — تابعوا الجديد وكونوا جزءاً منه'
+  };
+  const homeWelcomeStamp = `ترحيب${Date.now()}`;
+
+  await test('رسالة الترحيب: لا صفّ بعد ← الافتراضية من الخادم في home_welcome، لا null ولا نصّ في العميل', async () => {
+    const { status, body } = await api('GET', '/api/settings/public');
+
+    assert.strictEqual(status, 200, body.message);
+    assert.deepStrictEqual(body.home_welcome, HOME_WELCOME_DEFAULT, 'لا صفّ = «لم تُضبط قطّ» فتخرج الافتراضية');
+    // والحقل إضافة: جسم الإعدادات القائم لا يتغيّر معها.
+    assert.deepStrictEqual(Object.keys(body.settings), ['support_whatsapp_number', 'default_event_audio_url', 'providers_display']);
+  });
+
+  await test('رسالة الترحيب: العنوان والنصّ المخصّصان يُحفَظان بـPUT /api/admin/settings ويصلان العامة، والعنوان الفارغ يبقى ""', async () => {
+    const title = `مرحباً ${homeWelcomeStamp}`;
+    const message = `رسالة ${homeWelcomeStamp}`;
+
+    const saved = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { home_welcome_title: title, home_welcome_message: message }
+    });
+    assert.strictEqual(saved.status, 200, saved.body.message);
+    assert.strictEqual(saved.body.settings.home_welcome_title, title);
+    assert.strictEqual(saved.body.settings.home_welcome_message, message);
+
+    const publicRead = await api('GET', '/api/settings/public');
+    assert.strictEqual(publicRead.status, 200, publicRead.body.message);
+    assert.deepStrictEqual(publicRead.body.home_welcome, { title, message }, 'القيم المحفوظة تصل العامة كما هي');
+
+    // عنوان فارغ صراحةً يبقى '' لا null: بطاقة بنصّ وحده، لا بطاقة بلا عنوان
+    // محسوب «غير مضبوط».
+    const titleless = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { home_welcome_title: '' }
+    });
+    assert.strictEqual(titleless.status, 200, titleless.body.message);
+
+    const afterTitleless = await api('GET', '/api/settings/public');
+    assert.deepStrictEqual(afterTitleless.body.home_welcome, { title: '', message });
+  });
+
+  await test('رسالة الترحيب: نصّ فارغ محفوظ يُخفي البطاقة — home_welcome: null لا افتراضية', async () => {
+    const cleared = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { home_welcome_message: '' }
+    });
+    assert.strictEqual(cleared.status, 200, cleared.body.message);
+
+    const publicRead = await api('GET', '/api/settings/public');
+    assert.strictEqual(publicRead.status, 200, publicRead.body.message);
+    assert.strictEqual(publicRead.body.home_welcome, null, 'صفّ فارغ محفوظ = أخفاها الأدمن، وليس «لم تُضبط»');
+
+    // والدليل أن الحكم للصفّ لا للنصّ: حذفه يعيد الافتراضية فوراً.
+    await db.execute('DELETE FROM app_settings WHERE setting_key = ?', [settingsService.SETTING_KEYS.HOME_WELCOME_MESSAGE]);
+    const restored = await api('GET', '/api/settings/public');
+    assert.deepStrictEqual(restored.body.home_welcome, HOME_WELCOME_DEFAULT, 'بلا صفّ رسالة تعود الافتراضية');
+  });
+
+  // إعادة الحالة الأصلية: صفّا رسالة الترحيب كما كانا قبل هذا القسم.
+  await db.execute(`DELETE FROM app_settings WHERE setting_key IN (?, ?)`, homeWelcomeKeys);
+  for (const row of homeWelcomeOriginalRows) {
+    await db.execute(
+      'INSERT INTO app_settings (setting_key, setting_value) VALUES (?, ?)',
+      [row.setting_key, row.setting_value]
+    );
+  }
+
   console.log('\nProviders layout (تذكرة #158): providers_display on the public route');
 
   // Same reasoning as the section above — app_settings is not reset between
@@ -16151,10 +16244,12 @@ async function run() {
     );
   });
 
-  // استعادة الحالة: المصدر الوهمي يُغلق، ومتغيّرا البيئة يُمسحان كي لا يعتمد
-  // أي طلب لاحق (أو إعادة تشغيل) على خادم لم يعد موجوداً.
+  // استعادة الحالة: المصدر الوهمي يُغلق، والعنوان يُعاد إلى المنفذ المغلق الذي
+  // يبدأ به هذا الملف (لا يُحذف — فحذفه يُعيد `GET /api/stats/ticker` إلى العنوان
+  // الحقيقي في config، وهو ما لا يجوز أن يعتمد عليه الاختبار)، وصلاحية الكاش
+  // تُمسح كي لا يعتمد أي طلب لاحق (أو إعادة تشغيل) على خادم لم يعد موجوداً.
   katraFailing = false;
-  delete process.env.KATRA_NEWS_BASE_URL;
+  process.env.KATRA_NEWS_BASE_URL = KATRA_TEST_OFFLINE_URL;
   delete process.env.KATRA_NEWS_CACHE_TTL_MS;
   newsService.clearCache();
   await new Promise(resolve => katraServer.close(resolve));
@@ -19424,6 +19519,100 @@ async function run() {
   for (const id of featuredCleanup.townIds) await db.execute('DELETE FROM towns WHERE id = ?', [id]);
   for (const id of featuredCleanup.regionIds) await db.execute('DELETE FROM regions WHERE id = ?', [id]);
 
+  // ────────────────────────────────────────────────────────────────────────────
+  // ترتيب «الأحدث» في الرئيسية: `GET /api/events?sort=newest`.
+  //
+  // مناسبتان مختلفتا التاريخ وترتيب الإنشاء: تاريخُ الأولى أقرب فتتصدّر
+  // الترتيب القائم (تاريخ المناسبة تصاعدياً)، والثانية أُضيفت بعده فتتصدّر
+  // `sort=newest`. أي تداخل بين الترتيبين يجعل الاختبار لا يفرّق بينهما، ولذلك
+  // عُكس الاثنان عمداً.
+  // ────────────────────────────────────────────────────────────────────────────
+  console.log('\nترتيب «الأحدث» في GET /api/events (الرئيسية الجديدة، M1-S)');
+
+  const sortStamp = `ترتيب${Date.now()}`;
+  const sortEventIds = [];
+
+  /** ينشر مناسبة معتمدة في محافظة النقب باسم بحث فريد — نفس نمط قسم الإبراز. */
+  async function publishSortEvent({ label, dayOffset }) {
+    const created = await api('POST', '/api/events', {
+      token: superAdminToken,
+      body: weddingEventBody({
+        honorees: [{ name: `${sortStamp} ${label}` }],
+        town: 'حورة',
+        event_date: addDaysToDate(schedulerToday, dayOffset),
+        location_name: `قاعة ${sortStamp} ${label}`
+      })
+    });
+    assert.strictEqual(created.status, 201, created.body.message);
+    sortEventIds.push(created.body.eventId);
+    return created.body.eventId;
+  }
+
+  /** التغذية نفسها (محافظة النقب، مناسبات هذا القسم وحدها) بترتيب اختياري. */
+  async function sortFeed(query) {
+    const { status, body } = await api(
+      'GET',
+      `/api/events?upcoming=1&limit=100&search=${encodeURIComponent(sortStamp)}${query}`,
+      { region: defaultRegionId }
+    );
+    assert.strictEqual(status, 200, body.message);
+    return body;
+  }
+
+  const earlierDateEventId = await publishSortEvent({ label: 'الأقرب موعداً', dayOffset: 4 });
+  const newerCreatedEventId = await publishSortEvent({ label: 'الأحدث إضافةً', dayOffset: 9 });
+
+  await test('?sort=newest يرتّب بـcreated_at DESC — الأحدث إضافةً أولاً، وكل المرشّحات والترقيم كما هي', async () => {
+    const body = await sortFeed('&sort=newest');
+
+    assert.deepStrictEqual(
+      body.events.map(event => event.id),
+      [newerCreatedEventId, earlierDateEventId],
+      'أحدث الصفوف إنشاءً يتصدّر، ولو كان موعد مناسبتها أبعد'
+    );
+    assert.strictEqual(body.pagination.total, 2, 'الترقيم يعدّ الصفوف نفسها التي تُعاد');
+    assert.strictEqual(body.pagination.page, 1);
+    assert.strictEqual(body.pagination.limit, 100);
+    // الحقول القائمة لم تُمسّ: الصفّ نفسه الذي تعيده القائمة بلا ترتيب.
+    assert.ok(body.events[0].reactions, 'كل صفّ يحمل تفاعلاته كما قبل');
+    assert.strictEqual(typeof body.events[0].is_ended, 'boolean', 'وis_ended كما قبل');
+  });
+
+  await test('بلا ?sort يبقى الترتيب القائم حرفاً بحرف، و?sort= الفارغ لا يغيّره', async () => {
+    const plain = await sortFeed('');
+    assert.deepStrictEqual(
+      plain.events.map(event => event.id),
+      [earlierDateEventId, newerCreatedEventId],
+      'الترتيب القائم: تاريخ المناسبة تصاعدياً، لا تاريخ الإضافة'
+    );
+
+    const empty = await sortFeed('&sort=');
+    assert.deepStrictEqual(
+      empty.events.map(event => event.id),
+      plain.events.map(event => event.id),
+      'غياب المعامل وفراغه سواء — لا سلوك جديد لعميل لم يطلبه'
+    );
+  });
+
+  await test('?sort= بقيمة أخرى يُرفض 400 برسالة عربية بدل الهبوط الصامت إلى ترتيب آخر', async () => {
+    for (const bogus of ['bogus', 'created_at desc', 'newest,id']) {
+      const { status, body } = await api(
+        'GET',
+        `/api/events?limit=1&sort=${encodeURIComponent(bogus)}`,
+        { region: defaultRegionId }
+      );
+      assert.strictEqual(status, 400, `"${bogus}" ليست قيمة ترتيب مقبولة`);
+      assert.strictEqual(body.success, false);
+      assert.ok(/[؀-ۿ]/.test(body.message || ''), `expected an Arabic message, got: ${body.message}`);
+      assert.ok((body.message || '').includes('الترتيب'), `expected «الترتيب» in the message, got: ${body.message}`);
+    }
+  });
+
+  // تنظيف قسم الترتيب: مناسبتاه ثم لا شيء آخر أُنشئ فيه.
+  for (const id of sortEventIds) {
+    await api('DELETE', `/api/admin/events/${id}`, { token: superAdminToken });
+  }
+
   console.log('\nشريط الإحصائيات في الرئيسية — عدّ القادم لكل محافظة وكاشه (تذكرة #172)');
 
   /**
@@ -19705,6 +19894,109 @@ async function run() {
   for (const id of statsCleanup.townIds) await db.execute('DELETE FROM towns WHERE id = ?', [id]);
   for (const id of statsCleanup.regionIds) await db.execute('DELETE FROM regions WHERE id = ?', [id]);
   statsService.clearTickerCache();
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // latest_news في شريط الإحصائيات: أحدث خبر من مصدر «آخر خبر» نفسه.
+  //
+  // نفس آلية قسمَي الأخبار والأسعار أعلاه: خادم HTTP محلي على منفذ عابر،
+  // ومتغيّرا البيئة يوجّهان الخدمة إليه، والعدّاد يثبت أن النداء وقع فعلاً
+  // وبعقد `limit=1`. ويُوضع هنا — آخر استدعاء للشريط في الملف — كي لا يعتمد
+  // قسمٌ لاحق على مصدر أُغلق في هذا القسم.
+  // ────────────────────────────────────────────────────────────────────────────
+  console.log('\nأحدث خبر في شريط الإحصائيات: latest_news (M1-S)');
+
+  const tickerNewsItems = [
+    { id: 7771, title: 'أحدث خبر في محافظة الشريط', published_at: '2026-11-10T06:30:00.000Z' },
+    { id: 7772, title: 'الخبر الذي يليه', published_at: '2026-11-09T06:30:00.000Z' }
+  ];
+  /** كل نداء وصل إلى المصدر الوهمي — منه تُقاس المنطقة و«عنصر واحد فقط». */
+  const tickerNewsRequests = [];
+  let tickerNewsFailing = false;
+
+  const tickerNewsServer = http.createServer((req, res) => {
+    const requestUrl = new URL(req.url, 'http://127.0.0.1');
+    tickerNewsRequests.push({ search: requestUrl.searchParams });
+    if (requestUrl.pathname !== '/api/news.php' || tickerNewsFailing) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, message: 'down' }));
+      return;
+    }
+    res.setHeader('Content-Type', 'application/json');
+    const limit = Number(requestUrl.searchParams.get('limit') || 50);
+    const offset = Number(requestUrl.searchParams.get('offset') || 0);
+    res.end(JSON.stringify({
+      ok: true,
+      items: tickerNewsItems.slice(offset, offset + limit),
+      has_more: offset + limit < tickerNewsItems.length
+    }));
+  });
+  await new Promise(resolve => tickerNewsServer.listen(0, '127.0.0.1', resolve));
+  process.env.KATRA_NEWS_BASE_URL = `http://127.0.0.1:${tickerNewsServer.address().port}`;
+  process.env.KATRA_NEWS_CACHE_TTL_MS = '0';
+  newsService.clearCache();
+
+  await test('GET /api/stats/ticker يحمل latest_news: أحدث خبر كما يعيده GET /api/news للطلب نفسه', async () => {
+    tickerNewsFailing = false;
+    tickerNewsRequests.length = 0;
+    newsService.clearCache();
+    statsService.clearTickerCache();
+
+    // المرجع أولاً: مسار الأخبار نفسه، ومنطقة المصدر التي ناداها للطلب هذا.
+    const newsRead = await api('GET', '/api/news?limit=1');
+    assert.strictEqual(newsRead.status, 200, newsRead.body.message);
+    assert.strictEqual(newsRead.body.items.length, 1, 'المرجع هو عنصر واحد');
+    const newsArea = tickerNewsRequests[tickerNewsRequests.length - 1].search.get('areas');
+
+    tickerNewsRequests.length = 0;
+    const { status, body } = await api('GET', '/api/stats/ticker');
+    assert.strictEqual(status, 200, body.message);
+    assert.deepStrictEqual(body.latest_news, {
+      id: newsRead.body.items[0].id,
+      title: newsRead.body.items[0].title,
+      published_at: newsRead.body.items[0].published_at
+    }, 'latest_news هو أوّل عنصر يعيده GET /api/news نفسه، بمعرّفه وعنوانه وتاريخه');
+
+    const sent = tickerNewsRequests[tickerNewsRequests.length - 1];
+    assert.ok(sent, 'الشريط نادى مصدر الأخبار فعلاً');
+    assert.strictEqual(sent.search.get('limit'), '1', 'عنصر واحد فقط: الشريط لا يجلب صفحة');
+    assert.strictEqual(sent.search.get('areas'), newsArea, 'ونفس منطقة المحافظة التي ناداها مسار الأخبار للطلب نفسه');
+
+    // والحقول القائمة لم تتغيّر: الشريط عدّاد محافظات كما كان.
+    assert.ok(Array.isArray(body.regions) && body.regions.length > 0);
+    assert.strictEqual(typeof body.total, 'number');
+    assert.ok(!Number.isNaN(Date.parse(body.updated_at)));
+  });
+
+  await test('تعطّل مصدر الأخبار يترك latest_news: null والشريط 200 بـregions وtotal كما هما', async () => {
+    tickerNewsFailing = true;
+    newsService.clearCache();
+    statsService.clearTickerCache();
+
+    const { status, body } = await api('GET', '/api/stats/ticker');
+
+    assert.strictEqual(status, 200, 'تعطّل مصدر الأخبار لا يُسقط الشريط');
+    assert.strictEqual(body.success, true);
+    assert.strictEqual(body.latest_news, null);
+    assert.ok(Array.isArray(body.regions) && body.regions.length > 0, 'regions باقٍ كما هو');
+    assert.strictEqual(typeof body.total, 'number', 'وtotal باقٍ كما هو');
+    assert.ok(!Number.isNaN(Date.parse(body.updated_at)), 'وupdated_at باقٍ كما هو');
+  });
+
+  // إعادة الحالة على نمط قسم الأسعار نفسه: نملأ كاش الأخبار بنسخة ناجحة بصلاحية
+  // طويلة **قبل** إغلاق المصدر الوهمي، ثم يعود العنوان إلى المنفذ المغلق الذي
+  // يبدأ به الملف — فلا يلامس أي طلبٍ لاحق طرفاً ثالثاً حقيقياً.
+  tickerNewsFailing = false;
+  process.env.KATRA_NEWS_CACHE_TTL_MS = String(24 * 60 * 60 * 1000);
+  newsService.clearCache();
+  const tickerNewsWarmup = await api('GET', '/api/stats/ticker');
+  assert.strictEqual(tickerNewsWarmup.status, 200, tickerNewsWarmup.body.message);
+  assert.strictEqual(
+    tickerNewsWarmup.body.latest_news && tickerNewsWarmup.body.latest_news.id,
+    tickerNewsItems[0].id,
+    'نسخة الكاش الأخيرة تُملأ قبل إغلاق المصدر'
+  );
+  process.env.KATRA_NEWS_BASE_URL = KATRA_TEST_OFFLINE_URL;
+  await new Promise(resolve => tickerNewsServer.close(resolve));
 
   // =====================================================================
   // ستوديو بطاقة الدعوة (#180) — القوالب والمعاينة والحفظ في الخادم
