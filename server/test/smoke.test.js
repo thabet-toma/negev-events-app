@@ -54,7 +54,7 @@ const privacyService = require('../src/services/privacy.service');
 const notificationsService = require('../src/services/notifications.service');
 const pushService = require('../src/services/push.service');
 const webpush = require('web-push');
-const { runInstantForDate, jerusalemDateString, getZonedParts } = require('../src/utils/jerusalemTime');
+const { runInstantForDate, jerusalemDateString, zonedTimeToUtc, getZonedParts } = require('../src/utils/jerusalemTime');
 const settingsService = require('../src/services/settings.service');
 const logger = require('../src/utils/logger');
 const realtime = require('../src/realtime');
@@ -62,6 +62,7 @@ const shareCard = require('../src/services/shareCard.service');
 const newsService = require('../src/services/news.service');
 const pricesService = require('../src/services/prices.service');
 const statsService = require('../src/services/stats.service');
+const prayerTimesService = require('../src/services/prayerTimes.service');
 const { PALETTES } = require('../src/utils/shareTheme');
 
 let baseUrl = '';
@@ -22752,6 +22753,240 @@ async function run() {
     [],
     'ولا طلب يبقى بعد حذف المزوّد'
   );
+
+  // ======================================================================
+  // مواقيت الصلاة (M3) — تُحسب على خادمنا من إحداثيات البلدة، بلا طرف خارجي.
+  // النواة دالة نقية (`now` تُحقَن) فتُختبر بلا انتظار، والمسار عبر HTTP.
+  // ======================================================================
+  console.log('\nمواقيت الصلاة (M3): حساب من الإحداثيات، والصلاة القادمة، وتحقق المدخلات');
+
+  /** إحداثيات بئر السبع — نقطة اختبار النواة النقية، لا صفّ في القاعدة. */
+  const prayerProbe = { latitude: 31.252, longitude: 34.791 };
+  /** تاريخ بعيد عن كل تاريخ اختبار: يُبعد «القادمة» حيث لا تُختبر. */
+  const prayerElsewhere = new Date('2026-01-01T00:00:00Z');
+  /** 'HH:mm' ← دقائق من منتصف الليل، للترتيب وحدود المدى. */
+  const minutesOfTime = time => Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
+  const timeByKey = payload => Object.fromEntries(payload.times.map(entry => [entry.key, entry.time]));
+
+  await test('مواقيت الصلاة: ستّ مداخل وقت مرتّبة تصاعدياً في صيف بئر السبع وشتائه', async () => {
+    const summer = prayerTimesService.computePrayerTimes({ ...prayerProbe, date: '2026-06-21', now: prayerElsewhere });
+    const winter = prayerTimesService.computePrayerTimes({ ...prayerProbe, date: '2026-12-21', now: prayerElsewhere });
+
+    for (const [label, payload] of [['الصيف', summer], ['الشتاء', winter]]) {
+      assert.deepStrictEqual(
+        payload.times.map(entry => entry.key),
+        ['fajr', 'sunrise', 'dhuhr', 'asr', 'maghrib', 'isha'],
+        `${label}: المواقيت الستّ بترتيبها`
+      );
+      assert.deepStrictEqual(
+        payload.times.map(entry => entry.name),
+        ['الفجر', 'الشروق', 'الظهر', 'العصر', 'المغرب', 'العشاء'],
+        `${label}: الأسماء العربية`
+      );
+      for (const entry of payload.times) {
+        assert.ok(/^\d{2}:\d{2}$/.test(entry.time), `${label}: ${entry.name} بصيغة HH:mm — جاءت "${entry.time}"`);
+      }
+      const minutes = payload.times.map(entry => minutesOfTime(entry.time));
+      for (let index = 1; index < minutes.length; index += 1) {
+        assert.ok(
+          minutes[index] > minutes[index - 1],
+          `${label}: ${payload.times[index].name} يجب أن يأتي بعد ${payload.times[index - 1].name}`
+        );
+      }
+      assert.strictEqual(payload.next, null, `${label}: تاريخ ليس اليوم فلا صلاة قادمة`);
+    }
+
+    const summerTimes = timeByKey(summer);
+    const winterTimes = timeByKey(winter);
+    assert.ok(
+      minutesOfTime(summerTimes.fajr) >= 3 * 60 + 30 && minutesOfTime(summerTimes.fajr) <= 4 * 60 + 30,
+      `فجر الصيف ${summerTimes.fajr} خارج 03:30–04:30`
+    );
+    assert.ok(
+      minutesOfTime(summerTimes.maghrib) >= 19 * 60 + 30 && minutesOfTime(summerTimes.maghrib) <= 20 * 60 + 15,
+      `مغرب الصيف ${summerTimes.maghrib} خارج 19:30–20:15`
+    );
+    assert.ok(
+      minutesOfTime(winterTimes.maghrib) >= 16 * 60 + 30 && minutesOfTime(winterTimes.maghrib) <= 17 * 60 + 5,
+      `مغرب الشتاء ${winterTimes.maghrib} خارج 16:30–17:05`
+    );
+  });
+
+  await test('مواقيت الصلاة: التوقيت الصيفي — قفزة ساعة في آذار ورجوعها في تشرين الأول', async () => {
+    const fajrMinutesOn = date => minutesOfTime(
+      timeByKey(prayerTimesService.computePrayerTimes({ ...prayerProbe, date, now: prayerElsewhere })).fajr
+    );
+
+    // إسرائيل: يبدأ الصيف آخر جمعة في آذار (٢٧/٣/٢٠٢٦) وينتهي آخر أحد في تشرين
+    // الأول (٢٥/١٠/٢٠٢٦). انزياح الشمس بين يوم ويوم دقيقة أو دقيقتان، فما يقارب
+    // ٦٠ دقيقة هو ساعة التوقيت وحدها — وإزاحة ثابتة في الحساب كانت ستعطي صفراً
+    // هنا، وتنسيقٌ بمنطقة الخادم كان سيُظهر فرق منطقة الخادم لا فرق القدس.
+    const marchJump = fajrMinutesOn('2026-03-27') - fajrMinutesOn('2026-03-26');
+    assert.ok(marchJump >= 55 && marchJump <= 65, `قفزة آذار ${marchJump} دقيقة — المتوقّع نحو ٦٠`);
+    const octoberJump = fajrMinutesOn('2026-10-25') - fajrMinutesOn('2026-10-24');
+    assert.ok(octoberJump <= -55 && octoberJump >= -65, `رجوع تشرين الأول ${octoberJump} دقيقة — المتوقّع نحو -٦٠`);
+
+    for (const date of ['2026-03-26', '2026-03-27', '2026-10-24', '2026-10-25']) {
+      const fajr = fajrMinutesOn(date);
+      assert.ok(fajr >= 4 * 60 && fajr <= 6 * 60, `${date}: الفجر ${fajr} دقيقة خارج مدى 04:00–06:00`);
+    }
+  });
+
+  await test('مواقيت الصلاة: «القادمة» بالفجر والعصر والعشاء، والشروق ليس صلاة', async () => {
+    const date = '2026-06-21';
+    const { times } = prayerTimesService.computePrayerTimes({ ...prayerProbe, date, now: prayerElsewhere });
+    const timeOf = key => times.find(entry => entry.key === key).time;
+    /** لحظة `HH:mm` المعروضة نفسها في القدس على تاريخ الاختبار. */
+    const instantOf = key => {
+      const [hour, minute] = timeOf(key).split(':').map(Number);
+      return zonedTimeToUtc(2026, 6, 21, hour, minute, 0);
+    };
+    const nextAt = now => prayerTimesService.computePrayerTimes({ ...prayerProbe, date, now }).next;
+
+    // ثانية واحدة قبل بدء دقيقة الفجر: الفجر لم يحلّ بعد، والباقي أقلّ من دقيقة
+    // → ١ لا ٠ (التقريب لأعلى).
+    const nextFajr = nextAt(new Date(instantOf('fajr').getTime() - 1000));
+    assert.strictEqual(nextFajr.key, 'fajr');
+    assert.strictEqual(nextFajr.date, date);
+    assert.strictEqual(nextFajr.time, timeOf('fajr'));
+    assert.strictEqual(nextFajr.minutes_until, 1, 'ثانية واحدة قبل الصلاة تُقرَّب إلى دقيقة كاملة، ولا تعود صفراً');
+
+    // بعد الفجر وقبل الشروق: القادمة الظهر لا الشروق.
+    assert.strictEqual(
+      nextAt(new Date(instantOf('fajr').getTime() + 60 * 1000)).key,
+      'dhuhr',
+      'الشروق لا يكون «الصلاة القادمة» أبداً'
+    );
+
+    // بين العصر والمغرب: القادمة المغرب.
+    const afterAsr = nextAt(new Date(instantOf('asr').getTime() + 60 * 1000));
+    assert.strictEqual(afterAsr.key, 'maghrib');
+    assert.strictEqual(afterAsr.date, date);
+    assert.ok(afterAsr.minutes_until >= 1);
+
+    // بعد العشاء: فجر الغد بتاريخ الغد، وبمواقيت الغد لا مواقيت اليوم.
+    const afterIsha = nextAt(new Date(instantOf('isha').getTime() + 60 * 1000));
+    assert.strictEqual(afterIsha.key, 'fajr');
+    assert.strictEqual(afterIsha.date, '2026-06-22');
+    const tomorrowFajr = prayerTimesService
+      .computePrayerTimes({ ...prayerProbe, date: '2026-06-22', now: prayerElsewhere })
+      .times.find(entry => entry.key === 'fajr');
+    assert.strictEqual(afterIsha.time, tomorrowFajr.time, 'فجر الغد لا فجر اليوم');
+    assert.ok(afterIsha.minutes_until >= 1);
+
+    // تاريخ ليس اليوم — ماضياً كان أو مستقبلاً — لا «قادمة» له.
+    const midday = new Date('2026-06-21T09:00:00Z');
+    assert.strictEqual(prayerTimesService.computePrayerTimes({ ...prayerProbe, date: '2026-06-20', now: midday }).next, null);
+    assert.strictEqual(prayerTimesService.computePrayerTimes({ ...prayerProbe, date: '2026-06-22', now: midday }).next, null);
+  });
+
+  console.log('\nمواقيت الصلاة (M3): المسار العام — البلدة والمحافظة والتحقق');
+
+  await test('GET /api/prayer-times?town=رهط يعيد عقد الاستجابة كاملاً', async () => {
+    const { status, body } = await api('GET', `/api/prayer-times?town=${encodeURIComponent('رهط')}`);
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.success, true);
+    assert.deepStrictEqual(body.place, { name: 'رهط', kind: 'town' }, 'المكان المطلوب نفسه');
+    assert.strictEqual(body.date, jerusalemDateString(), 'التاريخ الافتراضي هو اليوم في القدس');
+    assert.strictEqual(body.timezone, 'Asia/Jerusalem');
+    assert.deepStrictEqual(body.method, { key: 'egyptian', name: 'الهيئة المصرية العامة للمساحة' });
+    assert.deepStrictEqual(
+      body.times.map(entry => entry.key),
+      ['fajr', 'sunrise', 'dhuhr', 'asr', 'maghrib', 'isha'],
+      'ستّ مداخل وقت بترتيبها'
+    );
+    for (const entry of body.times) {
+      assert.ok(/^\d{2}:\d{2}$/.test(entry.time), `${entry.name} بصيغة HH:mm — جاءت "${entry.time}"`);
+      assert.ok(entry.name, 'لكل صلاة اسم عربي');
+    }
+    // تاريخ اليوم: هناك دائماً صلاة قادمة — اليوم أو فجر الغد.
+    assert.ok(body.next, 'تاريخ اليوم يحمل صلاة قادمة');
+    assert.ok(['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'].includes(body.next.key), 'والشروق ليس منها');
+    assert.ok(/^\d{2}:\d{2}$/.test(body.next.time));
+    assert.ok(Number.isInteger(body.next.minutes_until) && body.next.minutes_until >= 1);
+    assert.ok(body.next.date >= body.date, 'فجر الغد حين مضت صلوات اليوم');
+  });
+
+  await test('GET /api/prayer-times?town=<اسم محافظة> يعيد kind=region', async () => {
+    const { status, body } = await api('GET', `/api/prayer-times?town=${encodeURIComponent('النقب')}`);
+    assert.strictEqual(status, 200);
+    assert.deepStrictEqual(body.place, { name: 'النقب', kind: 'region' });
+  });
+
+  const prayerRegionName = `محافظة مواقيت ${Date.now()}`;
+  const prayerTownName = `بلدة مواقيت ${Date.now()}`;
+  const { insertId: prayerRegionId } = await db.execute(
+    `INSERT INTO regions (name, latitude, longitude, map_zoom, position, is_active)
+     VALUES (?, 30.5, 34.9, 9, 96, 1)`,
+    [prayerRegionName]
+  );
+  try {
+    const { insertId: prayerTownId } = await db.execute(
+      `INSERT INTO towns (region_id, name, latitude, longitude, position, is_active)
+       VALUES (?, ?, NULL, NULL, 96, 1)`,
+      [prayerRegionId, prayerTownName]
+    );
+    try {
+      await test('GET /api/prayer-times بلا town يأخذ محافظة الطلب (X-Region)', async () => {
+        const { status, body } = await api('GET', '/api/prayer-times', { region: prayerRegionId });
+        assert.strictEqual(status, 200);
+        assert.deepStrictEqual(body.place, { name: prayerRegionName, kind: 'region' }, 'محافظة الترويسة لا الافتراضية');
+        const expected = prayerTimesService.computePrayerTimes({
+          latitude: 30.5,
+          longitude: 34.9,
+          date: body.date,
+          now: prayerElsewhere
+        });
+        assert.deepStrictEqual(body.times, expected.times, 'مواقيت مركز المحافظة نفسه');
+      });
+
+      await test('GET /api/prayer-times بلا town وبلا ترويسة يأخذ المحافظة الافتراضية', async () => {
+        const defaultRegion = await db.queryOne(
+          'SELECT name FROM regions WHERE is_active = 1 ORDER BY position ASC, id ASC LIMIT 1'
+        );
+        const { status, body } = await api('GET', '/api/prayer-times');
+        assert.strictEqual(status, 200);
+        assert.deepStrictEqual(body.place, { name: defaultRegion.name, kind: 'region' });
+      });
+
+      await test('مواقيت الصلاة: بلدة بلا إحداثيات تأخذ مركز محافظتها', async () => {
+        const byTown = await api('GET', `/api/prayer-times?town=${encodeURIComponent(prayerTownName)}`);
+        const byRegion = await api('GET', `/api/prayer-times?town=${encodeURIComponent(prayerRegionName)}`);
+        assert.strictEqual(byTown.status, 200);
+        assert.deepStrictEqual(byTown.body.place, { name: prayerTownName, kind: 'town' }, 'هوية المكان بلدة لا محافظة');
+        assert.deepStrictEqual(byRegion.body.place, { name: prayerRegionName, kind: 'region' });
+        assert.deepStrictEqual(byTown.body.times, byRegion.body.times, 'المواقيت نفسها: إحداثيات المحافظة');
+      });
+    } finally {
+      await db.execute('DELETE FROM towns WHERE id = ?', [prayerTownId]);
+    }
+  } finally {
+    await db.execute('DELETE FROM regions WHERE id = ?', [prayerRegionId]);
+  }
+
+  await test('GET /api/prayer-times?town=<مجهولة> ← 400 عربية', async () => {
+    const { status, body } = await api('GET', `/api/prayer-times?town=${encodeURIComponent('بلدة غير موجودة إطلاقاً')}`);
+    assert.strictEqual(status, 400);
+    assert.strictEqual(body.success, false);
+    assert.strictEqual(body.message, 'البلدة غير معروفة');
+  });
+
+  await test('GET /api/prayer-times?date=<غير صالح> ← 400 عربية', async () => {
+    // ٣٠ شباط و٣١ نيسان بصيغة صحيحة لكن لا وجود لهما في التقويم.
+    for (const bad of ['2026-13-45', '2026-02-30', '2026-04-31', '21-06-2026', '2026-06-21xyz']) {
+      const { status, body } = await api('GET', `/api/prayer-times?date=${encodeURIComponent(bad)}`);
+      assert.strictEqual(status, 400, `"${bad}" يجب أن يُرفض`);
+      assert.strictEqual(body.success, false);
+      assert.strictEqual(body.message, 'التاريخ غير صالح');
+    }
+  });
+
+  await test('GET /api/prayer-times?date=<يوم آخر> يعيد next: null', async () => {
+    const { status, body } = await api('GET', `/api/prayer-times?town=${encodeURIComponent('رهط')}&date=2020-06-21`);
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.date, '2020-06-21');
+    assert.strictEqual(body.next, null, 'تاريخ ليس اليوم لا صلاة قادمة له');
+  });
 
   // Clean up the throwaway accounts.
   await db.execute('DELETE FROM users WHERE phone_number = ?', [phone]);

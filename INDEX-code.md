@@ -3,7 +3,7 @@
 > **مولَّد من `server/scripts/build-index.js` — لا تحرّره بيدك؛ شغّل `npm run index:build`.**
 > ملحق `INDEX.md`: صادرات الخدمات، وخطوات الترحيل، ودوال الويب، والموبايل، ومتغيرات البيئة.
 
-## ١. صادرات الخدمات — 407 تصديراً في 29 خدمة
+## ١. صادرات الخدمات — 412 تصديراً في 30 خدمة
 
 كل خدمة تُصدِّر كائن `module.exports = { ... }` بنمط واحد؛ الأسماء كما هي في الملف مع سطرها.
 
@@ -264,6 +264,10 @@
 | `resolveByName` | `server/src/services/people.service.js:226` |
 | `listForAdmin` | `server/src/services/people.service.js:226` |
 | `mergeTwo` | `server/src/services/people.service.js:226` |
+| `TIME_ZONE` | `server/src/services/prayerTimes.service.js:168` |
+| `METHOD` | `server/src/services/prayerTimes.service.js:169` |
+| `todayInJerusalem` | `server/src/services/prayerTimes.service.js:170` |
+| `computePrayerTimes` | `server/src/services/prayerTimes.service.js:171` |
 | `getPrices` | `server/src/services/prices.service.js:350` |
 | `clearCache` | `server/src/services/prices.service.js:351` |
 | `PRICES_UNAVAILABLE_MESSAGE` | `server/src/services/prices.service.js:352` |
@@ -382,31 +386,32 @@
 | `previewCampaign` | `server/src/services/storyStudio.service.js:430` |
 | `publishCampaign` | `server/src/services/storyStudio.service.js:431` |
 | `PLATFORM_LABELS` | `server/src/services/storyStudio.service.js:432` |
-| `listActive` | `server/src/services/towns.service.js:665` |
-| `activeNames` | `server/src/services/towns.service.js:666` |
-| `coordinatesByName` | `server/src/services/towns.service.js:667` |
-| `isActiveTown` | `server/src/services/towns.service.js:668` |
-| `listActiveRegions` | `server/src/services/towns.service.js:669` |
-| `listDiscoveryRegions` | `server/src/services/towns.service.js:670` |
-| `activeRegionNames` | `server/src/services/towns.service.js:671` |
-| `isRegionName` | `server/src/services/towns.service.js:672` |
-| `isActivePlace` | `server/src/services/towns.service.js:673` |
-| `knownTownNames` | `server/src/services/towns.service.js:674` |
-| `knownPlaceNames` | `server/src/services/towns.service.js:675` |
-| `defaultRegionName` | `server/src/services/towns.service.js:676` |
-| `defaultRegionId` | `server/src/services/towns.service.js:677` |
-| `findRegionById` | `server/src/services/towns.service.js:678` |
-| `isActiveRegionId` | `server/src/services/towns.service.js:679` |
-| `findRegionIdForPlace` | `server/src/services/towns.service.js:680` |
-| `resolveRegionForEventPlace` | `server/src/services/towns.service.js:681` |
-| `nameKey` | `server/src/services/towns.service.js:682` |
-| `listForAdmin` | `server/src/services/towns.service.js:683` |
-| `createTown` | `server/src/services/towns.service.js:684` |
-| `updateTown` | `server/src/services/towns.service.js:685` |
-| `deleteTown` | `server/src/services/towns.service.js:686` |
-| `reorderTowns` | `server/src/services/towns.service.js:687` |
-| `createRegion` | `server/src/services/towns.service.js:688` |
-| `updateRegion` | `server/src/services/towns.service.js:689` |
+| `listActive` | `server/src/services/towns.service.js:698` |
+| `activeNames` | `server/src/services/towns.service.js:699` |
+| `coordinatesByName` | `server/src/services/towns.service.js:700` |
+| `placeCoordinates` | `server/src/services/towns.service.js:701` |
+| `isActiveTown` | `server/src/services/towns.service.js:702` |
+| `listActiveRegions` | `server/src/services/towns.service.js:703` |
+| `listDiscoveryRegions` | `server/src/services/towns.service.js:704` |
+| `activeRegionNames` | `server/src/services/towns.service.js:705` |
+| `isRegionName` | `server/src/services/towns.service.js:706` |
+| `isActivePlace` | `server/src/services/towns.service.js:707` |
+| `knownTownNames` | `server/src/services/towns.service.js:708` |
+| `knownPlaceNames` | `server/src/services/towns.service.js:709` |
+| `defaultRegionName` | `server/src/services/towns.service.js:710` |
+| `defaultRegionId` | `server/src/services/towns.service.js:711` |
+| `findRegionById` | `server/src/services/towns.service.js:712` |
+| `isActiveRegionId` | `server/src/services/towns.service.js:713` |
+| `findRegionIdForPlace` | `server/src/services/towns.service.js:714` |
+| `resolveRegionForEventPlace` | `server/src/services/towns.service.js:715` |
+| `nameKey` | `server/src/services/towns.service.js:716` |
+| `listForAdmin` | `server/src/services/towns.service.js:717` |
+| `createTown` | `server/src/services/towns.service.js:718` |
+| `updateTown` | `server/src/services/towns.service.js:719` |
+| `deleteTown` | `server/src/services/towns.service.js:720` |
+| `reorderTowns` | `server/src/services/towns.service.js:721` |
+| `createRegion` | `server/src/services/towns.service.js:722` |
+| `updateRegion` | `server/src/services/towns.service.js:723` |
 | `listActive` | `server/src/services/villages.service.js:283` |
 | `findActiveById` | `server/src/services/villages.service.js:284` |
 | `findActiveByName` | `server/src/services/villages.service.js:285` |

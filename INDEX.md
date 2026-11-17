@@ -12,7 +12,7 @@
 
 | الوحدة | الملفات | الأسطر |
 |---|---|---|
-| `server/src` | 83 | 29944 |
+| `server/src` | 85 | 30239 |
 | `web` | 8 | 23609 |
 | `mobile/lib` | 73 | 38845 |
 
@@ -22,14 +22,14 @@
 |---|---|---|
 | `app.js` | 1 | 136 |
 | `config/` | 1 | 156 |
-| `constants.js` | 1 | 386 |
+| `constants.js` | 1 | 399 |
 | `db/` | 4 | 3111 |
 | `jobs/` | 1 | 351 |
-| `middleware/` | 6 | 829 |
+| `middleware/` | 6 | 844 |
 | `privacyNotice.js` | 1 | 125 |
 | `realtime/` | 2 | 85 |
-| `routes/` | 25 | 7199 |
-| `services/` | 29 | 16685 |
+| `routes/` | 26 | 7282 |
+| `services/` | 30 | 16869 |
 | `utils/` | 12 | 881 |
 
 ### ملفات `web/*.js`
@@ -64,7 +64,7 @@
 
 | المهمة | ابدأ من |
 |---|---|
-| إضافة نقطة API | `server/src/routes/index.js:57` للتركيب، ثم `server/src/routes/<المجال>.routes.js` — مثل `server/src/routes/events.routes.js:98` — والخدمة `server/src/services/events.service.js` |
+| إضافة نقطة API | `server/src/routes/index.js:58` للتركيب، ثم `server/src/routes/<المجال>.routes.js` — مثل `server/src/routes/events.routes.js:98` — والخدمة `server/src/services/events.service.js` |
 | تغيير حقل أو جدول | `server/src/db/schema.sql` (للتنصيبات الجديدة) + خطوة جديدة في `server/src/db/dataMigrations.js` — آخر خطوة اليوم `server/src/db/dataMigrations.js:2860` |
 | رفع صورة أو وسيط | `server/src/middleware/upload.js:167` · `server/src/services/cloudinary.service.js:194` |
 | الصلاحيات والمصادقة | `server/src/middleware/auth.js:47` · `server/src/routes/admin.routes.js:25` |
@@ -74,7 +74,7 @@
 
 قاعدة الطبقات: المسار يتحقق والخدمة تستعلم — لا SQL خارج `server/src/services/`، ولا `req`/`res` داخلها.
 
-## ٣. نقاط API — 245
+## ٣. نقاط API — 246
 
 المسار الكامل = جذر التركيب في `server/src/app.js` + تركيب الراوتر في `server/src/routes/index.js` + المسار داخل الملف.
 راوترات `share.routes.js` تُركَّب على الجذور `/e` `/p` `/a` `/person` `/live` `/v` مباشرةً في `server/src/app.js`، لا تحت `/api`.
@@ -270,6 +270,7 @@
 | POST | `/api/photos/:id/reports` | `authenticate` | `server/src/routes/albums.routes.js:167` |
 | POST | `/api/photos/:id/tags` | `authenticate` | `server/src/routes/albums.routes.js:146` |
 | DELETE | `/api/photos/:id/tags/me` | `authenticate` | `server/src/routes/albums.routes.js:161` |
+| GET | `/api/prayer-times` | `optionalAuthenticate` | `server/src/routes/prayer.routes.js:68` |
 | GET | `/api/prices` | — | `server/src/routes/news.routes.js:75` |
 | POST | `/api/privacy/analytics-erasure` | `authenticate` | `server/src/routes/privacy.routes.js:46` |
 | POST | `/api/privacy/deletion-request` | — | `server/src/routes/privacy.routes.js:86` |
@@ -387,7 +388,7 @@
 | `story_clicks` | `stories.service.js` |
 | `story_reports` | `stories.service.js` |
 | `story_views` | `stories.service.js` |
-| `towns` | `admin.service.js`, `adminScope.service.js`, `albums.service.js`, `analytics.service.js`, `auth.service.js`, `broadcasts.service.js`, `events.service.js`, `news.service.js`, `services.service.js`, `stats.service.js`, `stories.service.js`, `towns.service.js`, `villages.service.js` |
+| `towns` | `admin.service.js`, `adminScope.service.js`, `albums.service.js`, `analytics.service.js`, `auth.service.js`, `broadcasts.service.js`, `events.service.js`, `news.service.js`, `prayerTimes.service.js`, `services.service.js`, `stats.service.js`, `stories.service.js`, `towns.service.js`, `villages.service.js` |
 | `users` | `activity.service.js`, `admin.service.js`, `albums.service.js`, `analytics.service.js`, `auth.service.js`, `broadcasts.service.js`, `events.service.js`, `notifications.service.js`, `people.service.js`, `privacy.service.js`, `push.service.js`, `services.service.js`, `stories.service.js` |
 | `villages` | `analytics.service.js`, `events.service.js`, `services.service.js`, `towns.service.js`, `villages.service.js` |
 
