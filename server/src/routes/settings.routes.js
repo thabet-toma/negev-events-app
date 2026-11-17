@@ -157,6 +157,16 @@ function parseProvidersDisplay(raw) {
   return cleaned;
 }
 
+/**
+ * نصّ حرّ بسقف طول — و**الفراغ يبقى '' لا null**، بخلاف `cleanString`: رسالة
+ * الترحيب الفارغة قرار «أخفِ البطاقة» لا «امسح الإعداد»، فترجمتها إلى null كانت
+ * ستُعيد الافتراضية وتُظهر البطاقة التي أراد الأدمن إخفاءها. والعنوان الفارغ
+ * كذلك يبقى '' (بطاقة بنصّ بلا عنوان).
+ */
+function parseFreeTextSetting(maxLength) {
+  return raw => (raw === undefined || raw === null ? '' : String(raw).trim().slice(0, maxLength));
+}
+
 // كل قيمة قابلة للحفظ تمرّ بمُحقِّقها الخاص — إضافة مفتاح جديد لاحقاً تعني
 // إضافته هنا وفي SETTING_KEYS معاً، لا تخفيف هذا التحقق.
 const VALIDATORS = {
@@ -167,7 +177,9 @@ const VALIDATORS = {
   [settings.SETTING_KEYS.LIVE_UNTIL]: parseLiveUntil,
   [settings.SETTING_KEYS.LIVE_STREAM_URL]: parseStreamUrl,
   [settings.SETTING_KEYS.ENTRY_PROMO_STORY_ID]: parseEntryPromoStoryId,
-  [settings.SETTING_KEYS.PROVIDERS_DISPLAY]: parseProvidersDisplay
+  [settings.SETTING_KEYS.PROVIDERS_DISPLAY]: parseProvidersDisplay,
+  [settings.SETTING_KEYS.HOME_WELCOME_TITLE]: parseFreeTextSetting(80),
+  [settings.SETTING_KEYS.HOME_WELCOME_MESSAGE]: parseFreeTextSetting(300)
 };
 
 /** The four keys that together describe a live — touching any of them is a live-status change (plan26-9 §3.6). */
@@ -265,8 +277,19 @@ router.delete('/admin/settings/default-audio', asyncHandler(async (req, res) => 
   res.json({ success: true, settings: await settings.getAllForAdmin(), message: 'تم حذف المقطع الافتراضي' });
 }));
 
+/**
+ * `{ success, settings, home_welcome }` — و`home_welcome` كائنٌ مشكَّل خارج
+ * `settings` عمداً: مفاتيحه الخام تبقى إعدادات أدمن لا تخرج للعامة، والوجه
+ * المنشور هو `{ title, message }` أو `null` حين أخفى الأدمن البطاقة (نصّ
+ * فارغ محفوظ). ولا صفّ للرسالة بعد يعني الافتراضية — يحسمها الخادم وحده، فلا
+ * نسخة من نصّها الافتراضي في أي عميل.
+ */
 router.get('/settings/public', asyncHandler(async (req, res) => {
-  res.json({ success: true, settings: await settings.getPublicSettings() });
+  const [publicSettings, homeWelcome] = await Promise.all([
+    settings.getPublicSettings(),
+    settings.getHomeWelcome()
+  ]);
+  res.json({ success: true, settings: publicSettings, home_welcome: homeWelcome });
 }));
 
 // Public and unauthenticated on purpose: this is the one surface every

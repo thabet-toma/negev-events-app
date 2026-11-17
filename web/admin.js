@@ -8446,6 +8446,7 @@ async function fetchAdminSettings() {
     if (data.success && data.settings) {
       input.value = data.settings.support_whatsapp_number || '';
       applyProvidersDisplayToForm(data.settings.providers_display);
+      applyHomeWelcomeToForm(data.settings);
       renderDefaultAudioSetting(data.settings.default_event_audio_url);
       applyLiveSettingsToForm(data.settings);
       renderLiveCardPreview();
@@ -8474,6 +8475,24 @@ function applyProvidersDisplayToForm(value) {
   select.value = value;
 }
 
+/**
+ * رسالة الترحيب في الرئيسية: الخادم يعيد القيم **الفعّالة** كما يراها الزائر —
+ * الافتراضية ما دام لا صفّ محفوظ، وفارغةً حين أخفاها الأدمن. فما يُعرض هنا هو
+ * ما سيراه القارئ، وحفظُ نموذج آخر لا يُخفي البطاقة بلا قصد. وقيمة غائبة
+ * (استجابة بلا المفتاح) تترك الحقل على حاله، كما يفعل منتقي الشكل فوقها.
+ */
+function applyHomeWelcomeToForm(settingsObj) {
+  if (!settingsObj) return;
+  const titleInput = document.getElementById('settingHomeWelcomeTitle');
+  const messageInput = document.getElementById('settingHomeWelcomeMessage');
+  if (titleInput && typeof settingsObj.home_welcome_title === 'string') {
+    titleInput.value = settingsObj.home_welcome_title;
+  }
+  if (messageInput && typeof settingsObj.home_welcome_message === 'string') {
+    messageInput.value = settingsObj.home_welcome_message;
+  }
+}
+
 async function handleSaveSettings(e) {
   e.preventDefault();
   const notice = document.getElementById('settingsNotice');
@@ -8487,6 +8506,13 @@ async function handleSaveSettings(e) {
   // يُرسل مع الرقم في طلب واحد: المفتاح غائب عن الجسم يعني «لا تلمسه»،
   // وهذا نموذج حفظ واحد يجب أن يحفظ ما يُعرض فيه.
   if (displaySelect) body.providers_display = displaySelect.value;
+
+  // ورسالة الترحيب كذلك — والفراغ هنا معناه «أخفِ البطاقة» لا «لا تلمسها»،
+  // وهو ما يعرضه عنوان الحقل نفسه ويترجمه الخادم إلى `home_welcome: null`.
+  const welcomeTitle = document.getElementById('settingHomeWelcomeTitle');
+  const welcomeMessage = document.getElementById('settingHomeWelcomeMessage');
+  if (welcomeTitle) body.home_welcome_title = welcomeTitle.value.trim();
+  if (welcomeMessage) body.home_welcome_message = welcomeMessage.value.trim();
 
   if (btn) {
     btn.disabled = true;
@@ -8505,6 +8531,7 @@ async function handleSaveSettings(e) {
       if (data.settings) {
         input.value = data.settings.support_whatsapp_number || '';
         applyProvidersDisplayToForm(data.settings.providers_display);
+        applyHomeWelcomeToForm(data.settings);
       }
       if (notice) {
         notice.style.display = 'none';

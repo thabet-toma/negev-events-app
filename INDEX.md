@@ -12,8 +12,8 @@
 
 | الوحدة | الملفات | الأسطر |
 |---|---|---|
-| `server/src` | 83 | 29784 |
-| `web` | 8 | 23023 |
+| `server/src` | 83 | 29944 |
+| `web` | 8 | 23048 |
 | `mobile/lib` | 71 | 37033 |
 
 ### توزيع `server/src`
@@ -25,18 +25,18 @@
 | `constants.js` | 1 | 386 |
 | `db/` | 4 | 3111 |
 | `jobs/` | 1 | 351 |
-| `middleware/` | 6 | 814 |
+| `middleware/` | 6 | 829 |
 | `privacyNotice.js` | 1 | 125 |
 | `realtime/` | 2 | 85 |
-| `routes/` | 25 | 7135 |
-| `services/` | 29 | 16604 |
+| `routes/` | 25 | 7199 |
+| `services/` | 29 | 16685 |
 | `utils/` | 12 | 881 |
 
 ### ملفات `web/*.js`
 
 | الملف | الأسطر |
 |---|---|
-| `admin.js` | 8596 |
+| `admin.js` | 8621 |
 | `api.js` | 137 |
 | `app.js` | 13416 |
 | `config.js` | 32 |
@@ -64,7 +64,7 @@
 
 | المهمة | ابدأ من |
 |---|---|
-| إضافة نقطة API | `server/src/routes/index.js:57` للتركيب، ثم `server/src/routes/<المجال>.routes.js` — مثل `server/src/routes/events.routes.js:81` — والخدمة `server/src/services/events.service.js` |
+| إضافة نقطة API | `server/src/routes/index.js:57` للتركيب، ثم `server/src/routes/<المجال>.routes.js` — مثل `server/src/routes/events.routes.js:98` — والخدمة `server/src/services/events.service.js` |
 | تغيير حقل أو جدول | `server/src/db/schema.sql` (للتنصيبات الجديدة) + خطوة جديدة في `server/src/db/dataMigrations.js` — آخر خطوة اليوم `server/src/db/dataMigrations.js:2860` |
 | رفع صورة أو وسيط | `server/src/middleware/upload.js:167` · `server/src/services/cloudinary.service.js:194` |
 | الصلاحيات والمصادقة | `server/src/middleware/auth.js:47` · `server/src/routes/admin.routes.js:25` |
@@ -169,10 +169,10 @@
 | DELETE | `/api/admin/service-providers/:id/products/:productId` | `requireAdmin` | `server/src/routes/services.routes.js:893` |
 | PATCH | `/api/admin/service-providers/:id/products/:productId` | `requireAdmin` | `server/src/routes/services.routes.js:878` |
 | PATCH | `/api/admin/service-providers/:id/status` | `requireAdmin` | `server/src/routes/services.routes.js:716` |
-| GET | `/api/admin/settings` | `requireSuperAdmin` | `server/src/routes/settings.routes.js:187` |
-| PUT | `/api/admin/settings` | `requireSuperAdmin` | `server/src/routes/settings.routes.js:191` |
-| DELETE | `/api/admin/settings/default-audio` | `requireSuperAdmin` | `server/src/routes/settings.routes.js:262` |
-| POST | `/api/admin/settings/default-audio` | `requireSuperAdmin` | `server/src/routes/settings.routes.js:250` |
+| GET | `/api/admin/settings` | `requireSuperAdmin` | `server/src/routes/settings.routes.js:199` |
+| PUT | `/api/admin/settings` | `requireSuperAdmin` | `server/src/routes/settings.routes.js:203` |
+| DELETE | `/api/admin/settings/default-audio` | `requireSuperAdmin` | `server/src/routes/settings.routes.js:274` |
+| POST | `/api/admin/settings/default-audio` | `requireSuperAdmin` | `server/src/routes/settings.routes.js:262` |
 | GET | `/api/admin/stats` | `requireAdmin` | `server/src/routes/admin.routes.js:55` |
 | GET | `/api/admin/stories` | `requireSuperAdmin` | `server/src/routes/stories.routes.js:188` |
 | POST | `/api/admin/stories` | `requireSuperAdmin` | `server/src/routes/stories.routes.js:196` |
@@ -210,46 +210,46 @@
 | PATCH | `/api/broadcasts/:id/dismiss` | `authenticate` | `server/src/routes/broadcasts.routes.js:32` |
 | GET | `/api/broadcasts/live` | `optionalAuthenticate` | `server/src/routes/broadcasts.routes.js:28` |
 | GET | `/api/card-templates` | — | `server/src/routes/cards.routes.js:168` |
-| POST | `/api/check-collision` | — | `server/src/routes/events.routes.js:1132` |
-| GET | `/api/events` | `optionalAuthenticate` | `server/src/routes/events.routes.js:81` |
-| POST | `/api/events` | `authenticate` | `server/src/routes/events.routes.js:331` |
-| GET | `/api/events/:id` | `optionalAuthenticate` | `server/src/routes/events.routes.js:269` |
-| PATCH | `/api/events/:id` | `authenticate` | `server/src/routes/events.routes.js:594` |
-| GET | `/api/events/:id/amendments` | `authenticate` | `server/src/routes/events.routes.js:1122` |
-| GET | `/api/events/:id/calendar.ics` | — | `server/src/routes/events.routes.js:292` |
+| POST | `/api/check-collision` | — | `server/src/routes/events.routes.js:1152` |
+| GET | `/api/events` | `optionalAuthenticate` | `server/src/routes/events.routes.js:98` |
+| POST | `/api/events` | `authenticate` | `server/src/routes/events.routes.js:351` |
+| GET | `/api/events/:id` | `optionalAuthenticate` | `server/src/routes/events.routes.js:289` |
+| PATCH | `/api/events/:id` | `authenticate` | `server/src/routes/events.routes.js:614` |
+| GET | `/api/events/:id/amendments` | `authenticate` | `server/src/routes/events.routes.js:1142` |
+| GET | `/api/events/:id/calendar.ics` | — | `server/src/routes/events.routes.js:312` |
 | GET | `/api/events/:id/cards` | `authenticate` | `server/src/routes/cards.routes.js:176` |
 | POST | `/api/events/:id/cards` | `authenticate` | `server/src/routes/cards.routes.js:239` |
 | DELETE | `/api/events/:id/cards/:cardId` | `authenticate` | `server/src/routes/cards.routes.js:328` |
 | PATCH | `/api/events/:id/cards/:cardId` | `authenticate` | `server/src/routes/cards.routes.js:312` |
 | POST | `/api/events/:id/cards/preview` | `authenticate` | `server/src/routes/cards.routes.js:194` |
-| POST | `/api/events/:id/congratulate` | `authenticate` | `server/src/routes/events.routes.js:1187` |
-| GET | `/api/events/:id/congratulations` | `authenticate` | `server/src/routes/events.routes.js:1215` |
-| DELETE | `/api/events/:id/congratulations/:cid` | `authenticate` | `server/src/routes/events.routes.js:1273` |
-| PATCH | `/api/events/:id/congratulations/:cid` | `authenticate` | `server/src/routes/events.routes.js:1229` |
-| POST | `/api/events/:id/congratulations/:cid/report` | `authenticate` | `server/src/routes/events.routes.js:1284` |
-| GET | `/api/events/:id/invites` | `authenticate` | `server/src/routes/events.routes.js:1086` |
-| POST | `/api/events/:id/invites` | `authenticate` | `server/src/routes/events.routes.js:1073` |
-| DELETE | `/api/events/:id/invites/:inviteId` | `authenticate` | `server/src/routes/events.routes.js:1097` |
-| POST | `/api/events/:id/react` | — | `server/src/routes/events.routes.js:1152` |
-| DELETE | `/api/events/:id/remind` | `authenticate` | `server/src/routes/events.routes.js:967` |
-| PATCH | `/api/events/:id/remind` | `authenticate` | `server/src/routes/events.routes.js:958` |
-| POST | `/api/events/:id/remind` | `authenticate` | `server/src/routes/events.routes.js:946` |
-| DELETE | `/api/events/:id/rsvp` | `authenticate` | `server/src/routes/events.routes.js:1014` |
-| PUT | `/api/events/:id/rsvp` | `authenticate` | `server/src/routes/events.routes.js:997` |
-| GET | `/api/events/:id/rsvps` | `authenticate` | `server/src/routes/events.routes.js:1026` |
-| GET | `/api/events/calendar` | — | `server/src/routes/events.routes.js:256` |
-| GET | `/api/events/featured` | `optionalAuthenticate` | `server/src/routes/events.routes.js:228` |
-| GET | `/api/events/trending` | `optionalAuthenticate` | `server/src/routes/events.routes.js:205` |
-| GET | `/api/live` | — | `server/src/routes/settings.routes.js:276` |
+| POST | `/api/events/:id/congratulate` | `authenticate` | `server/src/routes/events.routes.js:1207` |
+| GET | `/api/events/:id/congratulations` | `authenticate` | `server/src/routes/events.routes.js:1235` |
+| DELETE | `/api/events/:id/congratulations/:cid` | `authenticate` | `server/src/routes/events.routes.js:1293` |
+| PATCH | `/api/events/:id/congratulations/:cid` | `authenticate` | `server/src/routes/events.routes.js:1249` |
+| POST | `/api/events/:id/congratulations/:cid/report` | `authenticate` | `server/src/routes/events.routes.js:1304` |
+| GET | `/api/events/:id/invites` | `authenticate` | `server/src/routes/events.routes.js:1106` |
+| POST | `/api/events/:id/invites` | `authenticate` | `server/src/routes/events.routes.js:1093` |
+| DELETE | `/api/events/:id/invites/:inviteId` | `authenticate` | `server/src/routes/events.routes.js:1117` |
+| POST | `/api/events/:id/react` | — | `server/src/routes/events.routes.js:1172` |
+| DELETE | `/api/events/:id/remind` | `authenticate` | `server/src/routes/events.routes.js:987` |
+| PATCH | `/api/events/:id/remind` | `authenticate` | `server/src/routes/events.routes.js:978` |
+| POST | `/api/events/:id/remind` | `authenticate` | `server/src/routes/events.routes.js:966` |
+| DELETE | `/api/events/:id/rsvp` | `authenticate` | `server/src/routes/events.routes.js:1034` |
+| PUT | `/api/events/:id/rsvp` | `authenticate` | `server/src/routes/events.routes.js:1017` |
+| GET | `/api/events/:id/rsvps` | `authenticate` | `server/src/routes/events.routes.js:1046` |
+| GET | `/api/events/calendar` | — | `server/src/routes/events.routes.js:276` |
+| GET | `/api/events/featured` | `optionalAuthenticate` | `server/src/routes/events.routes.js:248` |
+| GET | `/api/events/trending` | `optionalAuthenticate` | `server/src/routes/events.routes.js:225` |
+| GET | `/api/live` | — | `server/src/routes/settings.routes.js:299` |
 | POST | `/api/live/episodes/:id/vote` | `authenticate` | `server/src/routes/live.routes.js:93` |
 | GET | `/api/live/hub` | `optionalAuthenticate` | `server/src/routes/live.routes.js:77` |
-| GET | `/api/map/events` | `optionalAuthenticate` | `server/src/routes/events.routes.js:120` |
-| GET | `/api/my-events` | `authenticate` | `server/src/routes/events.routes.js:940` |
+| GET | `/api/map/events` | `optionalAuthenticate` | `server/src/routes/events.routes.js:140` |
+| GET | `/api/my-events` | `authenticate` | `server/src/routes/events.routes.js:960` |
 | GET | `/api/my-photos` | `authenticate` | `server/src/routes/albums.routes.js:136` |
-| DELETE | `/api/my-reminders` | `authenticate` | `server/src/routes/events.routes.js:1111` |
-| GET | `/api/my-reminders` | `authenticate` | `server/src/routes/events.routes.js:977` |
-| GET | `/api/news` | `optionalAuthenticate` | `server/src/routes/news.routes.js:50` |
-| GET | `/api/news/:id` | — | `server/src/routes/news.routes.js:70` |
+| DELETE | `/api/my-reminders` | `authenticate` | `server/src/routes/events.routes.js:1131` |
+| GET | `/api/my-reminders` | `authenticate` | `server/src/routes/events.routes.js:997` |
+| GET | `/api/news` | `optionalAuthenticate` | `server/src/routes/news.routes.js:42` |
+| GET | `/api/news/:id` | — | `server/src/routes/news.routes.js:62` |
 | GET | `/api/nokoot` | `authenticate` | `server/src/routes/nokoot.routes.js:16` |
 | POST | `/api/nokoot` | `authenticate` | `server/src/routes/nokoot.routes.js:21` |
 | DELETE | `/api/nokoot/:id` | `authenticate` | `server/src/routes/nokoot.routes.js:37` |
@@ -270,7 +270,7 @@
 | POST | `/api/photos/:id/reports` | `authenticate` | `server/src/routes/albums.routes.js:167` |
 | POST | `/api/photos/:id/tags` | `authenticate` | `server/src/routes/albums.routes.js:146` |
 | DELETE | `/api/photos/:id/tags/me` | `authenticate` | `server/src/routes/albums.routes.js:161` |
-| GET | `/api/prices` | — | `server/src/routes/news.routes.js:83` |
+| GET | `/api/prices` | — | `server/src/routes/news.routes.js:75` |
 | POST | `/api/privacy/analytics-erasure` | `authenticate` | `server/src/routes/privacy.routes.js:46` |
 | POST | `/api/privacy/deletion-request` | — | `server/src/routes/privacy.routes.js:86` |
 | GET | `/api/privacy/notice` | — | `server/src/routes/privacy.routes.js:37` |
@@ -298,14 +298,14 @@
 | POST | `/api/services/providers/:id/view` | `optionalAuthenticate` | `server/src/routes/services.routes.js:251` |
 | GET | `/api/services/providers/:id/whatsapp` | — | `server/src/routes/services.routes.js:297` |
 | PUT | `/api/services/reviews/:rid/reply` | `authenticate` | `server/src/routes/services.routes.js:382` |
-| GET | `/api/settings/public` | — | `server/src/routes/settings.routes.js:268` |
-| GET | `/api/stats/ticker` | — | `server/src/routes/stats.routes.js:34` |
+| GET | `/api/settings/public` | — | `server/src/routes/settings.routes.js:287` |
+| GET | `/api/stats/ticker` | `optionalAuthenticate` | `server/src/routes/stats.routes.js:64` |
 | GET | `/api/stories` | `optionalAuthenticate` | `server/src/routes/stories.routes.js:48` |
 | POST | `/api/stories/:id/click` | `optionalAuthenticate` | `server/src/routes/stories.routes.js:87` |
 | POST | `/api/stories/:id/report` | `authenticate` | `server/src/routes/stories.routes.js:96` |
 | POST | `/api/stories/:id/view` | `optionalAuthenticate` | `server/src/routes/stories.routes.js:74` |
 | GET | `/api/stories/entry-card` | — | `server/src/routes/stories.routes.js:64` |
-| GET | `/api/towns` | — | `server/src/routes/events.routes.js:147` |
+| GET | `/api/towns` | — | `server/src/routes/events.routes.js:167` |
 | GET | `/api/videos/:id` | — | `server/src/routes/albums.routes.js:97` |
 | GET | `/e/:id` | — | `server/src/routes/share.routes.js:1041` |
 | GET | `/e/:id/card.jpg` | — | `server/src/routes/share.routes.js:1380` |
@@ -405,13 +405,13 @@
 | `new_event_created` | `server/src/routes/admin.routes.js:128` |
 | `system_broadcast` | `server/src/routes/admin.routes.js:345` |
 | `town_broadcast` | `server/src/routes/admin.routes.js:358` |
-| `admin_new_pending_event` | `server/src/routes/events.routes.js:515` |
-| `new_event_created` | `server/src/routes/events.routes.js:538` |
-| `event_reaction_${eventId}` | `server/src/routes/events.routes.js:1161` |
-| `new_congratulation_${eventId}` | `server/src/routes/events.routes.js:1206` |
-| `new_congratulation_${eventId}` | `server/src/routes/events.routes.js:1266` |
+| `admin_new_pending_event` | `server/src/routes/events.routes.js:535` |
+| `new_event_created` | `server/src/routes/events.routes.js:558` |
+| `event_reaction_${eventId}` | `server/src/routes/events.routes.js:1181` |
+| `new_congratulation_${eventId}` | `server/src/routes/events.routes.js:1226` |
+| `new_congratulation_${eventId}` | `server/src/routes/events.routes.js:1286` |
 | `live_poll_${episodeId}` | `server/src/routes/live.routes.js:100` |
-| `live_status` | `server/src/routes/settings.routes.js:215` |
+| `live_status` | `server/src/routes/settings.routes.js:227` |
 
 ## ٦. الأوامر والبوابات
 

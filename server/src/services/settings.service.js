@@ -31,7 +31,13 @@ const SETTING_KEYS = {
   // شكل عرض مزوّدي «خدمات الأعراس» (تذكرة #158): `compact` صفوف قصيرة تُظهر
   // ٤–٥ مزوّدين في الشاشة، أو `cards` الكروت الكبيرة. القيمتان أدناه وحدهما
   // المقبولتان، وما عداهما يقرأ الشكل المختصر.
-  PROVIDERS_DISPLAY: 'providers_display'
+  PROVIDERS_DISPLAY: 'providers_display',
+  // رسالة الترحيب في الرئيسية: عنوان ونصّ حرّان. **ظهور البطاقة يحكمه صفّ
+  // الرسالة وحده** — لا صفّ يعني «لم تُضبط قطّ» فتخرج الافتراضية، وصفٌّ فارغ
+  // يعني «أخفاها الأدمن» (انظر readHomeWelcome أدناه). وليسا في PUBLIC_KEYS
+  // لأنهما يخرجان للعامة عبر الوجه المشكَّل `home_welcome` وحده.
+  HOME_WELCOME_TITLE: 'home_welcome_title',
+  HOME_WELCOME_MESSAGE: 'home_welcome_message'
 };
 
 const WHITELISTED_KEYS = Object.values(SETTING_KEYS);
@@ -40,6 +46,12 @@ const WHITELISTED_KEYS = Object.values(SETTING_KEYS);
 // التحقق عند الكتابة (settings.routes.js) وفي قراءة القيمة الافتراضية أدناه.
 const PROVIDERS_DISPLAY_MODES = ['compact', 'cards'];
 const PROVIDERS_DISPLAY_DEFAULT = 'compact';
+
+/** رسالة الترحيب الافتراضية في الرئيسية — تُقرأ حين لا صفّ للرسالة بعد. */
+const HOME_WELCOME_DEFAULT = {
+  title: 'أهلاً بكم في أعراسنا!',
+  message: 'نطوّر التطبيق دائماً لتكون تجربتكم أسهل وأجمل — تابعوا الجديد وكونوا جزءاً منه'
+};
 
 // The only keys GET /api/settings/public may ever expose, kept as their own
 // list separate from WHITELISTED_KEYS so a future admin-only setting never
@@ -97,12 +109,58 @@ async function readKeys(keys) {
 }
 
 /**
+ * Resolves the home-page welcome pair from the two stored settings, keeping
+ * the one distinction the feature depends on: a MISSING
+ * `home_welcome_message` row means "never set", so the code default applies,
+ * while a row holding an empty value means the admin hid the card. `|| ''`
+ * keeps an explicitly empty title readable as '' — the card then shows the
+ * message alone — and treats a NULL message (written by some other path) as
+ * the same "hidden" an empty string means.
+ */
+async function readHomeWelcome() {
+  const rows = await db.query(
+    `SELECT setting_key, setting_value FROM app_settings WHERE setting_key IN (?, ?)`,
+    [SETTING_KEYS.HOME_WELCOME_TITLE, SETTING_KEYS.HOME_WELCOME_MESSAGE]
+  );
+  const stored = new Map(rows.map(row => [row.setting_key, row.setting_value]));
+
+  if (!stored.has(SETTING_KEYS.HOME_WELCOME_MESSAGE)) {
+    return { title: HOME_WELCOME_DEFAULT.title, message: HOME_WELCOME_DEFAULT.message };
+  }
+
+  return {
+    title: stored.get(SETTING_KEYS.HOME_WELCOME_TITLE) || '',
+    message: stored.get(SETTING_KEYS.HOME_WELCOME_MESSAGE) || ''
+  };
+}
+
+/**
+ * The public shape of the welcome card: `{ title, message }`, or `null` once
+ * the admin saved an empty message — clients then draw no card at all. The
+ * default is NOT returned as null: a fresh installation must show its
+ * welcome, and only an explicit empty save hides it.
+ */
+async function getHomeWelcome() {
+  const welcome = await readHomeWelcome();
+  return welcome.message ? welcome : null;
+}
+
+/**
  * Every whitelisted setting, for the admin panel. An unset key comes back as
- * null, except a key in RESOLVED_KEYS — that one reads as its effective value
- * (its default) so the panel shows what is actually in force.
+ * null, except one whose effective value is derived rather than stored: a
+ * RESOLVED_KEYS key reads as its default, and the home-welcome pair below as
+ * the pair the public route would serve — so the panel shows what is actually
+ * in force.
  */
 async function getAllForAdmin() {
-  return readKeys(WHITELISTED_KEYS);
+  const settings = await readKeys(WHITELISTED_KEYS);
+  // رسالة الترحيب تُعرض كما يراها الزائر بالضبط: الافتراضية ما دام لا صفّ لها،
+  // وفارغةً حين أخفاها الأدمن. بغير هذا كان حفظُ نموذج لا علاقة له بها (رقم
+  // الدعم مثلاً) يكتب نصاً فارغاً ويُخفي البطاقة الافتراضية بلا أن يقصد أحد.
+  const welcome = await readHomeWelcome();
+  settings[SETTING_KEYS.HOME_WELCOME_TITLE] = welcome.title;
+  settings[SETTING_KEYS.HOME_WELCOME_MESSAGE] = welcome.message;
+  return settings;
 }
 
 /** The PUBLIC_KEYS only, for the public unauthenticated route — RESOLVED_KEYS applied. */
@@ -305,6 +363,7 @@ module.exports = {
   assertWhitelisted,
   getAllForAdmin,
   getPublicSettings,
+  getHomeWelcome,
   getEntryPromoStoryId,
   getLiveChannel,
   toEmbedUrl,
