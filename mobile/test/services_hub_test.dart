@@ -8,12 +8,14 @@ import 'package:negev_events/api/api_client.dart';
 import 'package:negev_events/api/negev_api.dart';
 import 'package:negev_events/main.dart';
 import 'package:negev_events/screens/news_screen.dart';
+import 'package:negev_events/screens/prayer_times_screen.dart';
 import 'package:negev_events/screens/services_calculators_screen.dart';
 import 'package:negev_events/screens/services_hub_screen.dart';
 import 'package:negev_events/screens/services_prices_screen.dart';
 import 'package:negev_events/state/auth_store.dart';
 import 'package:negev_events/state/realtime.dart';
 import 'package:negev_events/theme.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// ردّ `/api/prices` كما يعيده الخادم (تذكرة #189): أسعار مزيّفة صحيحة الأرقام،
 /// والغرام ٢٤ = ٥٠٠ شيكل فتصير ٢١ = ٤٣٧٫٥ و١٨ = ٣٧٥ (والخادم هو من يقرّب).
@@ -431,6 +433,32 @@ void main() {
         reason: 'ولا تاريخ وهمي',
       );
       expect(find.byKey(const Key('prices_retry')), findsOneWidget);
+    });
+  });
+
+  group('مواقيت الصلاة (M3-C)', () {
+    testWidgets('بطاقتها تحت أداتَي الأسعار وتفتح شاشتها', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      await pumpHub(tester, hubApi());
+
+      expect(find.text('مواقيت الصلاة'), findsWidgets);
+      expect(find.byKey(const Key('hub_prayer_times')), findsOneWidget);
+
+      // القسم بعد أداتَي الأسعار في الترتيب نفسه.
+      final fxRect = tester.getRect(find.byKey(const Key('hub_prices_fx')));
+      final prayerRect = tester.getRect(
+        find.byKey(const Key('hub_prayer_times')),
+      );
+      expect(prayerRect.top, greaterThan(fxRect.top));
+
+      await tester.tap(find.byKey(const Key('hub_prayer_times')));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(PrayerTimesScreen), findsOneWidget);
+      expect(
+        find.byType(ServicesHubScreen, skipOffstage: false),
+        findsOneWidget,
+      );
     });
   });
 }

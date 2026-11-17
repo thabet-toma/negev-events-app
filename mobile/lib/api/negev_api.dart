@@ -14,6 +14,7 @@ import '../models/my_list.dart';
 import '../models/news.dart';
 import '../models/nokoot.dart';
 import '../models/notification.dart';
+import '../models/prayer_times.dart';
 import '../models/prices.dart';
 import '../models/reminder_schedule.dart';
 import '../models/service.dart';
@@ -821,6 +822,20 @@ class NegevApi {
   Future<PricesSnapshot> prices() async {
     final data = await _client.get('/api/prices');
     return PricesSnapshot.fromJson(data);
+  }
+
+  /// مواقيت الصلاة (M3-C) — `GET /api/prayer-times`، مسار عام بلا مصادقة.
+  ///
+  /// `town` بلدة نشطة من كتالوج `AppServices.of(context).places`؛ غيابها يعني
+  /// «حسب محافظتي» فيقرّر الخادم المحافظة من `X-Region` أو من الطلب نفسه. لا
+  /// يحسب هذا العميل وقتاً: النموذج يعرض ما وصل (انظر `models/prayer_times.dart`).
+  Future<PrayerTimesSnapshot> prayerTimes({String? town}) async {
+    final name = town == null ? '' : town.trim();
+    final data = await _client.get(
+      '/api/prayer-times',
+      query: name.isEmpty ? null : {'town': name},
+    );
+    return PrayerTimesSnapshot.fromJson(data);
   }
 
   /// التعاميم الحيّة التي يحلّ أحدها محلّ شريط الإحصاءات (#172) — القائمة من

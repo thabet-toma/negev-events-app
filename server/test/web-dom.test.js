@@ -16070,12 +16070,13 @@ async function run() {
       return base(url, options);
     };
 
-    // خطّ أساس: ما يطلبه الإقلاع (الأنواع والبلدات والتغذية…) قبل أي حاسبة. لا
-    // يُحسب على الحاسبات شيء، ويُقاس ما بعدها بعده وحده.
-    await delay(60);
-    const baseline = requests.length;
-
+    // خطّ أساس: ما يطلبه الإقلاع **وما يطلبه قسم «مواقيت الصلاة» عند فتح
+    // الوجهة** (M3-C: الجلب عند كل فتح). الحاسبات الخمس لا تُحسب عليها هذه
+    // الطلبات؛ يُقاس ما بعد استقرار فتح الوجهة وحده.
     dom.window.openOurServices();
+    await waitFor(() => requests.some(url => String(url).split('?')[0] === '/api/prayer-times'));
+    await delay(30);
+    const baseline = requests.length;
 
     const budgetBox = document.getElementById('calcBudgetRows');
     fillCalcRow(budgetBox.querySelector('.calc-row'), '.calc-budget-name', '.calc-budget-amount', 'قاعة', '1000');
@@ -16345,6 +16346,513 @@ async function run() {
     document.getElementById('pricesTabFx').click();
     await delay(80);
     assert.strictEqual(pricesRequests.length, 1, 'the second tool reuses the one fetched snapshot');
+  });
+
+  // -------------------------------------------------------------------------
+  // «مواقيت الصلاة» (M3-C) — قسمٌ في «خدماتنا» بعد أداتَي الأسعار، من
+  // /api/prayer-times. الردّ مزيّف بتاريخ ثابت كي لا يعتمد الاختبار على اليوم،
+  // وكل اسم ووقت فيه من الخادم: app.js لا يحسب وقت صلاة ولا يكتبه.
+  // -------------------------------------------------------------------------
+  const PRAYER_TIMES_PAYLOAD = {
+    success: true,
+    place: { name: 'رهط', kind: 'town' },
+    date: '2026-11-17',
+    timezone: 'Asia/Jerusalem',
+    method: { key: 'egyptian', name: 'الهيئة المصرية العامة للمساحة' },
+    times: [
+      { key: 'fajr', name: 'الفجر', time: '04:52' },
+      { key: 'sunrise', name: 'الشروق', time: '06:15' },
+      { key: 'dhuhr', name: 'الظهر', time: '11:32' },
+      { key: 'asr', name: 'العصر', time: '14:30' },
+      { key: 'maghrib', name: 'المغرب', time: '16:49' },
+      { key: 'isha', name: 'العشاء', time: '18:07' }
+    ],
+    next: { key: 'asr', name: 'العصر', time: '14:30', date: '2026-11-17', minutes_until: 47 }
+  };
+
+  /** نسخة قابلة للتعديل من ردّ المواقيت — `next: null` يُمرَّر صراحةً. */
+  function buildPrayerPayload(overrides = {}) {
+    return {
+      ...PRAYER_TIMES_PAYLOAD,
+      ...overrides,
+      place: overrides.place || { ...PRAYER_TIMES_PAYLOAD.place },
+      method: overrides.method || { ...PRAYER_TIMES_PAYLOAD.method },
+      times: (overrides.times || PRAYER_TIMES_PAYLOAD.times).map(row => ({ ...row })),
+      next: Object.prototype.hasOwnProperty.call(overrides, 'next')
+        ? overrides.next
+        : { ...PRAYER_TIMES_PAYLOAD.next }
+    };
+  }
+
+  await test('«مواقيت الصلاة» — ستة صفوف من /api/prayer-times والقادمة وحدها مميّزة', async () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    const prayerRequests = [];
+    const base = buildFetchStub();
+    dom.window.fetch = async (url, options = {}) => {
+      if (String(url).split('?')[0] === '/api/prayer-times') {
+        prayerRequests.push({ url: String(url), headers: options.headers || {} });
+        return jsonResponse(PRAYER_TIMES_PAYLOAD);
+      }
+      return base(url, options);
+    };
+
+    dom.window.openOurServices();
+    await waitFor(() => document.querySelectorAll('#prayerTimesList .prayer-row').length === 6);
+
+    const section = document.getElementById('prayerTimesSection');
+    assert.ok(section, 'the prayer section joins the destination in-app, not a new page');
+    assert.strictEqual(section.previousElementSibling, document.getElementById('pricesToolsSection'),
+      'it comes right after the gold/currency tools');
+    assert.strictEqual(document.getElementById('prayerTimesPlaceTitle').textContent,
+      'مواقيت الصلاة — رهط');
+    assert.strictEqual(document.getElementById('prayerTimesDate').textContent,
+      'اليوم ١٧ نوفمبر ٢٠٢٦', 'the date line is today, in Arabic');
+
+    const rows = Array.from(document.querySelectorAll('#prayerTimesList .prayer-row'));
+    assert.deepStrictEqual(rows.map(row => row.dataset.key),
+      ['fajr', 'sunrise', 'dhuhr', 'asr', 'maghrib', 'isha'],
+      'the six rows keep the server order');
+    assert.deepStrictEqual(rows.map(row => row.querySelector('.prayer-row-name').textContent),
+      ['الفجر', 'الشروق', 'الظهر', 'العصر', 'المغرب', 'العشاء'],
+      'the names are the server names');
+    assert.deepStrictEqual(rows.map(row => row.querySelector('.prayer-row-time').textContent),
+      ['04:52', '06:15', '11:32', '14:30', '16:49', '18:07'],
+      'the times are the server times');
+    assert.deepStrictEqual(rows.filter(row => row.classList.contains('is-next')).map(row => row.dataset.key),
+      ['asr'], 'only the next prayer is highlighted');
+
+    assert.strictEqual(document.getElementById('prayerNextLine').textContent,
+      'الصلاة القادمة: العصر بعد ٤٧ دقيقة');
+    assert.strictEqual(document.getElementById('prayerNextLine').hidden, false);
+    assert.strictEqual(document.getElementById('prayerTimesFootnote').textContent,
+      'حسب طريقة الهيئة المصرية العامة للمساحة — قد تختلف دقيقة أو دقيقتين عن تقويم مسجدك');
+    assert.strictEqual(document.getElementById('prayerTimesBody').hidden, false);
+    assert.strictEqual(document.getElementById('prayerTimesStatus').textContent, '');
+    assert.strictEqual(document.getElementById('prayerRetry').hidden, true);
+    assert.strictEqual(
+      document.querySelector('#prayerTimesSection .calc-section-lead').textContent,
+      'مواقيت اليوم حسب بلدتك أو محافظتك — الأوقات من الخادم.',
+      'the lead is user-facing Arabic, not implementation notes about storage'
+    );
+
+    assert.strictEqual(prayerRequests.length, 1, 'opening the destination fetches once');
+    assert.strictEqual(prayerRequests[0].headers.Authorization, undefined,
+      'the prayer-times endpoint is public — no site token rides along');
+    const select = document.getElementById('prayerTownSelect');
+    assert.strictEqual(select.options[0].value, '', 'the first option is «حسب محافظتي»');
+    assert.strictEqual(select.options[0].textContent, 'حسب محافظتي');
+    assert.ok(select.options.length > 1, 'the active towns come from GET /api/towns');
+  });
+
+  await test('مهلة الصلاة القادمة — صيغة عربية للدقائق والساعات', async () => {
+    const dom = buildEnv();
+    const relative = dom.window.prayerRelativeText;
+    assert.strictEqual(typeof relative, 'function');
+    assert.strictEqual(relative(0), 'أقل من دقيقة');
+    assert.strictEqual(relative(1), 'دقيقة');
+    assert.strictEqual(relative(2), 'دقيقتان');
+    assert.strictEqual(relative(3), '٣ دقائق');
+    assert.strictEqual(relative(11), '١١ دقيقة');
+    assert.strictEqual(relative(47), '٤٧ دقيقة');
+    assert.strictEqual(relative(60), 'ساعة');
+    assert.strictEqual(relative(61), 'ساعة ودقيقة');
+    assert.strictEqual(relative(72), 'ساعة و١٢ دقيقة');
+    assert.strictEqual(relative(120), 'ساعتان');
+    assert.strictEqual(relative(180), '٣ ساعات');
+    assert.strictEqual(relative(720), '١٢ ساعة');
+  });
+
+  await test('تبديل البلدة يطلب ?town= مرمّزة ويحفظ negev_prayer_town', async () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    const calls = [];
+    const base = buildFetchStub();
+    dom.window.fetch = async (url, options = {}) => {
+      if (String(url).split('?')[0] === '/api/prayer-times') {
+        calls.push(String(url));
+        return jsonResponse(PRAYER_TIMES_PAYLOAD);
+      }
+      return base(url, options);
+    };
+
+    dom.window.openOurServices();
+    await waitFor(() => calls.length === 1);
+    assert.strictEqual(new URL(calls[0], 'http://localhost').searchParams.get('town'), null,
+      '«حسب محافظتي» sends no town parameter');
+
+    const select = document.getElementById('prayerTownSelect');
+    select.value = 'رهط';
+    select.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+
+    await waitFor(() => calls.length === 2);
+    assert.ok(calls[1].includes('town=%D8%B1%D9%87%D8%B7'),
+      'the town rides the query string, percent-encoded');
+    assert.strictEqual(dom.window.localStorage.getItem('negev_prayer_town'), 'رهط',
+      'the choice is persisted');
+
+    select.value = '';
+    select.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    await waitFor(() => calls.length === 3);
+    assert.strictEqual(new URL(calls[2], 'http://localhost').searchParams.get('town'), null,
+      'going back to «حسب محافظتي» drops the parameter');
+    assert.strictEqual(dom.window.localStorage.getItem('negev_prayer_town'), '',
+      'and persists the empty choice');
+  });
+
+  await test('البلدة المحفوظة تُقرأ عند فتح «خدماتنا» وتُرسَل في الطلب الأول', async () => {
+    const dom = buildEnv();
+    dom.window.localStorage.setItem('negev_prayer_town', 'رهط');
+
+    const calls = [];
+    const base = buildFetchStub();
+    dom.window.fetch = async (url, options = {}) => {
+      if (String(url).split('?')[0] === '/api/prayer-times') {
+        calls.push(String(url));
+        return jsonResponse(PRAYER_TIMES_PAYLOAD);
+      }
+      return base(url, options);
+    };
+
+    dom.window.openOurServices();
+    await waitFor(() => calls.length === 1);
+    assert.strictEqual(new URL(calls[0], 'http://localhost').searchParams.get('town'), 'رهط');
+    assert.strictEqual(dom.window.document.getElementById('prayerTownSelect').value, 'رهط');
+  });
+
+  await test('تعذّر تحميل المواقيت — رسالة عربية وزرّ محاولة ولا أوقات قديمة', async () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    let attempts = 0;
+    const base = buildFetchStub();
+    dom.window.fetch = async (url, options = {}) => {
+      if (String(url).split('?')[0] === '/api/prayer-times') {
+        attempts += 1;
+        return attempts === 1
+          ? jsonResponse({ success: false }, { status: 503 })
+          : jsonResponse(PRAYER_TIMES_PAYLOAD);
+      }
+      return base(url, options);
+    };
+
+    dom.window.openOurServices();
+    await waitFor(() => document.getElementById('prayerTimesStatus').textContent.includes('تعذّر تحميل مواقيت الصلاة'));
+
+    assert.strictEqual(document.getElementById('prayerTimesBody').hidden, true,
+      'no times are shown on a failed request');
+    assert.strictEqual(document.querySelectorAll('#prayerTimesList .prayer-row').length, 0,
+      'and no stale rows survive');
+    assert.strictEqual(document.getElementById('prayerRetry').hidden, false);
+    assert.strictEqual(document.getElementById('prayerTimesStatus').classList.contains('is-error'), true);
+
+    document.getElementById('prayerRetry').click();
+    await waitFor(() => document.querySelectorAll('#prayerTimesList .prayer-row').length === 6);
+    assert.strictEqual(document.getElementById('prayerTimesStatus').textContent, '');
+    assert.strictEqual(document.getElementById('prayerRetry').hidden, true);
+  });
+
+  await test('ردّ 400 يعرض رسالة الخادم العربية كما هي', async () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    const base = buildFetchStub();
+    dom.window.fetch = async (url, options = {}) => (
+      String(url).split('?')[0] === '/api/prayer-times'
+        ? jsonResponse({ success: false, message: 'لا توجد بلدة بهذا الاسم' }, { status: 400 })
+        : base(url, options)
+    );
+
+    dom.window.openOurServices();
+    await waitFor(() => document.getElementById('prayerTimesStatus').textContent.includes('لا توجد بلدة بهذا الاسم'));
+    assert.strictEqual(document.getElementById('prayerTimesStatus').textContent, 'لا توجد بلدة بهذا الاسم',
+      'the server message is shown verbatim');
+    assert.strictEqual(document.getElementById('prayerTimesBody').hidden, true);
+    assert.strictEqual(document.getElementById('prayerRetry').hidden, false);
+  });
+
+  await test('فتح «خدماتنا» مرة أخرى يعيد جلب المواقيت ولا يكرّر القسم', async () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    const calls = [];
+    const base = buildFetchStub();
+    dom.window.fetch = async (url, options = {}) => {
+      if (String(url).split('?')[0] === '/api/prayer-times') calls.push(String(url));
+      return base(url, options);
+    };
+
+    dom.window.openOurServices();
+    await waitFor(() => calls.length === 1);
+    dom.window.openOurServices();
+    await waitFor(() => calls.length === 2);
+    assert.strictEqual(document.querySelectorAll('#prayerTimesSection').length, 1,
+      'the section is injected once, and refetched on every open');
+  });
+
+  await test('المواقيت الصالحة وحدها تُقبل: ستة مفاتيح وأسماء وأوقات وبيانات مكان متماسكة', () => {
+    const dom = buildEnv();
+    const usable = dom.window.prayerTimesPayloadIsUsable;
+    assert.strictEqual(typeof usable, 'function');
+    assert.strictEqual(usable(PRAYER_TIMES_PAYLOAD), true, 'the contract-shaped payload is usable');
+
+    const withoutIsha = buildPrayerPayload({
+      times: PRAYER_TIMES_PAYLOAD.times.filter(row => row.key !== 'isha')
+    });
+    const duplicateKey = buildPrayerPayload({
+      times: PRAYER_TIMES_PAYLOAD.times.map(row => (
+        row.key === 'isha' ? { ...row, key: 'maghrib' } : row
+      ))
+    });
+    const badTime = buildPrayerPayload({
+      times: PRAYER_TIMES_PAYLOAD.times.map(row => (
+        row.key === 'asr' ? { ...row, time: '14:3' } : row
+      ))
+    });
+    const blankName = buildPrayerPayload({
+      times: PRAYER_TIMES_PAYLOAD.times.map(row => (
+        row.key === 'fajr' ? { ...row, name: ' ' } : row
+      ))
+    });
+    const invalidDay = buildPrayerPayload({ date: '2026-02-30' });
+    const blankMethod = buildPrayerPayload({ method: { key: 'egyptian', name: '' } });
+    const blankTimezone = buildPrayerPayload({ timezone: '' });
+    const unknownPlaceKind = buildPrayerPayload({ place: { name: 'رهط', kind: 'village' } });
+
+    for (const [label, payload] of [
+      ['a missing row', withoutIsha],
+      ['a duplicated key', duplicateKey],
+      ['an invalid HH:mm', badTime],
+      ['a blank prayer name', blankName],
+      ['an impossible date', invalidDay],
+      ['a missing method name', blankMethod],
+      ['a missing timezone', blankTimezone],
+      ['an unknown place kind', unknownPlaceKind]
+    ]) {
+      assert.strictEqual(usable(payload), false, `${label} is rejected, never rendered as a partial card`);
+    }
+  });
+
+  await test('ردّ ناقص أو بوقت غير صالح يُعامَل كخطأ — لا بطاقة جزئية ولا أوقات قديمة', async () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    let calls = 0;
+    let release = null;
+    const base = buildFetchStub();
+    dom.window.fetch = (url, options = {}) => {
+      if (String(url).split('?')[0] === '/api/prayer-times') {
+        calls += 1;
+        if (calls === 1) return Promise.resolve(jsonResponse(PRAYER_TIMES_PAYLOAD));
+        return new Promise(resolve => {
+          release = () => resolve(jsonResponse(buildPrayerPayload({
+            times: [
+              PRAYER_TIMES_PAYLOAD.times[0],
+              PRAYER_TIMES_PAYLOAD.times[1],
+              PRAYER_TIMES_PAYLOAD.times[2],
+              { ...PRAYER_TIMES_PAYLOAD.times[3], time: '14:3' },
+              PRAYER_TIMES_PAYLOAD.times[4]
+            ]
+          })));
+        });
+      }
+      return base(url, options);
+    };
+
+    dom.window.openOurServices();
+    await waitFor(() => document.querySelectorAll('#prayerTimesList .prayer-row').length === 6);
+
+    const select = document.getElementById('prayerTownSelect');
+    select.value = 'حورة';
+    select.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    await waitFor(() => calls === 2);
+
+    assert.strictEqual(document.getElementById('prayerTimesStatus').textContent, 'جارٍ تحميل مواقيت الصلاة…',
+      'the old day is gone while the new town loads');
+    assert.strictEqual(document.getElementById('prayerTimesBody').hidden, true);
+    assert.strictEqual(document.querySelectorAll('#prayerTimesList .prayer-row').length, 0,
+      'the previous town rows are cleared immediately');
+    assert.strictEqual(document.getElementById('prayerTimesPlaceTitle').textContent, '');
+    assert.ok(release, 'the second request was held open');
+
+    release();
+    await waitFor(() => document.getElementById('prayerTimesStatus').textContent.includes('تعذّر تحميل مواقيت الصلاة'));
+    assert.strictEqual(document.getElementById('prayerTimesBody').hidden, true,
+      'a malformed payload never renders a partial card');
+    assert.strictEqual(document.querySelectorAll('#prayerTimesList .prayer-row').length, 0);
+    assert.strictEqual(document.getElementById('prayerRetry').hidden, false);
+  });
+
+  await test('تبديل البلدة السريع: ردّ الطلب القديم لا يكتب فوق الأحدث', async () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    const pending = [];
+    const base = buildFetchStub();
+    dom.window.fetch = (url, options = {}) => {
+      if (String(url).split('?')[0] === '/api/prayer-times') {
+        return new Promise(resolve => {
+          pending.push({ url: String(url), resolve });
+        });
+      }
+      return base(url, options);
+    };
+
+    dom.window.openOurServices();
+    await waitFor(() => pending.length === 1);
+    pending[0].resolve(jsonResponse(PRAYER_TIMES_PAYLOAD));
+    await waitFor(() => document.querySelectorAll('#prayerTimesList .prayer-row').length === 6);
+
+    const select = document.getElementById('prayerTownSelect');
+    select.value = 'رهط';
+    select.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    await waitFor(() => pending.length === 2);
+
+    select.value = 'حورة';
+    select.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    await waitFor(() => pending.length === 3);
+    assert.ok(new URL(pending[2].url, 'http://localhost').searchParams.get('town') === 'حورة');
+
+    pending[2].resolve(jsonResponse(buildPrayerPayload({ place: { name: 'حورة', kind: 'town' } })));
+    await waitFor(() => document.getElementById('prayerTimesPlaceTitle').textContent === 'مواقيت الصلاة — حورة');
+
+    pending[1].resolve(jsonResponse(PRAYER_TIMES_PAYLOAD));
+    await delay(30);
+    assert.strictEqual(document.getElementById('prayerTimesPlaceTitle').textContent, 'مواقيت الصلاة — حورة',
+      'the stale رهط reply is ignored');
+    assert.strictEqual(document.querySelectorAll('#prayerTimesList .prayer-row').length, 6);
+    assert.strictEqual(document.getElementById('prayerTimesStatus').textContent, '');
+  });
+
+  await test('next=null: الصفوف تُعرض بلا صفّ مميّز وبلا سطر صلاة قادمة', async () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    const base = buildFetchStub();
+    dom.window.fetch = async (url, options = {}) => (
+      String(url).split('?')[0] === '/api/prayer-times'
+        ? jsonResponse(buildPrayerPayload({ next: null }))
+        : base(url, options)
+    );
+
+    dom.window.openOurServices();
+    await waitFor(() => document.querySelectorAll('#prayerTimesList .prayer-row').length === 6);
+    assert.strictEqual(document.querySelectorAll('#prayerTimesList .prayer-row.is-next').length, 0);
+    assert.strictEqual(document.getElementById('prayerNextLine').hidden, true,
+      'no next prayer means no next line');
+    assert.strictEqual(document.getElementById('prayerNextLine').textContent, '');
+    assert.strictEqual(document.getElementById('prayerTimesBody').hidden, false,
+      'the six rows are still a complete card');
+  });
+
+  await test('فجر الغد: السطر يقول «فجر الغد» ولا يُضاء صفّ فجر اليوم', async () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    const base = buildFetchStub();
+    dom.window.fetch = async (url, options = {}) => (
+      String(url).split('?')[0] === '/api/prayer-times'
+        ? jsonResponse(buildPrayerPayload({
+            next: { key: 'fajr', name: 'الفجر', time: '04:52', date: '2026-11-18', minutes_until: 300 }
+          }))
+        : base(url, options)
+    );
+
+    dom.window.openOurServices();
+    await waitFor(() => document.querySelectorAll('#prayerTimesList .prayer-row').length === 6);
+
+    assert.strictEqual(document.getElementById('prayerNextLine').hidden, false);
+    assert.strictEqual(document.getElementById('prayerNextLine').textContent,
+      'الصلاة القادمة: فجر الغد بعد ٥ ساعات');
+    assert.deepStrictEqual(
+      Array.from(document.querySelectorAll('#prayerTimesList .prayer-row.is-next')).map(row => row.dataset.key),
+      [],
+      'tomorrow fajr does not highlight today fajr'
+    );
+    assert.ok(document.querySelector('#prayerTimesList .prayer-row[data-key="fajr"]'),
+      'today fajr is still rendered as a plain row');
+  });
+
+  await test('فشل كتالوج البلدات يحفظ البلدة المحفوظة، و«إعادة المحاولة» تستعيد الكتالوج', async () => {
+    const base = buildFetchStub();
+    let catalogFails = true;
+    const prayerRequests = [];
+
+    const dom = buildEnv({
+      onBeforeEval(window) {
+        window.localStorage.setItem('negev_prayer_town', 'بلدة جديدة');
+        window.fetch = async (url, options = {}) => {
+          const requestPath = String(url).split('?')[0];
+          if (requestPath === '/api/towns') {
+            return catalogFails
+              ? jsonResponse({ success: false }, { status: 503 })
+              : jsonResponse({
+                  success: true,
+                  towns: [...TOWNS, 'بلدة جديدة'],
+                  town_coordinates: TOWN_COORDINATES,
+                  villages: []
+                });
+          }
+          if (requestPath === '/api/prayer-times') {
+            prayerRequests.push(String(url));
+            return prayerRequests.length === 1
+              ? jsonResponse({ success: false }, { status: 503 })
+              : jsonResponse(buildPrayerPayload({ place: { name: 'بلدة جديدة', kind: 'town' } }));
+          }
+          return base(url, options);
+        };
+      }
+    });
+    const { document } = dom.window;
+
+    dom.window.openOurServices();
+    await waitFor(() => document.getElementById('prayerTimesStatus').textContent.includes('تعذّر تحميل مواقيت الصلاة'));
+
+    const select = document.getElementById('prayerTownSelect');
+    assert.strictEqual(select.value, 'بلدة جديدة',
+      'a failed catalog never discards the saved town just because it is not in a seed');
+    assert.ok(Array.from(select.options).some(option => option.value === 'بلدة جديدة'),
+      'the saved town stays selectable until an authoritative catalog arrives');
+    assert.strictEqual(new URL(prayerRequests[0], 'http://localhost').searchParams.get('town'), 'بلدة جديدة');
+    assert.strictEqual(dom.window.localStorage.getItem('negev_prayer_town'), 'بلدة جديدة');
+
+    catalogFails = false;
+    document.getElementById('prayerRetry').click();
+    await waitFor(() => prayerRequests.length === 2
+      && Array.from(select.options).some(option => option.value === 'رهط'));
+
+    assert.ok(Array.from(select.options).some(option => option.value === 'رهط'),
+      'the retry recovers the catalog instead of leaving the picker on «حسب محافظتي» + the saved name');
+    assert.strictEqual(select.value, 'بلدة جديدة',
+      'the recovered catalog keeps a saved town it now lists as a new option');
+    assert.ok(Array.from(select.options).some(option => option.value === 'بلدة جديدة'),
+      'the fetched town joins the picker options');
+    assert.strictEqual(new URL(prayerRequests[1], 'http://localhost').searchParams.get('town'), 'بلدة جديدة');
+    assert.strictEqual(dom.window.localStorage.getItem('negev_prayer_town'), 'بلدة جديدة');
+  });
+
+  await test('بلدة محفوظة غابت عن الكتالوج المؤكَّد تعود «حسب محافظتي»', async () => {
+    const dom = buildEnv();
+    dom.window.localStorage.setItem('negev_prayer_town', 'بلدة جديدة');
+
+    const prayerRequests = [];
+    const base = buildFetchStub();
+    dom.window.fetch = async (url, options = {}) => {
+      if (String(url).split('?')[0] === '/api/prayer-times') {
+        prayerRequests.push(String(url));
+        return jsonResponse(buildPrayerPayload());
+      }
+      return base(url, options);
+    };
+
+    dom.window.openOurServices();
+    await waitFor(() => prayerRequests.length === 1);
+    assert.strictEqual(new URL(prayerRequests[0], 'http://localhost').searchParams.get('town'), null,
+      'an authoritative catalog that no longer lists the town resets the request to «حسب محافظتي»');
+    assert.strictEqual(dom.window.document.getElementById('prayerTownSelect').value, '');
+    assert.strictEqual(dom.window.localStorage.getItem('negev_prayer_town'), '');
   });
 
   await test('«آخر الأخبار» renders /api/news cards (breaking, category, relative time), then closes with Escape', async () => {

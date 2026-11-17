@@ -137,6 +137,24 @@ const PRICES_UNAVAILABLE_TEXT = 'تعذّر جلب أسعار الذهب وال�
 let pricesSnapshot = null;
 let pricesLoading = null;
 
+// «مواقيت الصلاة» (M3-C) — قسمٌ تحت أداتَي الأسعار في «خدماتنا». الأوقات تأتي
+// من `GET /api/prayer-times` كما يحسبها الخادم: هذا الملف لا يحسب وقتاً ولا
+// يكتب وقتاً افتراضياً. `prayerTimesSnapshot` آخر ردّ ناجح أو `null`؛
+// و`prayerTimesLoading`/`prayerTimesError` حالة السطر الواحد فوق القائمة.
+// `prayerTimesRequestId` يمنع ردّ طلبٍ قديم من الكتابة فوق طلب أحدث (تبديل البلدة).
+const PRAYER_TIMES_TOWN_KEY = 'negev_prayer_town';
+const PRAYER_TIMES_ERROR_TEXT = 'تعذّر تحميل مواقيت الصلاة — حاول مرة أخرى';
+const PRAYER_TIMES_LOADING_TEXT = 'جارٍ تحميل مواقيت الصلاة…';
+// مفاتيح الأوقات الستة الوحيدة التي يقبلها العميل — بترتيب الخادم المعروض.
+// ردّ ناقص أو مكرّر أو بوقت غير `HH:mm` يُرفض كخطأ، ولا تُكمَّل صفوفه بالعميل.
+const PRAYER_TIMES_EXPECTED_KEYS = ['fajr', 'sunrise', 'dhuhr', 'asr', 'maghrib', 'isha'];
+const PRAYER_TIME_PATTERN = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+let prayerTimesSnapshot = null;
+let prayerTimesLoading = false;
+let prayerTimesError = '';
+let prayerTimesRequestId = 0;
+let prayerTimesInitPending = false;
+
 
 // Read surface — tabs, pagination, archive, notifications, review queue (#20 step 10)
 let currentPage = 1;
@@ -6291,8 +6309,10 @@ function switchTab(tabId) {
     // التحقين هنا لا في `openOurServices` وحدها: الرابط العميق `?tab=ourServices`
     // يصل `switchTab` مباشرةً (`initUrlNavigation`)، فلو بقي في الدالة الأخرى
     // لفتح رابطُ المشاركة التبويبَ بلا أدوات. والتحقين لا يجلب شيئاً — الجلب
-    // عند أول فتح لأداة وحدها.
+    // عند أول فتح لأداة وحدها. وقسم «مواقيت الصلاة» (M3-C) يُحقن هنا أيضاً،
+    // ويُعيد جلب المواقيت في كل زيارة للوجهة.
     initPricesTools();
+    initPrayerTimesTool();
   } else if (tabId === 'tabServices') {
     if (!servicesInitialized) { servicesInitialized = true; initServicesTab(); }
   }
@@ -7215,6 +7235,407 @@ function convertCurrency() {
     result,
     `${calcMoney(amount.cents)} = ${pricesNumber(foreignValue, 2)} ${name} بسعر ${pricesNumber(rate, 4)} ₪ للوحدة الواحدة.`
   );
+}
+
+// ---------------------------------------------------------------------------
+// «مواقيت الصلاة» (M3-C) — قسمٌ في «خدماتنا» بعد أداتَي الأسعار.
+//
+// **العميل لا يحسب وقت صلاة ولا يخترع وقتاً**: `GET /api/prayer-times` يعيد
+// الأسماء والأوقات والطريقة والبلدة كما حسبها الخادم، وهذا الملف يعرضها فقط.
+// و«الصلاة القادمة» وسطرها يُبنيان من `next.minutes_until` القادم من الخادم.
+// القسم يُحقن من هنا على نمط أدوات الأسعار، فلا يتغيّر وسم التبويب في
+// `index.html`، والجلب يقع في كل فتح للوجهة وفي كل تبديل بلدة وفي المحاولة.
+// ---------------------------------------------------------------------------
+
+/**
+ * نصّ المهلة النسبية من دقائق الخادم: «٤٧ دقيقة»، «ساعة و١٢ دقيقة»،
+ * «أقل من دقيقة» — بصيغة العدد العربية نفسها المستعملة في الحاسبات.
+ */
+function prayerRelativeText(minutesUntil) {
+  const total = Math.round(Number(minutesUntil));
+  if (!Number.isFinite(total) || total < 1) return 'أقل من دقيقة';
+  if (total < 60) return prayerMinutesText(total);
+
+  const hours = Math.floor(total / 60);
+  const minutes = total % 60;
+  const hourText = prayerHoursText(hours);
+  return minutes ? `${hourText} و${prayerMinutesText(minutes)}` : hourText;
+}
+
+/** صيغة الدقائق وحدها: دقيقة، دقيقتان، ٣ دقائق، ١١ دقيقة. */
+function prayerMinutesText(count) {
+  if (count === 1) return 'دقيقة';
+  if (count === 2) return 'دقيقتان';
+  if (count >= 3 && count <= 10) return `${calcDigits(count)} دقائق`;
+  return `${calcDigits(count)} دقيقة`;
+}
+
+/** صيغة الساعات وحدها: ساعة، ساعتان، ٣ ساعات، ١١ ساعة. */
+function prayerHoursText(count) {
+  if (count === 1) return 'ساعة';
+  if (count === 2) return 'ساعتان';
+  if (count >= 3 && count <= 10) return `${calcDigits(count)} ساعات`;
+  return `${calcDigits(count)} ساعة`;
+}
+
+/** تاريخ `YYYY-MM-DD` صالح فعلاً — لا ٣٠ فبراير ولا شهراً ١٣. */
+function prayerDayIsValid(day) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(day || ''));
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  const date = Number(match[3]);
+  const parsed = new Date(Date.UTC(year, month, date));
+  return parsed.getUTCFullYear() === year
+    && parsed.getUTCMonth() === month
+    && parsed.getUTCDate() === date;
+}
+
+/** تاريخ المواقيت `YYYY-MM-DD` كما يعرضه القسم — أو '' لغير المقروء. */
+function prayerDateText(day) {
+  if (!prayerDayIsValid(day)) return '';
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(day));
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return calcGregorianDate(date);
+}
+
+/**
+ * هل الردّ يوماً كاملاً قابلاً للعرض؟ ستة مفاتيح فريدة من المفاتيح المتوقَّعة،
+ * لكلٍّ اسم عربي من الخادم ووقت `HH:mm`، مع مكان وتاريخ ومنطقة زمنية وطريقة
+ * حساب — فلا تُرسم بطاقة فيها صفّ فارغ أو حاشية بلا طريقة. هذا تحقّق حدّي
+ * واحد، لا إطار تحقّق عام: الردّ غير الصالح يعود إلى رسالة الخطأ وزرّ المحاولة.
+ */
+function prayerTimesPayloadIsUsable(data) {
+  if (!data || typeof data !== 'object' || data.success !== true) return false;
+
+  const place = data.place;
+  if (!place || typeof place !== 'object') return false;
+  const placeName = typeof place.name === 'string' ? place.name.trim() : '';
+  if (!placeName) return false;
+  if (place.kind !== 'town' && place.kind !== 'region') return false;
+
+  if (!prayerDayIsValid(data.date)) return false;
+  if (typeof data.timezone !== 'string' || !data.timezone.trim()) return false;
+
+  const method = data.method;
+  if (!method || typeof method !== 'object') return false;
+  if (typeof method.key !== 'string' || !method.key.trim()) return false;
+  if (typeof method.name !== 'string' || !method.name.trim()) return false;
+
+  if (!Array.isArray(data.times) || data.times.length !== PRAYER_TIMES_EXPECTED_KEYS.length) {
+    return false;
+  }
+
+  const seen = new Set();
+  for (const row of data.times) {
+    if (!row || typeof row !== 'object') return false;
+    const key = typeof row.key === 'string' ? row.key.trim() : '';
+    const name = typeof row.name === 'string' ? row.name.trim() : '';
+    const time = typeof row.time === 'string' ? row.time.trim() : '';
+    if (!PRAYER_TIMES_EXPECTED_KEYS.includes(key) || seen.has(key)) return false;
+    if (!name || !PRAYER_TIME_PATTERN.test(time)) return false;
+    seen.add(key);
+  }
+  return seen.size === PRAYER_TIMES_EXPECTED_KEYS.length;
+}
+
+/** اسم الصلاة القادمة: «فجر الغد» حين يكون موعدها غداً، وإلا اسمها من الخادم. */
+function prayerNextLabel(next, date) {
+  const name = next && next.name ? String(next.name) : '';
+  const nextMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(next && next.date || ''));
+  const baseMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(date || ''));
+  if (!nextMatch || !baseMatch) return name;
+
+  const nextDay = Date.UTC(Number(nextMatch[1]), Number(nextMatch[2]) - 1, Number(nextMatch[3]));
+  const baseDay = Date.UTC(Number(baseMatch[1]), Number(baseMatch[2]) - 1, Number(baseMatch[3]));
+  return nextDay - baseDay === 86400000 ? 'فجر الغد' : name;
+}
+
+/** البلدة المحفوظة — '' تعني «حسب محافظتي» (بلا `town`). */
+function readPrayerTown() {
+  try {
+    const saved = localStorage.getItem(PRAYER_TIMES_TOWN_KEY);
+    return saved ? String(saved).trim() : '';
+  } catch (e) {
+    return '';
+  }
+}
+
+/** يحفظ اختيار البلدة؛ القيمة الفارغة تعني «حسب محافظتي» صراحةً. */
+function savePrayerTown(town) {
+  try {
+    localStorage.setItem(PRAYER_TIMES_TOWN_KEY, town ? String(town).trim() : '');
+  } catch (e) {
+    // التخزين معطَّل أو ممتلئ — الاختيار يبقى صالحاً لهذه الزيارة.
+  }
+}
+
+/**
+ * يحقن قسم المواقيت بعد أدوات الأسعار — مرّة واحدة، وفي كل زيارة يعيد الجلب.
+ * البلدات من `townsList` (GET /api/towns) لا من قائمة مثبَّتة؛ وحتى يصل الكتالوج
+ * المؤكَّد تبقى «حسب محافظتي» وبلدة المستخدم المحفوظة إن وُجدت، ثم تُملأ القائمة.
+ */
+async function initPrayerTimesTool() {
+  const page = document.getElementById('tabOurServices');
+  if (!page) return;
+
+  injectPrayerTimesSection(page);
+  fillPrayerTownOptions({ authoritative: townsList.length > 0 });
+
+  if (!townsList.length) {
+    if (prayerTimesInitPending) return;
+    prayerTimesInitPending = true;
+    // لا فراغ أثناء انتظار البلدات: السطر يقول إن الجلب جارٍ.
+    prayerTimesSnapshot = null;
+    prayerTimesError = '';
+    prayerTimesLoading = true;
+    renderPrayerTimesState();
+    const loaded = await loadTownCoordinates();
+    prayerTimesInitPending = false;
+    if (!document.getElementById('prayerTimesSection')) return;
+    // الكتالوج المؤكَّد وحده يمسح بلدةً محفوظة لم يعد يذكرها؛ فشل الشبكة أو
+    // ردّ بلا بلدات يُبقيها (وهو معنى `fromServer` في الموبايل نفسه).
+    fillPrayerTownOptions({ authoritative: loaded && townsList.length > 0 });
+  }
+
+  loadPrayerTimes();
+}
+
+/** يبني وسم القسم مرّة واحدة، ويضعه بعد `#pricesToolsSection` مباشرةً. */
+function injectPrayerTimesSection(page) {
+  if (document.getElementById('prayerTimesSection')) return;
+
+  const section = document.createElement('section');
+  section.className = 'calc-section';
+  section.id = 'prayerTimesSection';
+  section.setAttribute('aria-labelledby', 'prayerTimesSectionTitle');
+  section.innerHTML = `
+    <h3 class="calc-section-title" id="prayerTimesSectionTitle">مواقيت الصلاة</h3>
+    <p class="calc-section-lead">مواقيت اليوم حسب بلدتك أو محافظتك — الأوقات من الخادم.</p>
+    <div class="prayer-card">
+      <label class="calc-field prayer-place-field"><span>البلدة</span>
+        <select class="calc-input" id="prayerTownSelect" onchange="onPrayerTownChange()"></select>
+      </label>
+      <p class="calc-status" id="prayerTimesStatus" role="status" aria-live="polite"></p>
+      <button type="button" class="calc-run" id="prayerRetry" onclick="retryPrayerTimes()" hidden>إعادة المحاولة</button>
+      <div id="prayerTimesBody" hidden>
+        <h4 class="prayer-card-title" id="prayerTimesPlaceTitle"></h4>
+        <p class="prayer-date-line" id="prayerTimesDate"></p>
+        <ul class="prayer-times-list" id="prayerTimesList"></ul>
+        <p class="prayer-next-line" id="prayerNextLine" hidden></p>
+        <p class="prayer-footnote" id="prayerTimesFootnote"></p>
+      </div>
+    </div>`;
+
+  const anchor = document.getElementById('pricesToolsSection');
+  if (anchor && anchor.parentNode === page) {
+    anchor.insertAdjacentElement('afterend', section);
+    return;
+  }
+  const calcSection = page.querySelector('.calc-section');
+  if (calcSection && calcSection.parentNode === page) {
+    calcSection.insertAdjacentElement('afterend', section);
+  } else {
+    page.appendChild(section);
+  }
+}
+
+/** يملأ منتقي البلدة: «حسب محافظتي» أولاً ثم بلدات الخادم النشطة. */
+function fillPrayerTownOptions({ authoritative = false } = {}) {
+  const select = document.getElementById('prayerTownSelect');
+  if (!select) return;
+
+  const saved = readPrayerTown();
+  const towns = Array.isArray(townsList) ? townsList : [];
+  const savedKnown = Boolean(saved) && towns.includes(saved);
+
+  const ownOption = document.createElement('option');
+  ownOption.value = '';
+  ownOption.textContent = 'حسب محافظتي';
+  select.textContent = '';
+  select.appendChild(ownOption);
+
+  towns.forEach(town => {
+    const option = document.createElement('option');
+    option.value = String(town);
+    option.textContent = String(town);
+    select.appendChild(option);
+  });
+
+  // قبل وصول الكتالوج المؤكَّد تبقى بلدة المستخدم المحفوظة قابلةً للعرض والطلب.
+  // فشل الشبكة لا يعني أن البلدة عُطّلت، فلا تُمحى من المنتقي ولا من التخزين.
+  if (saved && !savedKnown && !authoritative) {
+    const option = document.createElement('option');
+    option.value = saved;
+    option.textContent = saved;
+    select.appendChild(option);
+  }
+
+  const known = Array.from(select.options).some(option => option.value === saved);
+  select.value = known ? saved : '';
+
+  // بلدة عُطّلت بعد الحفظ: الكتالوج المؤكَّد وحده يمسحها، فلا يُرسَل اسم ميت.
+  if (saved && !savedKnown && authoritative) savePrayerTown('');
+}
+
+/** تغيير البلدة: يحفظ الاختيار ويعيد الجلب فوراً. */
+function onPrayerTownChange() {
+  const select = document.getElementById('prayerTownSelect');
+  savePrayerTown(select ? select.value : '');
+  loadPrayerTimes();
+}
+
+/**
+ * زرّ المحاولة: يعيد الكتالوج إن كان فشل من قبل ثم المواقيت نفسها، فلا تبقى
+ * قائمة البلدات فارغة بعد نجاح الشبكة.
+ */
+async function retryPrayerTimes() {
+  if (!townsList.length) {
+    const loaded = await loadTownCoordinates();
+    fillPrayerTownOptions({ authoritative: loaded && townsList.length > 0 });
+  }
+  loadPrayerTimes();
+}
+
+/**
+ * يجلب المواقيت للبلدة المختارة. كل طلب يمسح النسخة السابقة ويُعلن الجلب،
+ * فلا تظهر أوقات قديمة تحت بلدة جديدة؛ وردّ طلبٍ سبقه طلبٌ أحدث يُهمَل.
+ */
+async function loadPrayerTimes() {
+  const section = document.getElementById('prayerTimesSection');
+  if (!section) return;
+
+  const select = document.getElementById('prayerTownSelect');
+  const town = select ? String(select.value || '').trim() : readPrayerTown();
+  const requestId = ++prayerTimesRequestId;
+
+  prayerTimesSnapshot = null;
+  prayerTimesError = '';
+  prayerTimesLoading = true;
+  clearPrayerTimesData();
+  renderPrayerTimesState();
+
+  const path = town
+    ? `/api/prayer-times?town=${encodeURIComponent(town)}`
+    : '/api/prayer-times';
+
+  try {
+    const res = await apiFetch(path);
+    const data = await res.json().catch(() => null);
+    if (requestId !== prayerTimesRequestId) return;
+
+    if (res.ok && prayerTimesPayloadIsUsable(data)) {
+      prayerTimesSnapshot = data;
+    } else {
+      const serverMessage = res.status === 400 && data && typeof data.message === 'string'
+        ? data.message.trim()
+        : '';
+      prayerTimesError = serverMessage || PRAYER_TIMES_ERROR_TEXT;
+    }
+  } catch (e) {
+    if (requestId !== prayerTimesRequestId) return;
+    prayerTimesError = PRAYER_TIMES_ERROR_TEXT;
+  }
+
+  if (requestId !== prayerTimesRequestId) return;
+  prayerTimesLoading = false;
+  renderPrayerTimesState();
+}
+
+/** حالة السطر الواحد: جلب، أو خطأ عربي مع زرّ المحاولة، أو لا شيء. */
+function renderPrayerTimesState() {
+  const status = document.getElementById('prayerTimesStatus');
+  const retry = document.getElementById('prayerRetry');
+  const body = document.getElementById('prayerTimesBody');
+  const hasData = Boolean(prayerTimesSnapshot);
+
+  if (status) {
+    status.textContent = prayerTimesLoading
+      ? PRAYER_TIMES_LOADING_TEXT
+      : (prayerTimesError || '');
+    status.classList.toggle('is-error', !prayerTimesLoading && Boolean(prayerTimesError));
+  }
+  if (retry) retry.hidden = !(prayerTimesError && !prayerTimesLoading);
+  if (body) body.hidden = !hasData;
+
+  if (hasData) fillPrayerTimesData();
+}
+
+/** يمسح كل ما يعتمد على بيانات سابقة — رسوباً أو وقتاً أو طريقة. */
+function clearPrayerTimesData() {
+  ['prayerTimesPlaceTitle', 'prayerTimesDate', 'prayerNextLine', 'prayerTimesFootnote'].forEach(id => {
+    const element = document.getElementById(id);
+    if (element) element.textContent = '';
+  });
+  const list = document.getElementById('prayerTimesList');
+  if (list) list.textContent = '';
+}
+
+/**
+ * يعرض الردّ كما وصل: العنوان بالبلدة، والتاريخ، وستة صفوف بترتيب الخادم،
+ * وصفّ الصلاة القادمة مميّزاً بالذهبي، وسطرها، وطريقة الحساب في الحاشية.
+ */
+function fillPrayerTimesData() {
+  const data = prayerTimesSnapshot;
+  if (!data) return;
+
+  const placeName = String(data.place.name).trim();
+  const title = document.getElementById('prayerTimesPlaceTitle');
+  if (title) title.textContent = `مواقيت الصلاة — ${placeName}`;
+
+  const dateLine = document.getElementById('prayerTimesDate');
+  const dayText = prayerDateText(data.date);
+  if (dateLine) dateLine.textContent = dayText ? `اليوم ${dayText}` : '';
+
+  const list = document.getElementById('prayerTimesList');
+  if (list) {
+    list.textContent = '';
+    const next = data.next && typeof data.next === 'object' ? data.next : null;
+    const nextIsToday = Boolean(next && String(next.date || '') === String(data.date || ''));
+
+    data.times.forEach(row => {
+      const item = document.createElement('li');
+      item.className = 'prayer-row';
+      item.dataset.key = String(row && row.key || '');
+      if (nextIsToday && item.dataset.key === String(next.key || '')) {
+        item.classList.add('is-next');
+      }
+
+      const name = document.createElement('span');
+      name.className = 'prayer-row-name';
+      name.textContent = String(row && row.name || '');
+
+      const time = document.createElement('span');
+      time.className = 'prayer-row-time';
+      time.textContent = String(row && row.time || '');
+
+      item.append(name, time);
+      list.appendChild(item);
+    });
+  }
+
+  const nextLine = document.getElementById('prayerNextLine');
+  const next = data.next && typeof data.next === 'object' ? data.next : null;
+  if (nextLine) {
+    if (next && next.name) {
+      const label = prayerNextLabel(next, data.date);
+      const minutes = Number(next.minutes_until);
+      nextLine.textContent = Number.isFinite(minutes)
+        ? `الصلاة القادمة: ${label} بعد ${prayerRelativeText(minutes)}`
+        : `الصلاة القادمة: ${label}`;
+      nextLine.hidden = false;
+    } else {
+      nextLine.hidden = true;
+    }
+  }
+
+  const footnote = document.getElementById('prayerTimesFootnote');
+  if (footnote) {
+    const methodName = data.method && data.method.name ? String(data.method.name).trim() : '';
+    footnote.textContent = methodName
+      ? `حسب طريقة ${methodName} — قد تختلف دقيقة أو دقيقتين عن تقويم مسجدك`
+      : '';
+  }
 }
 
 /**

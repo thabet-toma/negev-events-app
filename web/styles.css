@@ -6638,6 +6638,60 @@ body.albums-page-open { overflow: hidden; }
 .calc-status:empty{display:none}
 .calc-status.is-error{color:var(--danger)}
 
+/* «مواقيت الصلاة» (M3-C) — قسمٌ تحت أداتَي الأسعار. البطاقة نفسها لوحة بيضاء
+   بحدّ خفيف، والصفوف ستة بترتيب الخادم، وصفّ الصلاة القادمة وحده بالذهبي
+   (--gold/--gold-wash) كونه التمييز الوحيد المطلوب في القسم. */
+.prayer-card{
+  padding:16px;border-radius:var(--radius-lg);
+  border:1px solid var(--line);background:var(--surface);
+}
+
+.prayer-place-field{margin-bottom:12px}
+
+.prayer-card-title{
+  margin:0;font-size:1rem;font-weight:900;line-height:1.6;
+  color:var(--ink);text-align:start;
+}
+
+.prayer-date-line{
+  margin:4px 0 14px;font-size:.78rem;font-weight:700;line-height:1.7;
+  color:var(--ink-soft);text-align:start;
+}
+.prayer-date-line:empty{display:none}
+
+.prayer-times-list{
+  list-style:none;margin:0;padding:0;
+  display:flex;flex-direction:column;gap:6px;
+}
+
+.prayer-row{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:9px 12px;border-radius:var(--radius-sm);
+  border:1px solid var(--line);background:var(--surface-sunk);
+  color:var(--ink);
+}
+.prayer-row.is-next{
+  border-color:var(--gold);background:var(--gold-wash);color:var(--gold);
+}
+
+.prayer-row-name{font-size:.88rem;font-weight:800;line-height:1.5}
+.prayer-row-time{
+  font-size:.92rem;font-weight:900;line-height:1.5;
+  font-variant-numeric:tabular-nums;color:inherit;
+}
+
+.prayer-next-line{
+  margin:12px 0 0;font-size:.82rem;font-weight:900;line-height:1.8;
+  color:var(--gold);text-align:start;
+}
+.prayer-next-line[hidden]{display:none}
+
+.prayer-footnote{
+  margin:10px 0 0;font-size:.72rem;font-weight:600;line-height:1.7;
+  color:var(--ink-faint);text-align:start;
+}
+.prayer-footnote:empty{display:none}
+
 .calc-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px}
 
 .calc-field{
