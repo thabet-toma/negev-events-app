@@ -8662,6 +8662,11 @@ async function renderAgendaCalendar() {
   const regionId = agendaRegionId;
   const countsIdentity = agendaCalendarIdentity(monthKey, regionId);
 
+  // «القادم هذا الشهر» يعود مع كل فتح أو تبديل شهر أو محافظة — ولا يعود
+  // لاختيار يومٍ آخر وحده (`selectAgendaDate` لا يمرّ من هنا). وقد يُخفى
+  // القسم كاملاً لشهرٍ مضى بلا أي طلب.
+  renderAgendaMonthUpcoming(year, month, regionId);
+
   const monthDisplay = document.getElementById('agendaMonthDisplay');
   if (monthDisplay) {
     monthDisplay.textContent = `${AR_MONTHS_NAMES[month]} ${year}`;
@@ -8692,15 +8697,16 @@ async function renderAgendaCalendar() {
 
 // حجم الصفحة في `GET /api/events` — سقف الخادم نفسه (DEFAULT/MAX في
 // `events.service.js`)، فلا صفحة أكبر منه ولا حدّ أضيق يخفي ما بعده.
-const AGENDA_DAY_PAGE_SIZE = 100;
-// توقّف احتياطي للحلقة: عشرون صفحة = ألفا مناسبة في يوم واحد، ولا يوم بلغه،
-// ووجود السقف يمنع حلقةً لا تنقضي لو أعاد الخادم صفحاتٍ لا تنتهي.
-const AGENDA_DAY_MAX_PAGES = 20;
+const AGENDA_PAGE_SIZE = 100;
+// توقّف احتياطي للحلقة: عشرون صفحة = ألفا مناسبة في نطاق واحد، ولا يوم ولا شهر
+// بلغه، ووجود السقف يمنع حلقةً لا تنقضي لو أعاد الخادم صفحاتٍ لا تنتهي.
+const AGENDA_MAX_PAGES = 20;
 
 /**
- * مناسبات يومٍ بعينه من `GET /api/events` القائم (`date_from` و`date_to`
- * متساويان): الخادم يطابق بالتقاطع على الامتداد نفسه الذي يعدّ به التقويم،
- * فما يعدّه التقويم يومَ D هو ما يعود هنا يومَ D — لا مصفوفة محلية ثانية.
+ * مناسبات نطاقٍ من `GET /api/events` القائم (`date_from` و`date_to`): الخادم
+ * يطابق بالتقاطع على الامتداد نفسه الذي يعدّ به التقويم، فما يعدّه التقويم هو
+ * ما يعود هنا — لا مصفوفة محلية ثانية. يستدعيه اليوم بنطاق يوم واحد وقسمُ
+ * «القادم هذا الشهر» بنطاق شهر، والحلقة واحدة فلا سلوكين للصفحات.
  *
  * **والصفحات كلها تُحمَّل** حتى `pagination.totalPages`: الصفحة الواحدة سقفها
  * مئة، ويومٌ فيه ١٠١ مناسبة كان يعرض ١٠٠ ويعلن رقماً لا يمكن الوصول إلى ما
@@ -8709,13 +8715,13 @@ const AGENDA_DAY_MAX_PAGES = 20;
  * والمحافظة تمرّ كما يراها المستخدم في التقويم: محافظةً محدّدة في ترويسة
  * `X-Region` (‏`region: false` كي لا تعلو عليها المحافظة المحفوظة)، أو
  * `all_regions=1` حين يكون الفلتر «كل المحافظات». وهي وسيط هنا كذلك، فحارس
- * اليوم في المستدعي يُقارن هوية الطلب لا الاختيار اللاحق.
+ * الطلب في المستدعي يُقارن هوية الطلب لا الاختيار اللاحق.
  *
  * تعيد `{ events, total, truncated, failed }`؛ `truncated` تعني أن ما وصل أقل
- * من عدّ الخادم (سقف الصفحات أو صفحة فارغة)، و`failed` يفصل فشل الجلب عن يوم
+ * من عدّ الخادم (سقف الصفحات أو صفحة فارغة)، و`failed` يفصل فشل الجلب عن نطاق
  * فارغ حقيقي كي لا تعلن الواجهة صفراً لا تعرفه.
  */
-async function fetchAgendaDayEvents(dateStr, regionId) {
+async function fetchAgendaRangeEvents(dateFrom, dateTo, regionId) {
   const options = regionId === null
     ? { allRegions: true }
     : { region: false, headers: { 'X-Region': String(regionId) } };
@@ -8725,16 +8731,16 @@ async function fetchAgendaDayEvents(dateStr, regionId) {
   let lastPage = 1;
 
   while (true) {
-    const query = `date_from=${encodeURIComponent(dateStr)}&date_to=${encodeURIComponent(dateStr)}`
-      + `&limit=${AGENDA_DAY_PAGE_SIZE}&page=${page}`;
+    const query = `date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`
+      + `&limit=${AGENDA_PAGE_SIZE}&page=${page}`;
     let data;
     try {
       const res = await apiFetch(`/api/events?${query}`, options);
       data = await res.json();
     } catch (e) {
-      // انقطاع أو ردّ غير متوقَّع: قائمةٌ جزئية تعدّ نصف اليوم أسوأ من لا شيء،
+      // انقطاع أو ردّ غير متوقَّع: قائمةٌ جزئية تعدّ نصف النطاق أسوأ من لا شيء،
       // فترجع القائمة فارغة كما كانت قبل الترقيم.
-      console.error('Agenda day events error:', e);
+      console.error('Agenda range events error:', e);
       return { events: [], total: 0, truncated: false, failed: true };
     }
     if (!data || !data.success || !Array.isArray(data.events)) {
@@ -8748,11 +8754,188 @@ async function fetchAgendaDayEvents(dateStr, regionId) {
 
     if (page >= lastPage) break; // آخر صفحة: الحلقة تمّت
     if (!data.events.length) break; // صفحة فارغة قبل النهاية: توقّف احتياطي
-    if (page >= AGENDA_DAY_MAX_PAGES) break; // سقف الصفحات
+    if (page >= AGENDA_MAX_PAGES) break; // سقف الصفحات
     page += 1;
   }
 
   return { events, total, truncated: events.length < total, failed: false };
+}
+
+/** مناسبات يومٍ بعينه — نطاق يوم واحد على الجالب نفسه (سلوك قائمة اليوم كما هو). */
+async function fetchAgendaDayEvents(dateStr, regionId) {
+  return fetchAgendaRangeEvents(dateStr, dateStr, regionId);
+}
+
+// ---- «القادم هذا الشهر» تحت قائمة اليوم -----------------------------------
+// مناسبات الشهر المعروض من اليوم (أو أول الشهر) إلى آخره، مجمّعة تحت رأس كل
+// يوم. هوية الطلب هي الشهر المعروض + المحافظة، فجواب شهرٍ أو محافظةٍ سابقة
+// لا يرسم تحت الحالي. شهرٌ مضى بكامله لا قسم له ولا طلب أصلاً.
+
+/** هوية قسم «القادم هذا الشهر» التي طُلب لها آخر جواب. */
+let agendaMonthUpcomingIdentity = null;
+
+/** هل الشهر المعروض مضى بكامله قبل شهر اليوم؟ (شهر اليوم نفسه ليس ماضياً). */
+function agendaMonthIsPast(year, month) {
+  const now = new Date();
+  return year < now.getFullYear() || (year === now.getFullYear() && month < now.getMonth());
+}
+
+/** نطاق «القادم»: الأبعد بين اليوم وأول الشهر المعروض ← آخر يوم في الشهر المعروض. */
+function agendaUpcomingRange(year, month) {
+  const today = isoLocalDay(new Date());
+  const monthStart = isoLocalDay(new Date(year, month, 1));
+  return {
+    from: today > monthStart ? today : monthStart,
+    to: isoLocalDay(new Date(year, month + 1, 0))
+  };
+}
+
+/**
+ * «الجمعة ٢٠ نوفمبر» — باسم اليوم والشهر العربيين وأرقام عربية هندية، نفس
+ * الصيغة التي يبنيها الموبايل من `arabicWeekdayName` و`arabicMonthName`
+ * و`arabicDayNumber`، فلا نصّان ليوم واحد على العميلين.
+ */
+function formatAgendaUpcomingDay(dateStr) {
+  const date = new Date(dateStr + 'T00:00:00');
+  if (Number.isNaN(date.getTime())) return dateStr;
+  const weekday = new Intl.DateTimeFormat('ar-EG', { weekday: 'long' }).format(date);
+  const day = new Intl.DateTimeFormat('ar-EG', { day: 'numeric' }).format(date);
+  return `${weekday} ${day} ${AR_MONTHS_NAMES[date.getMonth()]}`;
+}
+
+/** صفّ مناسبة واحد — نفس الصفّ، ونفس النقر ولوحة المفاتيح، في قائمة اليوم وفي «القادم هذا الشهر». */
+function agendaEventItemHtml(evt) {
+  return `
+    <div class="agenda-event-item" role="button" tabindex="0"
+      onclick="closeAgendaModal(); navigateToEvent(${evt.id});"
+      onkeydown="agendaEventItemKeydown(event, ${evt.id});">
+      <div>
+        <div class="agenda-event-title">${escapeHtml(evt.title || evt.groom_name)}</div>
+        <div class="agenda-event-meta">
+          <span class="town-badge">${escapeHtml(evt.town)}</span>
+          ${evt.occasion_type?.name ? `<span>${escapeHtml(evt.occasion_type.name)}</span>` : ''}
+        </div>
+      </div>
+      <i class="fa-solid fa-chevron-left" style="color:var(--ink-faint);"></i>
+    </div>
+  `;
+}
+
+/**
+ * لوحة المفاتيح لصفّ المناسبة: Enter والمسافة يفتحان المناسبة نفسها التي
+ * يفتحها النقر، ولا يُنفَّذ شيء لمفتاح آخر. الصفّ `role="button"` بـ`tabindex`
+ * فيبلغه Tab، وهذا المعالج يمنحه ما يمنحه زرٌّ أصلي بلا تغيير شكل الصفّ.
+ */
+function agendaEventItemKeydown(event, eventId) {
+  if (event.key !== 'Enter' && event.key !== ' ' && event.key !== 'Spacebar') return;
+  event.preventDefault();
+  closeAgendaModal();
+  navigateToEvent(eventId);
+}
+
+/**
+ * تاريخ تجميع المناسبة: الأبعد بين يومها وبداية النطاق — مناسبة متعددة الأيام
+ * بدأت قبل اليوم تظهر تحت اليوم، لا تحت يومٍ مضى ولا في لا مكان.
+ */
+function agendaUpcomingGroupKey(evt, rangeFrom) {
+  const own = String(evt.event_date || '').split('T')[0];
+  return own > rangeFrom ? own : rangeFrom;
+}
+
+/** يجمّع المناسبات تحت أيامها صاعدةً؛ ترتيب الخادم داخل كل يوم كما هو. */
+function groupAgendaUpcomingEvents(events, rangeFrom) {
+  const groups = new Map();
+  events.forEach(evt => {
+    const date = agendaUpcomingGroupKey(evt, rangeFrom);
+    if (!groups.has(date)) groups.set(date, []);
+    groups.get(date).push(evt);
+  });
+  return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+/**
+ * يجلب ويرسم «القادم هذا الشهر» للشهر المعروض والمحافظة المختارة.
+ *
+ * الشهر الماضي بكامله: القسم كله مخفي ولا طلب إطلاقاً. وغير ذلك يُطلب النطاق
+ * من `GET /api/events` بالصفحات كلها، والشارة `pagination.total` من الخادم لا
+ * طول ما وصل. والفشل سطرٌ عربي وشارة «—» — لا صفرٌ مخترع ولا «لا مناسبات».
+ *
+ * والحارس بعد الجواب يقارن الهوية لا ترتيب الطلبات: جواب شهرٍ أو محافظةٍ
+ * سابقة يصل أخيراً لا يكتب تحت الحالي.
+ */
+async function renderAgendaMonthUpcoming(year, month, regionId) {
+  const section = document.getElementById('agendaMonthUpcoming');
+  const countEl = document.getElementById('agendaMonthUpcomingCount');
+  const listEl = document.getElementById('agendaMonthUpcomingList');
+  if (!section || !countEl || !listEl) return;
+
+  // شهرٌ مضى بكامله: لا رأس ولا طلب — ويُخفى القسم ولو كان معروضاً قبله.
+  if (agendaMonthIsPast(year, month)) {
+    agendaMonthUpcomingIdentity = null;
+    section.hidden = true;
+    countEl.textContent = '…';
+    listEl.innerHTML = '';
+    return;
+  }
+  section.hidden = false;
+
+  const monthKey = `${year}-${String(month + 1).padStart(2, '0')}`;
+  const identity = agendaCalendarIdentity(monthKey, regionId);
+  agendaMonthUpcomingIdentity = identity;
+  countEl.textContent = '…';
+  // لا تبقى مناسبات شهرٍ سابق قابلة للنقر تحت الشهر الجديد على اتصال بطيء.
+  listEl.innerHTML = '<p class="empty-state" style="padding:14px; text-align:center; font-size:0.88rem; color:var(--ink-soft);">جارٍ تحميل مناسبات الشهر…</p>';
+
+  const { from, to } = agendaUpcomingRange(year, month);
+  const { events, total, truncated, failed } = await fetchAgendaRangeEvents(from, to, regionId);
+  // هوية الطلب — الشهر المعروض + المحافظة — لا اليوم المختار: تصفّح الأيام لا
+  // يعيد جلب هذا القسم، وكل ما يغيّر الشهر أو المحافظة يغيّر الهوية.
+  if (agendaMonthUpcomingIdentity !== identity) return;
+
+  if (failed) {
+    countEl.textContent = '—';
+    listEl.innerHTML = `
+      <p class="empty-state" style="padding:14px 14px 4px; text-align:center; font-size:0.88rem; color:var(--ink-soft);">تعذّر تحميل مناسبات الشهر — حاول مرة أخرى</p>
+      <p style="text-align:center; margin:0 0 10px;">
+        <button type="button" class="agenda-retry-btn" aria-label="إعادة المحاولة — القادم هذا الشهر" onclick="retryAgendaMonthUpcoming()">
+          <i class="fa-solid fa-rotate-right" aria-hidden="true"></i> إعادة المحاولة
+        </button>
+      </p>`;
+    return;
+  }
+
+  // الشارة `total` من الخادم لا طول ما وصل: سقف الصفحات لا يجعل الشهر يعلن
+  // عدداً أقل مما عدّه خادمه.
+  countEl.textContent = `(${total})`;
+
+  if (!events.length) {
+    listEl.innerHTML = '<p class="empty-state" style="padding:14px; text-align:center; font-size:0.88rem; color:var(--ink-soft);">لا مناسبات قادمة في هذا الشهر</p>';
+    return;
+  }
+
+  const groups = groupAgendaUpcomingEvents(events, from);
+  listEl.innerHTML = groups.map(([date, dayEvents]) => `
+    <div class="agenda-upcoming-group">
+      <div class="agenda-upcoming-day" data-date="${date}">${formatAgendaUpcomingDay(date)}</div>
+      ${dayEvents.map(agendaEventItemHtml).join('')}
+    </div>
+  `).join('') + (truncated
+    // سطر واحد حين تُعرض قائمة ناقصة — نفس سطر قائمة اليوم، فالفرق حدُّ
+    // الصفحات لا عطل.
+    ? `<p style="padding:10px 14px; text-align:center; font-size:0.82rem; color:var(--ink-soft);">تُعرض أول ${events.length} من ${total} مناسبة</p>`
+    : '');
+}
+
+/**
+ * إعادة محاولة «القادم هذا الشهر» وحدها: النطاق الذي فشل هو ما يُعاد طلبه،
+ * لا عدّ التقويم ولا قائمة اليوم.
+ */
+function retryAgendaMonthUpcoming() {
+  renderAgendaMonthUpcoming(
+    agendaCurrentDate.getFullYear(),
+    agendaCurrentDate.getMonth(),
+    agendaRegionId
+  );
 }
 
 function selectAgendaDate(dateStr) {
@@ -8801,18 +8984,7 @@ async function renderAgendaSelectedDayEvents(dateStr) {
     return;
   }
 
-  listEl.innerHTML = events.map(evt => `
-    <div class="agenda-event-item" onclick="closeAgendaModal(); navigateToEvent(${evt.id});">
-      <div>
-        <div class="agenda-event-title">${escapeHtml(evt.title || evt.groom_name)}</div>
-        <div class="agenda-event-meta">
-          <span class="town-badge">${escapeHtml(evt.town)}</span>
-          ${evt.occasion_type?.name ? `<span>${escapeHtml(evt.occasion_type.name)}</span>` : ''}
-        </div>
-      </div>
-      <i class="fa-solid fa-chevron-left" style="color:var(--ink-faint);"></i>
-    </div>
-  `).join('') + (truncated
+  listEl.innerHTML = events.map(agendaEventItemHtml).join('') + (truncated
     // سطر واحد حين تُعرض قائمة ناقصة: الشارة تعدّ اليوم كله والقائمة أقلّ،
     // فبلا هذا السطر يبدو الفرق عطلاً لا حدّاً.
     ? `<p style="padding:10px 14px; text-align:center; font-size:0.82rem; color:var(--ink-soft);">تُعرض أول ${events.length} من ${total} مناسبة</p>`

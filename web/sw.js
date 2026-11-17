@@ -60,7 +60,7 @@
  * فبلا رفع الرقم يخدم الكاشُ صفحةً جديدة بكود قديم (أقسام لا تُرسم) أو كوداً
  * جديداً بصفحة بلا عناصره. ولا ملف JS جديد.
  */
-const CACHE_VERSION = '192.0';
+const CACHE_VERSION = '193.0';
 const CACHE_PREFIX = 'aarasna-shell-';
 const SHELL_CACHE = `${CACHE_PREFIX}${CACHE_VERSION}`;
 

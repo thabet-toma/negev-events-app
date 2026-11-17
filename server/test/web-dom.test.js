@@ -9180,13 +9180,31 @@ async function run() {
    * طلبٍ أحدث.
    * وردّ `/api/events` يحترم `page`/`limit` كالخادم (`pagination.total` للكل
    * و`totalPages` صفحاتِه)، فيومٌ يملأ صفحتين يُقاس بعدّه لا بما افترضه الاختبار.
+   *
+   * و`upcomingResponder` يخصّ «القادم هذا الشهر» وحده (تذكرة M2): طلبُه نطاقٌ
+   * متعدّد الأيام بخلاف قائمة اليوم، ويُلتقط هنا **قبل** `feedResponder` كي
+   * تبقى اختبارات اليوم تقيس ما كُتبت له. بلا `upcomingResponder` يُجاب نطاقاً
+   * فارغاً ناجحاً، فلا يضيف القسم حدثاً إلى قوائم اختبارات #175. **وفي آخر يوم
+   * في الشهر يساوي نطاقه اليوم نفسه**، فلا يميّزه هذا الشرط عن قائمة اليوم؛
+   * اختبار تلك الحالة يُجيب كل طلبات `/api/events` بـ`feedResponder` نفسه.
+   * و`clock` يثبّت `new Date()` على لحظة الاختبار — تاريخ الأجندة نفسها — كي
+   * يُقاس نطاق الشهر و«شهر مضى» بلا اعتماد على ساعة التشغيل.
    */
   function buildAgendaEnv({
-    calendarDays, calendarResponder, feedEvents = [], feedByDate = null, feedResponder, regions, onRequest
+    calendarDays, calendarResponder, feedEvents = [], feedByDate = null, feedResponder,
+    upcomingResponder, regions, onRequest, clock
   } = {}) {
     const base = buildFetchStub();
+    // طلب الأجندة متعدّد الأيام: `page` تفصله عن نطاق «هذا الأسبوع قربك» في
+    // الرئيسية الذي لا يمرّر صفحة، وعن قائمة اليوم التي `date_from = date_to`.
+    // وفي آخر يوم في الشهر يساوي نطاقه اليوم، فيُعرف بالردّ نفسه (أدناه).
+    const isAgendaRange = params => Boolean(
+      params.get('page') && params.get('date_from') && params.get('date_to')
+      && params.get('date_from') !== params.get('date_to')
+    );
     return buildEnv({
       onBeforeEval: (w) => {
+        if (clock) installAgendaCalendarClock(w, clock);
         w.fetch = async (url, opts) => {
           const text = String(url);
           const requestPath = text.split('?')[0];
@@ -9202,6 +9220,12 @@ async function run() {
             return jsonResponse({ success: true, days: calendarDays });
           }
           if (requestPath === '/api/events') {
+            if (isAgendaRange(params)) {
+              if (upcomingResponder) return upcomingResponder(params, opts);
+              return jsonResponse({
+                success: true, events: [], pagination: { page: 1, limit: 100, total: 0, totalPages: 0 }, announcements: []
+              });
+            }
             if (feedResponder) return feedResponder(params, opts);
             const events = feedByDate ? (feedByDate[params.get('date_from')] || []) : feedEvents;
             const page = Math.max(1, Number.parseInt(params.get('page'), 10) || 1);
@@ -9715,6 +9739,443 @@ async function run() {
     assert.strictEqual(
       win.document.getElementById('agendaDayCountBadge').textContent, '1 مناسبة',
       'nor its badge'
+    );
+  });
+
+  // ---- «القادم هذا الشهر» (تذكرة M2) ---------------------------------------
+  // النطاق = الأبعد بين اليوم وأول الشهر المعروض ← آخر الشهر المعروض، والشهر
+  // الماضي بكامله لا طلب له. الساعة مثبَّتة على ٢٠ نوفمبر ٢٠٢٦ كي يُقاس النطاق
+  // و«شهر مضى» بلا اعتماد على يوم تشغيل الاختبار.
+  const UPCOMING_CLOCK = { year: 2026, monthIndex: 10, day: 20 }; // الجمعة ٢٠ نوفمبر ٢٠٢٦
+
+  await test('«القادم هذا الشهر» asks for max(today, month start) → month end, with X-Region for a governorate and all_regions=1 for all (#M2)', async () => {
+    const requests = [];
+    const dom = buildAgendaEnv({
+      clock: UPCOMING_CLOCK,
+      regions: [{ id: 7, name: 'النقب', is_active: true }],
+      onRequest: (text, opts) => {
+        if (String(text).split('?')[0] !== '/api/events') return;
+        requests.push({
+          params: new URL(String(text), 'http://localhost/').searchParams,
+          headers: (opts && opts.headers) || {}
+        });
+      }
+    });
+    await flushBoot();
+    const win = dom.window;
+    await win.loadTownCoordinates();
+    win.openAgendaModal();
+
+    const isUpcoming = request => request.params.get('page')
+      && request.params.get('date_from') !== request.params.get('date_to');
+    await waitFor(() => requests.some(isUpcoming));
+    const all = requests.find(isUpcoming);
+    assert.strictEqual(all.params.get('date_from'), '2026-11-20', 'a current month starts its range today, not on the 1st');
+    assert.strictEqual(all.params.get('date_to'), '2026-11-30', 'and ends on the last day of the displayed month');
+    assert.strictEqual(all.params.get('all_regions'), '1', '«كل المحافظات» is the route flag for this call');
+    assert.strictEqual(all.headers['X-Region'], undefined, 'and no governorate header rides with it');
+
+    requests.length = 0;
+    win.onAgendaRegionChange('7');
+    await waitFor(() => requests.some(isUpcoming));
+    const scoped = requests.find(isUpcoming);
+    assert.strictEqual(scoped.params.get('date_from'), '2026-11-20');
+    assert.strictEqual(scoped.params.get('date_to'), '2026-11-30');
+    assert.strictEqual(scoped.headers['X-Region'], '7', 'a chosen governorate travels in X-Region for this call alone');
+    assert.strictEqual(scoped.params.get('all_regions'), null, 'and the all-governorates flag is not sent with it');
+
+    await waitFor(() => win.document.getElementById('agendaMonthUpcomingList').textContent.includes('لا مناسبات قادمة في هذا الشهر'));
+    assert.strictEqual(
+      win.document.getElementById('agendaMonthUpcomingCount').textContent, '(0)',
+      'an empty month still reports the server total — a known zero, not a guess'
+    );
+    assert.strictEqual(
+      win.document.getElementById('agendaMonthUpcoming').hidden, false,
+      'a current month keeps its section'
+    );
+  });
+
+  await test('«القادم هذا الشهر» groups events under day headers and pulls a multi-day event that started before today up to today (#M2)', async () => {
+    const dom = buildAgendaEnv({
+      clock: UPCOMING_CLOCK,
+      upcomingResponder: () => jsonResponse({
+        success: true,
+        events: [
+          { id: 901, title: 'بدأت قبل اليوم', town: 'رهط', event_date: '2026-11-18', occasion_type: WEDDING_TYPE },
+          { id: 902, title: 'مناسبة لاحقة', town: 'حورة', event_date: '2026-11-25', occasion_type: FUNERAL_TYPE }
+        ],
+        pagination: { page: 1, limit: 100, total: 2, totalPages: 1 },
+        announcements: []
+      })
+    });
+    await flushBoot();
+    const win = dom.window;
+    win.openAgendaModal();
+    const list = win.document.getElementById('agendaMonthUpcomingList');
+    await waitFor(() => list.querySelectorAll('.agenda-upcoming-group').length === 2);
+
+    const groups = [...list.querySelectorAll('.agenda-upcoming-group')];
+    const headerOf = group => group.querySelector('.agenda-upcoming-day');
+    assert.deepStrictEqual(
+      groups.map(group => headerOf(group).getAttribute('data-date')),
+      ['2026-11-20', '2026-11-25'],
+      'day headers ascend by date, and the event that started on the 18th is grouped under today — not under a day already past'
+    );
+    assert.strictEqual(
+      headerOf(groups[0]).textContent.trim(), 'الجمعة ٢٠ نوفمبر',
+      'the header is the Arabic weekday, the Arabic-Indic day and the Arabic month — the mobile client\'s own wording'
+    );
+    assert.deepStrictEqual(
+      [...groups[0].querySelectorAll('.agenda-event-title')].map(node => node.textContent),
+      ['بدأت قبل اليوم'],
+      'the multi-day event appears under the range start, not its own earlier start day'
+    );
+    assert.deepStrictEqual(
+      [...groups[1].querySelectorAll('.agenda-event-title')].map(node => node.textContent),
+      ['مناسبة لاحقة']
+    );
+    assert.strictEqual(
+      win.document.getElementById('agendaMonthUpcomingCount').textContent, '(2)',
+      'the pill counts the server total'
+    );
+  });
+
+  await test('the upcoming pill counts pagination.total, a capped list is declared, and picking a day never refetches the month (#M2)', async () => {
+    let upcomingCalls = 0;
+    const dom = buildAgendaEnv({
+      clock: UPCOMING_CLOCK,
+      upcomingResponder: (params) => {
+        upcomingCalls += 1;
+        const page = Number.parseInt(params.get('page'), 10) || 1;
+        return jsonResponse({
+          success: true,
+          events: page === 1
+            ? [
+              { id: 911, title: 'مناسبة ٢٢', town: 'رهط', event_date: '2026-11-22', occasion_type: WEDDING_TYPE },
+              { id: 912, title: 'مناسبة ٢٤', town: 'حورة', event_date: '2026-11-24', occasion_type: FUNERAL_TYPE }
+            ]
+            : [],
+          pagination: { page, limit: 100, total: 150, totalPages: 2 },
+          announcements: []
+        });
+      }
+    });
+    await flushBoot();
+    const win = dom.window;
+    win.openAgendaModal();
+    const list = win.document.getElementById('agendaMonthUpcomingList');
+    await waitFor(() => win.document.getElementById('agendaMonthUpcomingCount').textContent === '(150)');
+
+    assert.ok(
+      list.textContent.includes('تُعرض أول 2 من 150 مناسبة'),
+      'the partial range is declared exactly as the day list declares its own'
+    );
+    assert.strictEqual(upcomingCalls, 2, 'page 2 is actually requested before its empty answer ends the loop');
+
+    win.selectAgendaDate('2026-11-22');
+    await delay(60);
+    assert.strictEqual(upcomingCalls, 2, 'selecting another day does not refetch the month list');
+    assert.strictEqual(
+      win.document.getElementById('agendaMonthUpcomingCount').textContent, '(150)',
+      'nor does it change the pill'
+    );
+    assert.ok(list.textContent.includes('مناسبة ٢٢'), 'and the month list stays painted');
+  });
+
+  await test('a month entirely in the past hides «القادم هذا الشهر» with no request at all (#M2)', async () => {
+    const requests = [];
+    const dom = buildAgendaEnv({
+      clock: UPCOMING_CLOCK,
+      onRequest: (text) => {
+        if (String(text).split('?')[0] === '/api/events') {
+          requests.push(new URL(String(text), 'http://localhost/').searchParams);
+        }
+      }
+    });
+    await flushBoot();
+    const win = dom.window;
+    win.openAgendaModal();
+    const isUpcoming = params => params.get('page') && params.get('date_from') !== params.get('date_to');
+    await waitFor(() => requests.some(isUpcoming));
+    assert.strictEqual(
+      win.document.getElementById('agendaMonthUpcoming').hidden, false,
+      'the current month shows the section'
+    );
+    const before = requests.filter(isUpcoming).length;
+
+    win.changeAgendaMonth(-1); // أكتوبر ٢٠٢٦ — شهر مضى بكامله
+    await delay(60);
+    assert.strictEqual(
+      win.document.getElementById('agendaMonthUpcoming').hidden, true,
+      'a past month hides the whole section — header, pill and list'
+    );
+    assert.strictEqual(requests.filter(isUpcoming).length, before, 'and sends no range request');
+    assert.ok(
+      !requests.some(params => String(params.get('date_to')).startsWith('2026-10')),
+      'nothing was asked for October at all'
+    );
+    assert.strictEqual(
+      win.document.getElementById('agendaMonthUpcomingList').textContent.trim(), '',
+      'no row from the previous month is left behind'
+    );
+  });
+
+  await test('a late «القادم هذا الشهر» answer for the previous month never paints over the newer month (#M2)', async () => {
+    const pending = [];
+    const dom = buildAgendaEnv({
+      clock: UPCOMING_CLOCK,
+      upcomingResponder: (params) => {
+        if (params.get('date_from') === '2026-11-20') {
+          return new Promise(resolve => pending.push(() => resolve(jsonResponse({
+            success: true,
+            events: [{ id: 921, title: 'مناسبة نوفمبر', town: 'رهط', event_date: '2026-11-28', occasion_type: WEDDING_TYPE }],
+            pagination: { page: 1, limit: 100, total: 1, totalPages: 1 },
+            announcements: []
+          }))));
+        }
+        return jsonResponse({
+          success: true,
+          events: [{ id: 922, title: 'مناسبة ديسمبر', town: 'حورة', event_date: '2026-12-05', occasion_type: FUNERAL_TYPE }],
+          pagination: { page: 1, limit: 100, total: 1, totalPages: 1 },
+          announcements: []
+        });
+      }
+    });
+    await flushBoot();
+    const win = dom.window;
+    win.openAgendaModal();
+    await waitFor(() => pending.length === 1);
+    const list = win.document.getElementById('agendaMonthUpcomingList');
+
+    win.changeAgendaMonth(1); // ديسمبر ٢٠٢٦
+    await waitFor(() => list.textContent.includes('مناسبة ديسمبر'));
+    assert.strictEqual(win.document.getElementById('agendaMonthUpcomingCount').textContent, '(1)');
+
+    pending[0](); // جواب نوفمبر يصل أخيراً
+    await delay(60);
+    assert.ok(
+      !list.textContent.includes('مناسبة نوفمبر'),
+      'the request identity is the displayed month: a late November answer must not paint under December'
+    );
+    assert.ok(list.textContent.includes('مناسبة ديسمبر'), 'December stays as it was');
+    assert.strictEqual(
+      win.document.getElementById('agendaMonthUpcomingCount').textContent, '(1)',
+      'and neither the pill nor the groups change'
+    );
+  });
+
+  await test('a failed upcoming fetch shows an Arabic error and «—», never an invented zero or an empty month (#M2)', async () => {
+    const dom = buildAgendaEnv({
+      clock: UPCOMING_CLOCK,
+      upcomingResponder: () => Promise.reject(new Error('network failed'))
+    });
+    await flushBoot();
+    const win = dom.window;
+    win.openAgendaModal();
+    const list = win.document.getElementById('agendaMonthUpcomingList');
+    await waitFor(() => list.textContent.includes('تعذّر تحميل مناسبات الشهر — حاول مرة أخرى'));
+
+    assert.strictEqual(
+      win.document.getElementById('agendaMonthUpcomingCount').textContent, '—',
+      'the pill does not claim a count it does not know'
+    );
+    assert.ok(
+      !list.textContent.includes('لا مناسبات قادمة في هذا الشهر'),
+      'a failure is not the known-empty state'
+    );
+    assert.ok(
+      !win.document.getElementById('agendaMonthUpcomingCount').textContent.includes('0'),
+      'nor is an unknown month zero events'
+    );
+    assert.strictEqual(
+      list.querySelectorAll('.agenda-upcoming-group').length, 0,
+      'no stale group stays clickable after failure'
+    );
+  });
+
+  await test('on the last day of the month the upcoming range is that single day, and the section still renders (#M2)', async () => {
+    const requests = [];
+    const dom = buildAgendaEnv({
+      clock: { year: 2026, monthIndex: 10, day: 30 },
+      onRequest: (text) => {
+        if (String(text).split('?')[0] !== '/api/events') return;
+        requests.push(new URL(String(text), 'http://localhost/').searchParams);
+      },
+      // آخر يوم في الشهر: نطاق «القادم» = اليوم نفسه، فطلبُه يماثل طلب قائمة
+      // اليوم حرفياً. استعلامان متطابقان يُجابان بالردّ نفسه، فلا حاجة لتمييز
+      // أحدهما — وهو الفرق بين هذه الحالة وبقية اختبارات الشهر.
+      feedResponder: () => jsonResponse({
+        success: true,
+        events: [{ id: 951, title: 'مناسبة آخر يوم', town: 'رهط', event_date: '2026-11-30', occasion_type: WEDDING_TYPE }],
+        pagination: { page: 1, limit: 100, total: 1, totalPages: 1 },
+        announcements: []
+      })
+    });
+    await flushBoot();
+    const win = dom.window;
+    win.openAgendaModal();
+    const list = win.document.getElementById('agendaMonthUpcomingList');
+    await waitFor(() => list.querySelectorAll('.agenda-upcoming-group').length === 1);
+
+    assert.strictEqual(
+      win.document.getElementById('agendaMonthUpcoming').hidden, false,
+      'the last day is this month, so the section does not vanish'
+    );
+    assert.strictEqual(
+      list.querySelector('.agenda-upcoming-day').getAttribute('data-date'), '2026-11-30',
+      'the group header is that one day'
+    );
+    assert.strictEqual(
+      win.document.getElementById('agendaMonthUpcomingCount').textContent, '(1)',
+      'the pill counts the server total for that single day'
+    );
+
+    const ranges = requests.filter(params => params.get('date_from') && params.get('date_to') === '2026-11-30');
+    assert.ok(ranges.length >= 2, 'the day list and the upcoming section both asked');
+    assert.ok(
+      ranges.every(params => params.get('date_from') === '2026-11-30'),
+      'on the last day the month range is that single day — not the whole month and not a past day'
+    );
+  });
+
+  await test('a failed upcoming fetch offers «إعادة المحاولة» that reloads the month section alone, then shows its events (#M2)', async () => {
+    const requests = [];
+    let upcomingCalls = 0;
+    const dom = buildAgendaEnv({
+      clock: UPCOMING_CLOCK,
+      onRequest: (text) => {
+        requests.push({
+          path: String(text).split('?')[0],
+          params: new URL(String(text), 'http://localhost/').searchParams
+        });
+      },
+      upcomingResponder: () => {
+        upcomingCalls += 1;
+        if (upcomingCalls === 1) return Promise.reject(new Error('network failed'));
+        return jsonResponse({
+          success: true,
+          events: [{ id: 961, title: 'مناسبة الشهر بعد الإعادة', town: 'رهط', event_date: '2026-11-22', occasion_type: WEDDING_TYPE }],
+          pagination: { page: 1, limit: 100, total: 1, totalPages: 1 },
+          announcements: []
+        });
+      }
+    });
+    await flushBoot();
+    const win = dom.window;
+    win.openAgendaModal();
+    const list = win.document.getElementById('agendaMonthUpcomingList');
+    await waitFor(() => list.textContent.includes('تعذّر تحميل مناسبات الشهر — حاول مرة أخرى'));
+
+    const retry = [...list.querySelectorAll('button')]
+      .find(button => button.textContent.includes('إعادة المحاولة'));
+    assert.ok(retry, 'the month error carries an explicit retry button, not a bare wish');
+    const countEvents = predicate => requests.filter(request => request.path === '/api/events' && predicate(request.params)).length;
+    const dayCalls = countEvents(params => params.get('date_from') === params.get('date_to'));
+    const calendarCalls = requests.filter(request => request.path === '/api/events/calendar').length;
+    assert.strictEqual(win.document.getElementById('agendaMonthUpcomingCount').textContent, '—');
+
+    retry.click();
+    await waitFor(() => list.textContent.includes('مناسبة الشهر بعد الإعادة'));
+
+    assert.strictEqual(upcomingCalls, 2, 'the retry asked for the month range again');
+    assert.strictEqual(
+      countEvents(params => params.get('date_from') === params.get('date_to')), dayCalls,
+      'and did not refetch the selected day list'
+    );
+    assert.strictEqual(
+      requests.filter(request => request.path === '/api/events/calendar').length, calendarCalls,
+      'nor the month calendar counts'
+    );
+    assert.ok(!list.textContent.includes('تعذّر تحميل مناسبات الشهر'), 'success clears the month error');
+    assert.strictEqual(win.document.getElementById('agendaMonthUpcomingCount').textContent, '(1)');
+  });
+
+  await test('an upcoming month row opens its event on click and on Enter/Space, exactly like a day row (#M2)', async () => {
+    const dom = buildAgendaEnv({
+      clock: UPCOMING_CLOCK,
+      upcomingResponder: () => jsonResponse({
+        success: true,
+        events: [{ id: 981, title: 'مناسبة صف الشهر', town: 'رهط', event_date: '2026-11-22', occasion_type: WEDDING_TYPE }],
+        pagination: { page: 1, limit: 100, total: 1, totalPages: 1 },
+        announcements: []
+      })
+    });
+    await flushBoot();
+    const win = dom.window;
+    win.openAgendaModal();
+    const list = win.document.getElementById('agendaMonthUpcomingList');
+    await waitFor(() => list.querySelector('.agenda-event-item'));
+    const row = list.querySelector('.agenda-event-item');
+    assert.strictEqual(row.getAttribute('role'), 'button', 'the shared row carries the button role');
+    assert.strictEqual(row.getAttribute('tabindex'), '0', 'and is reachable by Tab');
+
+    const navigated = [];
+    win.navigateToEvent = async (id) => { navigated.push(id); };
+    row.click();
+    await waitFor(() => navigated.length === 1);
+    assert.deepStrictEqual(navigated, [981], 'a click navigates exactly as the day row does');
+    assert.strictEqual(win.document.getElementById('agendaModal').style.display, 'none', 'and closes the agenda');
+
+    const press = key => row.dispatchEvent(new win.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    press('Enter');
+    await waitFor(() => navigated.length === 2);
+    press(' ');
+    await waitFor(() => navigated.length === 3);
+    press('ArrowDown');
+    await delay(40);
+    assert.deepStrictEqual(navigated, [981, 981, 981], 'Enter and Space activate it; other keys do not');
+  });
+
+  await test('a late «القادم هذا الشهر» answer for a previous governorate never paints under the newer one (#M2)', async () => {
+    const pending = [];
+    const dom = buildAgendaEnv({
+      clock: UPCOMING_CLOCK,
+      regions: [{ id: 7, name: 'النقب', is_active: true }, { id: 8, name: 'المثلث', is_active: true }],
+      upcomingResponder: (params, opts) => {
+        const region = ((opts && opts.headers) || {})['X-Region'];
+        if (region === '7') {
+          return new Promise(resolve => pending.push(() => resolve(jsonResponse({
+            success: true,
+            events: [{ id: 971, title: 'مناسبة محافظة سبعة', town: 'رهط', event_date: '2026-11-21', occasion_type: WEDDING_TYPE }],
+            pagination: { page: 1, limit: 100, total: 1, totalPages: 1 },
+            announcements: []
+          }))));
+        }
+        if (region === '8') {
+          return jsonResponse({
+            success: true,
+            events: [{ id: 972, title: 'مناسبة محافظة ثمانية', town: 'حورة', event_date: '2026-11-22', occasion_type: FUNERAL_TYPE }],
+            pagination: { page: 1, limit: 100, total: 1, totalPages: 1 },
+            announcements: []
+          });
+        }
+        return jsonResponse({
+          success: true, events: [], pagination: { page: 1, limit: 100, total: 0, totalPages: 0 }, announcements: []
+        });
+      }
+    });
+    await flushBoot();
+    const win = dom.window;
+    win.openAgendaModal();
+    const list = win.document.getElementById('agendaMonthUpcomingList');
+    await waitFor(() => list.textContent.includes('لا مناسبات قادمة في هذا الشهر'));
+
+    win.onAgendaRegionChange('7');
+    await waitFor(() => pending.length === 1);
+    win.onAgendaRegionChange('8');
+    await waitFor(() => list.textContent.includes('مناسبة محافظة ثمانية'));
+    assert.strictEqual(win.document.getElementById('agendaMonthUpcomingCount').textContent, '(1)');
+
+    pending[0](); // جواب المحافظة ٧ يصل أخيراً
+    await delay(80);
+    assert.ok(
+      !list.textContent.includes('مناسبة محافظة سبعة'),
+      'the request identity is the month AND the governorate: a late region-7 answer must not paint under region 8'
+    );
+    assert.ok(list.textContent.includes('مناسبة محافظة ثمانية'), 'region 8 stays as it was');
+    assert.strictEqual(
+      win.document.getElementById('agendaMonthUpcomingCount').textContent, '(1)',
+      'and neither the pill nor the groups change'
     );
   });
 

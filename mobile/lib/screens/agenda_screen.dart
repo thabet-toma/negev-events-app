@@ -5,7 +5,8 @@ import '../main.dart';
 import '../models/event.dart';
 import '../theme.dart';
 import '../widgets/auth_action_button.dart';
-import '../widgets/event_card.dart' show arabicEventDate;
+import '../widgets/event_card.dart'
+    show arabicEventDate, arabicWeekdayName, arabicMonthName, arabicDayNumber;
 import 'event_details_screen.dart';
 
 const List<String> _arMonths = [
@@ -45,15 +46,22 @@ const List<String> _arWeekdaysShort = [
 /// `date_to` متساويين — نفس تقاطع الامتداد الذي يعدّ به التقويم، فما يعدّه
 /// التقويم هو ما يعرضه اليوم تحته، وليس مصفوفة محلية ثانية.
 class AgendaScreen extends StatefulWidget {
-  const AgendaScreen({super.key});
+  const AgendaScreen({super.key, this.now});
+
+  /// ساعة الشاشة — تُحقن في الاختبار وحده ليثبت «اليوم» (وآخر يوم في الشهر
+  /// حالةٌ حقيقية منه)، والإنتاج يمرّر `null` فيقرأ `DateTime.now`.
+  final DateTime Function()? now;
 
   @override
   State<AgendaScreen> createState() => _AgendaScreenState();
 }
 
 class _AgendaScreenState extends State<AgendaScreen> {
-  DateTime _currentMonth = DateTime(DateTime.now().year, DateTime.now().month, 1);
-  DateTime _selectedDate = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+  late DateTime _currentMonth;
+  late DateTime _selectedDate;
+
+  /// «الآن» كما تراه الشاشة: الساعة المحقونة، وإلا ساعة الجهاز.
+  DateTime _now() => widget.now?.call() ?? DateTime.now();
 
   /// فلتر المحافظة **داخل التقويم وحده** — `null` = كل المحافظات. لا يغيّر
   /// محافظة الاكتشاف المحفوظة (`RegionStore`)، فذاك اختيار الأسطح العامة.
@@ -76,11 +84,33 @@ class _AgendaScreenState extends State<AgendaScreen> {
   Object? _dayError;
   bool _bootstrapped = false;
 
+  /// «القادم هذا الشهر»: مناسبات الشهر المعروض من اليوم (أو أول الشهر) إلى
+  /// آخره، مجمّعة تحت رأس كل يوم. مستقلّة عن قائمة اليوم المختار، فتصفّح
+  /// الأيام لا يعيد جلبها.
+  List<({String date, List<Event> events})> _upcomingGroups = const [];
+  /// عدّ الخادم لكل الشهر (`pagination.total`) لا طول ما وصل.
+  int _upcomingTotal = 0;
+  /// عدد ما وصل فعلاً — أساس سطر «تُعرض أول X من Y» عند سقف الصفحات.
+  int _upcomingShown = 0;
+  bool _upcomingTruncated = false;
+  bool _upcomingLoading = false;
+  Object? _upcomingError;
+  /// هوية الشهر + المحافظة التي تملك هذا القسم — جواب قديم لا يرسم تحتها.
+  String? _upcomingIdentity;
+
   /// حجم الصفحة في `GET /api/events` — سقف الخادم نفسه.
-  static const int _dayPageSize = 100;
-  /// سقف احتياطي للصفحات: عشرون صفحة = ألفا مناسبة في يوم واحد، ولا يوم
-  /// بلغه، ووجوده يمنع حلقةً لا تنقضي لو أعاد الخادم صفحاتٍ لا تنتهي.
-  static const int _dayMaxPages = 20;
+  static const int _pageSize = 100;
+  /// سقف احتياطي للصفحات: عشرون صفحة = ألفا مناسبة في نطاق واحد، ولا يوم ولا
+  /// شهر بلغه، ووجوده يمنع حلقةً لا تنقضي لو أعاد الخادم صفحاتٍ لا تنتهي.
+  static const int _maxPages = 20;
+
+  @override
+  void initState() {
+    super.initState();
+    final now = _now();
+    _currentMonth = DateTime(now.year, now.month, 1);
+    _selectedDate = DateTime(now.year, now.month, now.day);
+  }
 
   @override
   void didChangeDependencies() {
@@ -92,6 +122,7 @@ class _AgendaScreenState extends State<AgendaScreen> {
     AppServices.of(context).places.load();
     _loadMonth();
     _loadDay();
+    _loadUpcoming();
   }
 
   static String _monthKey(DateTime month) =>
@@ -136,8 +167,43 @@ class _AgendaScreenState extends State<AgendaScreen> {
     }
   }
 
-  Future<void> _loadDay() async {
+  /// يقرأ **كل صفحات** `GET /api/events` لنطاق واحد: صفحة واحدة سقفها مئة،
+  /// فيومٌ فيه ١٠١ مناسبة كان يعرض ١٠٠ ويعلن عدّاً لا يمكن الوصول إلى ما بعده.
+  /// يستدعيه اليوم وقسم «القادم هذا الشهر» كلاهما — حلقة ترقيم واحدة لا
+  /// حلقتان تختلفان في السقف أو في شرط التوقّف.
+  /// و«كل المحافظات» علَم المسار، والمحافظة المختارة ترويسةً لهذا النداء وحده
+  /// — لا للمحافظة المحفوظة في `RegionStore`.
+  Future<({List<Event> events, int total})> _fetchEventPages({
+    required String dateFrom,
+    required String dateTo,
+    required int? regionId,
+  }) async {
     final api = AppServices.of(context).api;
+    final events = <Event>[];
+    var total = 0;
+    var page = 1;
+    var lastPage = 1;
+    while (true) {
+      final result = await api.listEvents(
+        dateFrom: dateFrom,
+        dateTo: dateTo,
+        limit: _pageSize,
+        page: page,
+        allRegions: regionId == null,
+        regionHeader: regionId == null ? null : '$regionId',
+      );
+      events.addAll(result.events);
+      total = result.pagination.total;
+      lastPage = result.pagination.totalPages < 1 ? 1 : result.pagination.totalPages;
+      if (page >= lastPage) break; // آخر صفحة: الحمل تمّ
+      if (result.events.isEmpty) break; // صفحة فارغة قبل النهاية
+      if (page >= _maxPages) break; // سقف احتياطي
+      page += 1;
+    }
+    return (events: events, total: total);
+  }
+
+  Future<void> _loadDay() async {
     final dateKey = _dayKey(_selectedDate);
     // هوية الطلب هنا اليوم **والمحافظة** معاً: تبديل المحافظة يعيد طلب اليوم
     // نفسه، فحارس اليوم وحده يُبقي قائمة المحافظة السابقة تحته.
@@ -157,39 +223,18 @@ class _AgendaScreenState extends State<AgendaScreen> {
 
     try {
       // نفس شرط التقويم من المسار القائم: `date_from`/`date_to` على يوم واحد.
-      // و«كل المحافظات» علَم المسار، والمحافظة المختارة ترويسةً لهذا النداء
-      // وحده — لا للمحافظة المحفوظة في `RegionStore`.
-      //
-      // **والصفحات كلها**، لا الأولى: صفحة واحدة سقفها مئة، ويوم فيه ١٠١
-      // مناسبة كان يعرض ١٠٠ ويعلن عدّاً لا يمكن الوصول إلى ما بعده.
-      final events = <Event>[];
-      var total = 0;
-      var page = 1;
-      var lastPage = 1;
-      while (true) {
-        final result = await api.listEvents(
-          dateFrom: dateKey,
-          dateTo: dateKey,
-          limit: _dayPageSize,
-          page: page,
-          allRegions: regionId == null,
-          regionHeader: regionId == null ? null : '$regionId',
-        );
-        events.addAll(result.events);
-        total = result.pagination.total;
-        lastPage = result.pagination.totalPages < 1 ? 1 : result.pagination.totalPages;
-        if (page >= lastPage) break; // آخر صفحة: الحمل تمّ
-        if (result.events.isEmpty) break; // صفحة فارغة قبل النهاية
-        if (page >= _dayMaxPages) break; // سقف احتياطي
-        page += 1;
-      }
+      final result = await _fetchEventPages(
+        dateFrom: dateKey,
+        dateTo: dateKey,
+        regionId: regionId,
+      );
 
       if (!mounted) return;
       if (_dayKey(_selectedDate) != dateKey || _regionId != regionId) return;
       setState(() {
-        _dayEvents = events;
-        _dayTotal = total;
-        _dayTruncated = events.length < total;
+        _dayEvents = result.events;
+        _dayTotal = result.total;
+        _dayTruncated = result.events.length < result.total;
         _dayLoading = false;
       });
     } catch (err) {
@@ -203,11 +248,114 @@ class _AgendaScreenState extends State<AgendaScreen> {
     }
   }
 
+  /// هل الشهر المعروض مضى بكامله قبل شهر اليوم؟ (شهر اليوم نفسه ليس ماضياً).
+  bool get _monthIsPast {
+    final now = _now();
+    return _currentMonth.isBefore(DateTime(now.year, now.month, 1));
+  }
+
+  /// نطاق «القادم»: الأبعد بين اليوم وأول الشهر المعروض ← آخر يوم في الشهر
+  /// المعروض. الشهر الحالي يبدأ من اليوم، فما مضى من أيامه ليس «قادماً».
+  ({String from, String to}) _upcomingRange(DateTime month) {
+    final now = _now();
+    final today = DateTime(now.year, now.month, now.day);
+    final monthStart = DateTime(month.year, month.month, 1);
+    final from = today.isAfter(monthStart) ? today : monthStart;
+    final to = DateTime(month.year, month.month + 1, 0);
+    return (from: _dayKey(from), to: _dayKey(to));
+  }
+
+  /// تاريخ تجميع المناسبة: الأبعد بين يومها وبداية النطاق — مناسبة متعددة
+  /// الأيام بدأت قبل اليوم تظهر تحت اليوم، لا تحت يومٍ مضى ولا في لا مكان.
+  List<({String date, List<Event> events})> _groupUpcoming(
+    List<Event> events,
+    String rangeFrom,
+  ) {
+    final groups = <String, List<Event>>{};
+    for (final event in events) {
+      final date = event.eventDate.compareTo(rangeFrom) > 0 ? event.eventDate : rangeFrom;
+      groups.putIfAbsent(date, () => <Event>[]).add(event);
+    }
+    final dates = groups.keys.toList()..sort();
+    return [for (final date in dates) (date: date, events: groups[date]!)];
+  }
+
+  /// «الجمعة ٢٠ نوفمبر» — بأسماء اليوم والشهر وأرقام اليوم العربية الهندية
+  /// نفسها التي يستعملها الكرت، فلا صياغتان ليوم واحد.
+  String _upcomingDayLabel(String dateKey) {
+    final date = DateTime.tryParse(dateKey);
+    if (date == null) return dateKey;
+    return '${arabicWeekdayName(date.weekday)} '
+        '${arabicDayNumber(date.day)} ${arabicMonthName(date.month)}';
+  }
+
+  /// يجلب ويرسم «القادم هذا الشهر». الشهر الماضي بكامله: لا جلب إطلاقاً.
+  /// والفشل خطأ عربي وشارة «—» — لا صفرٌ مخترع، وحارس الهوية يقارن الشهر
+  /// والمحافظة لا ترتيب الطلبات.
+  Future<void> _loadUpcoming() async {
+    final month = _currentMonth;
+    final regionId = _regionId;
+    final identity = _calendarIdentity(month, regionId);
+
+    if (_monthIsPast) {
+      if (!mounted) return;
+      setState(() {
+        _upcomingIdentity = null;
+        _upcomingGroups = const [];
+        _upcomingTotal = 0;
+        _upcomingShown = 0;
+        _upcomingTruncated = false;
+        _upcomingLoading = false;
+        _upcomingError = null;
+      });
+      return;
+    }
+
+    setState(() {
+      _upcomingIdentity = identity;
+      _upcomingLoading = true;
+      _upcomingError = null;
+      // القسم يُمحى في **بداية** كل طلب: بقاء مناسبات شهرٍ سابق تحت الشهر
+      // الجديد على اتصال بطيء يعرض شهراً كأنه آخر.
+      _upcomingGroups = const [];
+      _upcomingTotal = 0;
+      _upcomingShown = 0;
+      _upcomingTruncated = false;
+    });
+
+    final range = _upcomingRange(month);
+    try {
+      final result = await _fetchEventPages(
+        dateFrom: range.from,
+        dateTo: range.to,
+        regionId: regionId,
+      );
+      if (!mounted) return;
+      if (_upcomingIdentity != identity) return;
+      setState(() {
+        _upcomingGroups = _groupUpcoming(result.events, range.from);
+        _upcomingTotal = result.total;
+        _upcomingShown = result.events.length;
+        _upcomingTruncated = result.events.length < result.total;
+        _upcomingLoading = false;
+      });
+    } catch (err) {
+      // خطأ طلبٍ قديم لا يكتب خطأ الشهر الجديد ولا يطفئ مؤشّر طلبٍ أحدث.
+      if (!mounted) return;
+      if (_upcomingIdentity != identity) return;
+      setState(() {
+        _upcomingError = err;
+        _upcomingLoading = false;
+      });
+    }
+  }
+
   void _onRegionSelected(int? regionId) {
     if (_regionId == regionId) return;
     setState(() => _regionId = regionId);
     _loadMonth();
     _loadDay();
+    _loadUpcoming();
   }
 
   void _onDaySelected(DateTime dayDate) {
@@ -219,21 +367,24 @@ class _AgendaScreenState extends State<AgendaScreen> {
   void _prevMonth() {
     setState(() => _currentMonth = DateTime(_currentMonth.year, _currentMonth.month - 1, 1));
     _loadMonth();
+    _loadUpcoming();
   }
 
   void _nextMonth() {
     setState(() => _currentMonth = DateTime(_currentMonth.year, _currentMonth.month + 1, 1));
     _loadMonth();
+    _loadUpcoming();
   }
 
   void _goToToday() {
-    final now = DateTime.now();
+    final now = _now();
     setState(() {
       _currentMonth = DateTime(now.year, now.month, 1);
       _selectedDate = DateTime(now.year, now.month, now.day);
     });
     _loadMonth();
     _loadDay();
+    _loadUpcoming();
   }
 
   @override
@@ -279,6 +430,7 @@ class _AgendaScreenState extends State<AgendaScreen> {
               onRefresh: () async {
                 await _loadMonth();
                 await _loadDay();
+                await _loadUpcoming();
               },
               child: ListView(
                 children: [
@@ -381,6 +533,13 @@ class _AgendaScreenState extends State<AgendaScreen> {
                       ),
                     ),
 
+                  // «القادم هذا الشهر» تحت قائمة اليوم — ويختفي كاملاً لشهرٍ
+                  // مضى بكامله (ولا طلب له أصلاً).
+                  if (!_monthIsPast) ...[
+                    const Divider(height: 24),
+                    _buildMonthUpcoming(),
+                  ],
+
                   const SizedBox(height: 32),
                 ],
               ),
@@ -388,6 +547,132 @@ class _AgendaScreenState extends State<AgendaScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  /// قسم «القادم هذا الشهر»: رأس بعنوان وشارة عدّ الخادم، ثم مناسبات الشهر
+  /// مجموعة تحت رأس كل يوم — بصفّ المناسبة نفسه الذي تحته قائمة اليوم.
+  Widget _buildMonthUpcoming() {
+    // الشارة لا تكذب: جلبٌ فشل «—» لا صفراً، وما دام لم يصل «…» لا عدداً.
+    final pillText = _upcomingError != null
+        ? '—'
+        : (_upcomingLoading ? '…' : '($_upcomingTotal)');
+    return Column(
+      key: const ValueKey<String>('agenda_month_upcoming'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            children: [
+              Icon(Icons.upcoming_outlined, color: context.c.gold, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'القادم هذا الشهر',
+                  style: TextStyle(
+                    fontSize: 15.5,
+                    fontWeight: FontWeight.bold,
+                    color: context.c.ink,
+                  ),
+                ),
+              ),
+              Container(
+                key: const ValueKey<String>('agenda_month_upcoming_count'),
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                decoration: BoxDecoration(
+                  color: _upcomingError != null || (!_upcomingLoading && _upcomingTotal == 0)
+                      ? context.c.surfaceSunk
+                      : context.c.skyWash,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  pillText,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.bold,
+                    color: _upcomingError != null || (!_upcomingLoading && _upcomingTotal == 0)
+                        ? context.c.inkSoft
+                        : context.c.sky,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (_upcomingLoading)
+          const Padding(
+            padding: EdgeInsets.all(24),
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else if (_upcomingError != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
+            child: Column(
+              children: [
+                Text(
+                  'تعذّر تحميل مناسبات الشهر — حاول مرة أخرى',
+                  style: TextStyle(fontSize: 13, color: context.c.inkSoft),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 6),
+                // زرّ صريح للنطاق الفاشل وحده: إعادة المحاولة تعيد جلب
+                // «القادم هذا الشهر» لا التقويم ولا قائمة اليوم.
+                TextButton.icon(
+                  key: const ValueKey<String>('agenda_month_upcoming_retry'),
+                  onPressed: _upcomingLoading ? null : _loadUpcoming,
+                  icon: const Icon(Icons.refresh, size: 16),
+                  label: const Text('إعادة المحاولة'),
+                  style: TextButton.styleFrom(foregroundColor: context.c.sky),
+                ),
+              ],
+            ),
+          )
+        else if (_upcomingGroups.isEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
+            child: Center(
+              child: Text(
+                'لا مناسبات قادمة في هذا الشهر',
+                style: TextStyle(fontSize: 13.5, color: context.c.inkSoft),
+              ),
+            ),
+          )
+        else
+          for (final group in _upcomingGroups) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 6, 18, 2),
+              child: Text(
+                _upcomingDayLabel(group.date),
+                key: ValueKey<String>('agenda_upcoming_day_${group.date}'),
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: context.c.inkSoft,
+                ),
+              ),
+            ),
+            for (final event in group.events)
+              _buildEventItem(
+                event,
+                key: ValueKey<String>('agenda_upcoming_event_${event.id}'),
+              ),
+          ],
+
+        // سطر واحد حين تُعرض قائمة ناقصة — نفس سطر قائمة اليوم: الحدّ سقفُ
+        // الصفحات لا عطل، ولا يبدو الشهر مكتملاً وهو أقلّ من عدّه.
+        if (!_upcomingLoading && _upcomingError == null && _upcomingTruncated)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+            child: Center(
+              child: Text(
+                'تُعرض أول $_upcomingShown من $_upcomingTotal مناسبة',
+                style: TextStyle(fontSize: 12, color: context.c.inkSoft),
+              ),
+            ),
+          ),
+      ],
     );
   }
 
@@ -468,7 +753,7 @@ class _AgendaScreenState extends State<AgendaScreen> {
     // في Dart: 7 هو الأحد. نريد الأحد أن يكون العمود 0
     final offset = firstDayWeekday % 7;
     final totalCells = offset + daysInMonth;
-    final todayKey = _dayKey(DateTime.now());
+    final todayKey = _dayKey(_now());
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -590,11 +875,12 @@ class _AgendaScreenState extends State<AgendaScreen> {
     );
   }
 
-  Widget _buildEventItem(Event event) {
+  Widget _buildEventItem(Event event, {Key? key}) {
     final village = event.villageDisplayName;
     final locationText = village != null ? '${event.town} · $village' : event.town;
 
     return Card(
+      key: key,
       margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
