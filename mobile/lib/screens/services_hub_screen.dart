@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart' show openExternalLink;
 import 'news_screen.dart';
+import 'prayer_times_screen.dart';
 import 'services_calculators_screen.dart';
 import 'services_prices_screen.dart';
 
@@ -173,6 +174,43 @@ class ServicesHubScreen extends StatelessWidget {
             ),
             if (tool != PricesTool.values.last) const SizedBox(height: 10),
           ],
+          const SizedBox(height: 30),
+
+          // «مواقيت الصلاة» (M3-C) — تحت أداتَي الأسعار: شاشة واحدة تقرأ
+          // GET /api/prayer-times وتعرض المواقيت كما يحسبها الخادم. لا حساب
+          // ولا تخزين هنا؛ بطاقة واحدة تفتح الشاشة.
+          Text(
+            'مواقيت الصلاة',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w900,
+              height: 1.3,
+              color: context.c.ink,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'مواقيت اليوم حسب بلدتك أو محافظتك — الأوقات من الخادم.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.7,
+              color: context.c.inkSoft,
+            ),
+          ),
+          const SizedBox(height: 14),
+          _HubToolCard(
+            key: const Key('hub_prayer_times'),
+            icon: Icons.mosque_outlined,
+            title: 'مواقيت الصلاة',
+            short: 'مواقيت اليوم حسب بلدتك',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const PrayerTimesScreen(),
+              ),
+            ),
+          ),
         ],
       ),
     );

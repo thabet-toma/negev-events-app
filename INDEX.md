@@ -13,8 +13,8 @@
 | الوحدة | الملفات | الأسطر |
 |---|---|---|
 | `server/src` | 83 | 29944 |
-| `web` | 8 | 23609 |
-| `mobile/lib` | 73 | 38845 |
+| `web` | 8 | 23975 |
+| `mobile/lib` | 75 | 39547 |
 
 ### توزيع `server/src`
 
@@ -38,7 +38,7 @@
 |---|---|
 | `admin.js` | 8621 |
 | `api.js` | 137 |
-| `app.js` | 13970 |
+| `app.js` | 14336 |
 | `config.js` | 32 |
 | `occasionForm.js` | 361 |
 | `serve.js` | 149 |
@@ -51,11 +51,11 @@
 
 | المجلد/الملف | الملفات | الأسطر |
 |---|---|---|
-| `api/` | 2 | 2667 |
+| `api/` | 2 | 2681 |
 | `config.dart` | 1 | 69 |
 | `main.dart` | 1 | 289 |
-| `models/` | 12 | 3181 |
-| `screens/` | 22 | 24934 |
+| `models/` | 13 | 3385 |
+| `screens/` | 23 | 25418 |
 | `state/` | 19 | 1901 |
 | `theme.dart` | 1 | 296 |
 | `widgets/` | 15 | 5508 |
@@ -69,8 +69,8 @@
 | رفع صورة أو وسيط | `server/src/middleware/upload.js:167` · `server/src/services/cloudinary.service.js:194` |
 | الصلاحيات والمصادقة | `server/src/middleware/auth.js:47` · `server/src/routes/admin.routes.js:25` |
 | بثّ لحظي (Socket.IO) | `server/src/realtime/index.js:27` · `server/src/routes/admin.routes.js:128` |
-| واجهة الويب | `web/app.js:381` · `web/admin.js` · `web/api.js:60` |
-| تطبيق الموبايل | `mobile/lib/api/negev_api.dart:47` · `mobile/lib/screens/` · `mobile/lib/models/` |
+| واجهة الويب | `web/app.js:399` · `web/admin.js` · `web/api.js:60` |
+| تطبيق الموبايل | `mobile/lib/api/negev_api.dart:48` · `mobile/lib/screens/` · `mobile/lib/models/` |
 
 قاعدة الطبقات: المسار يتحقق والخدمة تستعلم — لا SQL خارج `server/src/services/`، ولا `req`/`res` داخلها.
 
