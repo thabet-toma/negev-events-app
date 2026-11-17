@@ -331,6 +331,7 @@
         <h2 class="featured-events-title" id="drawerFeaturedEventsTitle"><span class="featured-star-gold" aria-hidden="true">★</span><span>الأعراس المميزة</span></h2>
       </div>
       <div class="featured-events-track" id="drawerFeaturedEventsTrack"></div>
+      <div class="featured-events-dots" id="drawerFeaturedEventsDots" hidden></div>
     </section>
 
     <!-- Search input inside Drawer -->
@@ -496,13 +497,109 @@
         <div class="carousel-dots" id="storyCarouselDots" hidden></div>
       </section>
 
-      <!-- «الأعراس المميزة»: من GET /api/events/featured، شريط بطاقات كبيرة
-           بـscroll-snap وإطار ذهبي وبوستر كامل. يُخفى كاملاً عند الفراغ أو الفشل. -->
+      <!-- «الشريط الإخباري» (M1-W): شريط نصّ متحرّك من GET /api/stats/ticker،
+           منفصل تماماً عن شريط التعميم الحيّ (#broadcastTicker) أعلى الصفحة
+           وبلا أي مساس به. يُخفى كاملاً حين لا بند له، ويصير صفّاً قابلاً
+           للتمرير الأفقي حين يُطلب تقليل الحركة (styles.css). -->
+      <section class="home-news-ticker" id="homeNewsTicker" aria-label="الشريط الإخباري" hidden>
+        <div class="home-news-ticker-track" id="homeNewsTickerTrack"></div>
+      </section>
+
+      <!-- بطاقة الترحيب (M1-W): العنوان والرسالة من `home_welcome` في
+           GET /api/settings/public. الإغلاق يُحفظ ببصمة النصّ نفسه، فرسالة
+           جديدة تعود والقديمة تبقى مغلقة. تُخفى كاملاً حين لا ترحيب. -->
+      <section class="home-welcome-card" id="homeWelcomeCard" hidden aria-labelledby="homeWelcomeTitle">
+        <span class="home-welcome-icon" aria-hidden="true">🌷</span>
+        <div class="home-welcome-body">
+          <h2 class="home-welcome-title" id="homeWelcomeTitle"></h2>
+          <p class="home-welcome-message" id="homeWelcomeMessage"></p>
+        </div>
+        <button type="button" class="home-welcome-close" onclick="dismissHomeWelcome()" aria-label="إغلاق بطاقة الترحيب">
+          <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+        </button>
+      </section>
+
+      <!-- «الأعراس المميزة»: من GET /api/events/featured، بطاقة واحدة كاملة
+           تُعرض في كل لحظة وتتبدّل في مكانها كل ٥ ثوانٍ، وتحتها نقاط تختار
+           البطاقة. البطاقات كلها في المستند (واحدة ظاهرة بـis-active)،
+           والقسم يُخفى كاملاً عند الفراغ أو الفشل. -->
       <section class="featured-events-section" id="featuredEventsSection" hidden aria-labelledby="featuredEventsTitle">
         <div class="featured-events-head">
           <h2 class="featured-events-title" id="featuredEventsTitle"><span class="featured-star-gold" aria-hidden="true">★</span><span>الأعراس المميزة</span></h2>
         </div>
         <div class="featured-events-track" id="featuredEventsTrack"></div>
+        <div class="featured-events-dots" id="featuredEventsDots" hidden></div>
+      </section>
+
+      <!-- «هذا الأسبوع قربك» (M1-W): من GET /api/events بنطاق اليوم ← اليوم
+           السابع بتوقيت القدس ومحافظة الاكتشاف نفسها التي تتبعها التغذية.
+           كروت مصغّرة أفقية، والقسم يُخفى عند الفراغ أو الفشل. -->
+      <section class="home-section home-week-section" id="homeWeekSection" hidden aria-labelledby="homeWeekTitle">
+        <div class="home-section-head">
+          <h2 class="home-section-title" id="homeWeekTitle">هذا الأسبوع قربك</h2>
+        </div>
+        <div class="home-compact-row" id="homeWeekRow"></div>
+      </section>
+
+      <!-- أزرار سريعة (M1-W): كلها دوالّ قائمة — لا منطق جديد هنا. -->
+      <section class="home-quick-actions" aria-label="اختصارات سريعة">
+        <button type="button" class="home-quick-action" onclick="switchTab('tabMyList')">
+          <span class="home-quick-icon" aria-hidden="true"><i class="fa-solid fa-envelope-open-text"></i></span>
+          <span class="home-quick-label">دعواتي</span>
+        </button>
+        <button type="button" class="home-quick-action" onclick="openAgendaModal()">
+          <span class="home-quick-icon" aria-hidden="true"><i class="fa-regular fa-calendar-days"></i></span>
+          <span class="home-quick-label">تقويمي</span>
+        </button>
+        <button type="button" class="home-quick-action" onclick="openAddEventModal()">
+          <span class="home-quick-icon" aria-hidden="true"><i class="fa-solid fa-plus"></i></span>
+          <span class="home-quick-label">أنشئ مناسبة</span>
+        </button>
+        <button type="button" class="home-quick-action" onclick="openInvitationStudioFromHome()">
+          <span class="home-quick-icon" aria-hidden="true"><i class="fa-solid fa-wand-magic-sparkles"></i></span>
+          <span class="home-quick-label">استوديو الدعوات</span>
+        </button>
+        <button type="button" class="home-quick-action" onclick="switchTab('tabServices')">
+          <span class="home-quick-icon" aria-hidden="true"><i class="fa-solid fa-screwdriver-wrench"></i></span>
+          <span class="home-quick-label">المزوّدون</span>
+        </button>
+      </section>
+
+      <!-- «جديد عنا» (M1-W): أحدث المناسبات المنشورة (`sort=newest`)، بالكرت
+           المصغّر نفسه الذي يستعمله «هذا الأسبوع قربك». -->
+      <section class="home-section home-newest-section" id="homeNewestSection" hidden aria-labelledby="homeNewestTitle">
+        <div class="home-section-head">
+          <h2 class="home-section-title" id="homeNewestTitle">جديد عنا</h2>
+          <span class="home-section-pill">أحدث المناسبات</span>
+        </div>
+        <div class="home-compact-row" id="homeNewestRow"></div>
+      </section>
+
+      <!-- «الأكثر تفاعلاً» (M1-W): من GET /api/events/trending، صفّ أفقي بإطار
+           ذهبي وشارات ترتيب — الأولى «🔥 الأكثر تفاعلاً» والبقية أرقامها. -->
+      <section class="home-trending-section" id="homeTrendingSection" hidden aria-labelledby="homeTrendingTitle">
+        <div class="home-section-head">
+          <h2 class="home-section-title" id="homeTrendingTitle">الأكثر تفاعلاً</h2>
+        </div>
+        <div class="home-trending-row" id="homeTrendingRow"></div>
+      </section>
+
+      <!-- فئات الخدمات (M1-W): بلاطات دائرية من GET /api/services/categories،
+           ونقرها يفتح «دليل خدمات المناسبات» على الفئة نفسها. -->
+      <section class="home-section home-categories-section" id="homeCategoriesSection" hidden aria-labelledby="homeCategoriesTitle">
+        <div class="home-section-head">
+          <h2 class="home-section-title" id="homeCategoriesTitle">دليل خدمات المناسبات</h2>
+        </div>
+        <div class="home-category-row" id="homeCategoryRow"></div>
+      </section>
+
+      <!-- دعوة المزوّدين (M1-W): الوجهة هي مسار تقديم عرض الخدمة القائم نفسه. -->
+      <section class="home-provider-cta" aria-label="أضف عملك إلى دليل الخدمات">
+        <div class="home-provider-cta-body">
+          <h2 class="home-provider-cta-title">هل تقدّم خدمة للمناسبات؟</h2>
+          <p class="home-provider-cta-sub">أضف عملك مجاناً وابدأ باستقبال الطلبات</p>
+        </div>
+        <button type="button" class="home-provider-cta-btn" onclick="openSubmitServiceModal()">أضف عملك</button>
       </section>
 
       <!-- Events List Feed — هياكل تحميل بدل الدوّارة (#85 خطوة 53) -->
