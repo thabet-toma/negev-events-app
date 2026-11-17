@@ -29,6 +29,27 @@ DateTime jerusalemToday([DateTime? now]) {
   return DateTime(local.year, local.month, local.day);
 }
 
+/// اللحظة نفسها في توقيت القدس — لصياغة «حُدّث HH:mm» في الشريط الإخباري كما
+/// يُصاغ اليوم الجداري في [jerusalemToday]. اللحظة الواصلة من الخادم UTC،
+/// وقراءتها بساعة الجهاز تعطي ساعةً أخرى على أي جهاز خارج المنطقة.
+DateTime jerusalemDateTime(DateTime instant) {
+  if (!_jerusalemLoaded) {
+    tzdata.initializeTimeZones();
+    _jerusalemLoaded = true;
+  }
+  return tz.TZDateTime.from(instant.toUtc(), tz.getLocation(_jerusalemZone));
+}
+
+/// اسم اليوم بالعربية (`DateTime.weekday`: الإثنين ١ … الأحد ٧) — من الجدول
+/// نفسه المستعمل في [arabicEventDate]، فلا جدول ثانٍ في أي ملف.
+String arabicWeekdayName(int weekday) => _arWeekdays[weekday - 1];
+
+/// اسم الشهر بالعربية (١ = يناير) — بنكهة `ar-EG` كالويب.
+String arabicMonthName(int month) => _arMonths[month - 1];
+
+/// رقم اليوم بالأرقام الهندية — نفس أرقام [arabicEventDate] الطويلة.
+String arabicDayNumber(int day) => _arabicIndicDigits(day);
+
 /// عدد الأيام من اليوم (بتوقيت القدس) إلى يوم المناسبة: 0 اليوم، 1 غداً، سالب
 /// لمن مضت، و`null` لتاريخ لا يُقرأ. المقارنة بـ`DateTime.utc` لأن فرق يومين
 /// جداريين في المنطقة نفسها قد يكون ٢٣ أو ٢٥ ساعة عند تغيير التوقيت الصيفي،
@@ -40,6 +61,73 @@ int? countdownDaysToEvent(String rawDate, {DateTime? now}) {
   final eventDay = DateTime.utc(parsed.year, parsed.month, parsed.day);
   final todayDay = DateTime.utc(today.year, today.month, today.day);
   return eventDay.difference(todayDay).inDays;
+}
+
+/// شارة العدّ التنازلي على زاوية الملصق: «اليوم» / «غداً» / «بعد n أيام» —
+/// **دالة محضة واحدة** تُختبر وحدها، ويستعملها كرت التغذية والبطاقة المميزة
+/// والبطاقة الأكثر تفاعلاً معاً، فلا حساب ثانٍ ولا نصّ ثانٍ في أي سطح.
+///
+/// الحساب على الأيام الجدارية في القدس ([countdownDaysToEvent])، و`null` = لا
+/// شارة: تاريخ لا يُقرأ، أو مناسبة مضت — «مناسبة سابقة» ليست شارة عدٍّ.
+/// و`urgent` (‏٣ أيام أو أقل) هو ما يجعلها حمراء في كل الأسطح باللون نفسه.
+({String label, bool urgent})? eventCountdownChip(String rawDate, {DateTime? now}) {
+  final days = countdownDaysToEvent(rawDate, now: now);
+  if (days == null || days < 0) return null;
+  final label = switch (days) {
+    0 => 'اليوم',
+    1 => 'غداً',
+    _ => 'بعد $days أيام',
+  };
+  return (label: label, urgent: days <= 3);
+}
+
+/// شارة العدّ التنازلي على زاوية الملصق — الشكل الواحد لكل الأسطح، والنصّ من
+/// [eventCountdownChip] وحده. والعزاء بلا عدّادات (قرار المواصفة #170): النغمة
+/// الوقورة لا تحتفل بعدد الأيام، فيُخفى الشارة كلّها عليها.
+class EventCountdownChip extends StatelessWidget {
+  const EventCountdownChip({
+    super.key,
+    required this.eventDate,
+    this.isSolemn = false,
+    this.now,
+  });
+
+  final String eventDate;
+  final bool isSolemn;
+
+  /// يُمرَّر في الاختبار ليُثبت الحساب على يوم معلوم.
+  final DateTime? now;
+
+  @override
+  Widget build(BuildContext context) {
+    if (isSolemn) return const SizedBox.shrink();
+    final chip = eventCountdownChip(eventDate, now: now);
+    if (chip == null) return const SizedBox.shrink();
+    final c = context.c;
+    final ground = chip.urgent ? c.dangerWash : c.surface;
+    final border = chip.urgent ? c.danger : c.line;
+    final ink = chip.urgent ? c.danger : c.inkSoft;
+    return Container(
+      key: const Key('event_countdown_chip'),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+      decoration: BoxDecoration(
+        color: ground,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: border),
+        boxShadow: const [
+          BoxShadow(color: Color(0x33000000), blurRadius: 6, offset: Offset(0, 2)),
+        ],
+      ),
+      child: Text(
+        chip.label,
+        style: TextStyle(
+          fontSize: 11.5,
+          fontWeight: FontWeight.w900,
+          color: ink,
+        ),
+      ),
+    );
+  }
 }
 
 /// ارتفاع احتياطي للكرت حين يضعه مستدعٍ تحت أب غير محدود الارتفاع. لا يُستعمل
@@ -160,18 +248,6 @@ class EventCard extends StatelessWidget {
   /// `null` يفتح ورقة التبريكات القائمة مباشرةً (سلوك ما قبل التذكرة).
   final VoidCallback? onMessagesTap;
 
-  /// عدد الأيام حتى يوم المناسبة بتوقيت القدس — «غداً» هي الحالة ١ وحدها.
-  int? get _countdownDays => countdownDaysToEvent(event.eventDate);
-
-  String get _countdownText {
-    final days = _countdownDays;
-    if (days == null) return '';
-    if (days == 0) return 'اليوم';
-    if (days == 1) return 'غداً';
-    if (days > 1) return 'باقي $days أيام';
-    return 'مناسبة سابقة';
-  }
-
   @override
   Widget build(BuildContext context) {
     final type = event.occasionType;
@@ -216,8 +292,6 @@ class EventCard extends StatelessWidget {
                         type: type,
                         toneColor: toneColor,
                         isSolemn: isSolemn,
-                        countdownText: _countdownText,
-                        countdownIsTomorrow: _countdownDays == 1,
                         onDetailsTap: onTap,
                         onCongratulationsTap: onCongratulationsTap,
                         onRemindTap: onRemindTap,
@@ -427,7 +501,22 @@ class CardMedia extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
-      child: content,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          content,
+          // شارة العدّ التنازلي على زاوية الملصق — نصّها وحده فوق الصورة،
+          // ولوح المعلومات يبقى شقيقاً تحتها بلا أي نصّ على الصورة نفسها.
+          PositionedDirectional(
+            top: 8,
+            start: 8,
+            child: EventCountdownChip(
+              eventDate: event.eventDate,
+              isSolemn: isSolemn,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -443,9 +532,7 @@ class CardCaption extends StatelessWidget {
     required this.type,
     required this.toneColor,
     required this.isSolemn,
-    required this.countdownText,
     required this.onDetailsTap,
-    this.countdownIsTomorrow = false,
     this.onCongratulationsTap,
     this.onRemindTap,
     this.onRsvpTap,
@@ -457,10 +544,6 @@ class CardCaption extends StatelessWidget {
   final OccasionType? type;
   final Color toneColor;
   final bool isSolemn;
-  final String countdownText;
-
-  /// «غداً» وحدها كبسولة حمراء (تذكرة #170) — يوم الغد هو ما يحرّك الناس فعلاً.
-  final bool countdownIsTomorrow;
   final VoidCallback onDetailsTap;
   final VoidCallback? onCongratulationsTap;
   final VoidCallback? onRemindTap;
@@ -500,7 +583,7 @@ class CardCaption extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-          // 1. صف الشارات: شارة النوع + عدّاد الأيام (إلا على العزاء)
+          // 1. صف الشارات: شارة النوع (والعدّ التنازلي على زاوية الملصق)
           Wrap(
             spacing: 8,
             runSpacing: 4,
@@ -511,13 +594,9 @@ class CardCaption extends StatelessWidget {
               if (event.isFeatured) const _FeaturedBadge(),
               if (type != null) _TypeBadge(type: type!, color: toneColor),
               // «انتهت» (#167): نهاية أيام المناسبة مضت — يحسبها الخادم بامتداد
-              // الأيام كاملاً (`is_ended`)، فتحلّ محلّ العدّاد ولا يقول الكرت
-              // «مناسبة سابقة» و«انتهت» معاً. وتُعرض لكل نوع: خبرٌ لا زينة،
-              // بخلاف العدّاد الذي يُخفى على العزاء.
-              if (event.isEnded)
-                const _DateChip(text: 'انتهت', ended: true)
-              else if (!isSolemn && countdownText.isNotEmpty)
-                _DateChip(text: countdownText, tomorrow: countdownIsTomorrow),
+              // الأيام كاملاً (`is_ended`). والعدّ التنازلي نفسه انتقل إلى زاوية
+              // الملصق (`EventCountdownChip`) في كل الأسطح، فلا نسختان منه هنا.
+              if (event.isEnded) const _DateChip(text: 'انتهت'),
             ],
           ),
           const SizedBox(height: 6),
@@ -726,40 +805,30 @@ class _CaptionActionButton extends StatelessWidget {
   }
 }
 
-/// شارة عدّاد/تاريخ. `tomorrow` يجعل «غداً» كبسولة حمراء (تذكرة #170) — لون
-/// واحد مشتقّ من النغمة نفسها المستعملة في الويب (`--danger`/`--danger-wash`)،
-/// لا شارة ثانية بنصّ آخر.
-///
-/// و«انتهت» (`ended`، تذكرة #167) بنبرة خافتة: نفس الشكل
-/// والحدود، واللون وحده يقول «مضت».
+/// شارة «انتهت» (تذكرة #167) بنبرة خافتة: الشكل نفسه، واللون وحده يقول «مضت».
+/// العدّ التنازلي لم يبقَ هنا — انتقل شارةً على زاوية الملصق
+/// ([EventCountdownChip]) في كل الأسطح، فلا شارتا عدّ لكرت واحد.
 class _DateChip extends StatelessWidget {
-  const _DateChip({required this.text, this.tomorrow = false, this.ended = false});
+  const _DateChip({required this.text});
 
   final String text;
-  final bool tomorrow;
-  final bool ended;
 
   @override
   Widget build(BuildContext context) {
     if (text.isEmpty) return const SizedBox.shrink();
-    final ground = ended
-        ? context.c.surfaceSunk
-        : (tomorrow ? context.c.dangerWash : context.c.successWash);
-    final border = ended ? context.c.line : (tomorrow ? context.c.danger : context.c.success);
-    final ink = ended ? context.c.inkFaint : (tomorrow ? context.c.danger : context.c.success);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3.5),
       decoration: BoxDecoration(
-        color: ground,
+        color: context.c.surfaceSunk,
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: border),
+        border: Border.all(color: context.c.line),
       ),
       child: Text(
         text,
         style: TextStyle(
           fontSize: 11.5,
           fontWeight: FontWeight.w800,
-          color: ink,
+          color: context.c.inkFaint,
         ),
       ),
     );

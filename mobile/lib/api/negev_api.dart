@@ -66,6 +66,10 @@ class NegevApi {
   /// [regionHeader] محافظة **هذا النداء** وحدها (قائمة مناسبات اليوم في
   /// «الأجندة»، تذكرة #175) — تُرسَل `X-Region` بدل المحافظة العامة، ويغلبها
   /// [allRegions] لأن العلَم نفسه توسيعٌ صريح.
+  ///
+  /// [sort] ترتيب النتائج الذي يحسمه الخادم — `newest` لأحدث المناسبات
+  /// (قسم «جديد عنا»). **يُرسَل كما هو ولا يُرتَّب شيء في العميل**، وخادم أقدم
+  /// يتجاهل المفتاح فيعيد ترتيبه القائم بدل أن يفشل الطلب.
   Future<EventsPage> listEvents({
     Object? town,
     Iterable<String>? towns,
@@ -79,6 +83,7 @@ class NegevApi {
     String? dateFrom,
     String? dateTo,
     String? regionHeader,
+    String? sort,
     int page = 1,
     int limit = 30,
   }) async {
@@ -131,6 +136,7 @@ class NegevApi {
     if (allRegions) query['all_regions'] = '1';
     if (dateFrom != null) query['date_from'] = dateFrom;
     if (dateTo != null) query['date_to'] = dateTo;
+    if (sort != null && sort.trim().isNotEmpty) query['sort'] = sort.trim();
 
     final data = await _client.get(
       '/api/events',
@@ -198,6 +204,25 @@ class NegevApi {
   Future<List<Event>> featuredEvents({bool allRegions = false}) async {
     final data = await _client.get(
       '/api/events/featured',
+      query: allRegions ? {'all_regions': '1'} : null,
+    );
+    final raw = data['events'];
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map<String, dynamic>>()
+        .map(Event.fromJson)
+        .toList();
+  }
+
+  /// «الأكثر تفاعلاً» — `GET /api/events/trending`، عام بلا رمز.
+  ///
+  /// شكل الردّ هو شكل `/api/events/featured` نفسه (`{ success, events }`) وصفوفه
+  /// بشكل كرت التغذية، فلا نموذج ثانٍ ولا ترتيب في العميل: الخادم وحده يرتّب
+  /// بالتفاعل ويقيّد بالمحافظة من ترويسة `X-Region` التي يرفقها [ApiClient].
+  /// و[allRegions] «كل المحافظات» لهذا النداء وحده، كسائر نداءات الرئيسية.
+  Future<List<Event>> trendingEvents({bool allRegions = false}) async {
+    final data = await _client.get(
+      '/api/events/trending',
       query: allRegions ? {'all_regions': '1'} : null,
     );
     final raw = data['events'];
@@ -1902,6 +1927,37 @@ class NegevApi {
       }
     } catch (_) {}
     return null;
+  }
+
+  /// بطاقة الترحيب في الرئيسية — `home_welcome: { title, message }` في
+  /// `GET /api/settings/public`.
+  ///
+  /// **موضعه في العقد جذر الردّ** بجانب `settings` لا داخله:
+  /// `{ success, settings: {...}, home_welcome: { title, message } | null }` —
+  /// وهو ما يقرأه الويب (`settings.home_welcome || data.home_welcome`). ويُقرأ
+  /// هنا الجذر أوّلاً، ولا يُنظر تحت `settings` إلا حين يغيب المفتاح من الجذر
+  /// تماماً (خادم أقدم). **الغياب لا القيمة `null`:** `home_welcome: null`
+  /// يعني «لا رسالة الآن» فلا يُستأنف نصّ قديم من تحت `settings`.
+  ///
+  /// `null` حين يغيب المفتاح، أو يكون الصفّ فارغاً من النصّين، أو يفشل النداء:
+  /// البطاقة قسمٌ إضافي لا يُسقط الرئيسية، فتختفي بصمت كما تختفي بقية أقسامها.
+  /// والنصّان يُعادان مقصوصين — التخزين المحلّي لإغلاق البطاقة يُفتح ببصمتهما،
+  /// فمسافةٌ زائدة في أحدهما لا تُعيد بطاقةً أُغلقت.
+  Future<({String title, String message})?> homeWelcome() async {
+    try {
+      final data = await _client.get('/api/settings/public');
+      final settings = data['settings'];
+      final raw = data.containsKey('home_welcome')
+          ? data['home_welcome']
+          : (settings is Map ? settings['home_welcome'] : null);
+      if (raw is! Map) return null;
+      final title = '${raw['title'] ?? ''}'.trim();
+      final message = '${raw['message'] ?? ''}'.trim();
+      if (title.isEmpty && message.isEmpty) return null;
+      return (title: title, message: message);
+    } catch (_) {
+      return null;
+    }
   }
 
   // --- التحليل السلوكي (issue #44) -----------------------------------

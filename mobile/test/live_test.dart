@@ -570,16 +570,38 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
     await tester.pumpAndSettle();
 
-    // مرساة موجبة قبل أي قياس: كرتٌ ومحورٌ على الشاشة فعلاً، وإلّا فقياسٌ على
-    // شجرة فارغة ينجح بلا معنى.
-    expect(find.byType(EventCard), findsOneWidget);
+    // مرساة موجبة قبل أي قياس: الرأس على الشاشة فعلاً، وإلّا فقياسٌ على شجرة
+    // فارغة ينجح بلا معنى. والرأس صار أطول من الشاشة (أقسام الرئيسية الجديدة)
+    // فلا كرت مبنيّ عند أول إطار — يُكشف بالنزول في القائمة.
     final feedPager = find.byKey(const Key('feed_pager'));
     expect(feedPager, findsOneWidget);
-
-    // ١. الرأس ينتهي عند أعلى الكرت أو قبله: لا يعلو الكرت ولا يكتب على صورته.
     final chip = find.byKey(const Key('live_chip'));
-    final chipBottom = tester.getRect(chip).bottom;
-    expect(tester.getRect(find.byType(EventCard)).top, greaterThanOrEqualTo(chipBottom));
+    expect(chip, findsOneWidget);
+
+    final feedScroll = tester.widget<CustomScrollView>(feedPager).controller!;
+    feedScroll.jumpTo(feedScroll.position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    expect(find.byType(EventCard), findsOneWidget);
+
+    // ١. الرأس ينتهي عند شريحة الكروت: رقاقة البث في شريحة الرأس وليست فوق
+    // الكروت — والشرائح متتالية في القائمة فلا تراكب.
+    expect(
+      find.descendant(
+        of: find.byType(SliverFixedExtentList),
+        matching: find.byKey(const Key('live_chip')),
+      ),
+      findsNothing,
+      reason: 'الرقاقة في الرأس لا فوق الكروت',
+    );
+    expect(
+      find.descendant(
+        of: find.byType(SliverFixedExtentList),
+        matching: find.byKey(const Key('feed_controls_bar')),
+      ),
+      findsNothing,
+    );
+    feedScroll.jumpTo(0);
+    await tester.pumpAndSettle();
 
     // ٢. الكروم صفّ واحد: كبسة الفلاتر ومجموعة الأزرار في حزمة أفقية واحدة.
     final filterChip = find.text('الفلاتر والبحث');

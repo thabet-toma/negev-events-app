@@ -65,7 +65,7 @@ class _HomeShellState extends State<HomeShell> {
   static const int _servicesTab = 2;
 
   /// فهرس وجهة «مناسباتي» — منشورات المستخدم ثمّ «قائمتي» تحتها.
-  static const int _myHubTab = 3;
+  static const int _myHubTab = AppServices.myHubTabIndex;
 
   /// فهرس وجهة «حسابي» — الشاشة القائمة نفسها، آخِر مقعد في الشريط.
   static const int _accountTab = 4;

@@ -37,6 +37,42 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// [featuredBody]/[featuredBodyFor] هما الردّ نفسه لـ`/api/events/featured`
 /// («الأعراس المميزة»)، وافتراضهما `{success: true, events: []}` — أي «لا نتيجة»،
 /// فلا يحمل اختبارٌ قسماً لم يطلبه.
+/// يكشف كروت التغذية ويعيد ارتفاع الرأس المقيس.
+///
+/// الرأس في الرئيسية الجديدة أطول من الشاشة، و`scrollCacheExtent: 0` في
+/// القائمة، فلا كرت مبنيّ إطلاقاً عند الموضع صفر — وهو ما كانت تفترضه
+/// الاختبارات القديمة. هنا ينزل بالقائمة حتى تُبنى الكروت، ثم يقيس الرأس من
+/// موضع أوّل كرت: `ارتفاع الرأس = الإزاحة + (أعلى الكرت − أعلى القائمة)`.
+Future<double> revealFeedHeaderExtent(WidgetTester tester) async {
+  final feed = find.byKey(const Key('feed_pager'));
+  final scroll = tester.widget<CustomScrollView>(feed).controller!;
+  for (var i = 0; i < 40 && find.byType(EventCard).evaluate().isEmpty; i++) {
+    await tester.drag(feed, const Offset(0, -500));
+    await tester.pump();
+  }
+  await tester.pumpAndSettle();
+  final cardTop = tester.getTopLeft(find.byType(EventCard).first).dy;
+  final feedTop = tester.getTopLeft(feed).dy;
+  return scroll.offset + cardTop - feedTop;
+}
+
+/// ينزل إلى آخر القائمة بلا إصبع — حتى تُبنى شريحة الكروت حين يكون فوقها غطاء
+/// (لوح الفلاتر) يمنع السحب.
+Future<void> jumpFeedToCards(WidgetTester tester) async {
+  final feed = find.byKey(const Key('feed_pager'));
+  final scroll = tester.widget<CustomScrollView>(feed).controller!;
+  scroll.jumpTo(scroll.position.maxScrollExtent);
+  await tester.pumpAndSettle();
+}
+
+/// يعيد القائمة إلى موضعها الأول بعد [revealFeedHeaderExtent] — رأس التغذية
+/// (وفيه كبسة الفلاتر) خارج الشاشة بعد النزول.
+Future<void> scrollFeedToTop(WidgetTester tester) async {
+  final feed = find.byKey(const Key('feed_pager'));
+  tester.widget<CustomScrollView>(feed).controller!.jumpTo(0);
+  await tester.pumpAndSettle();
+}
+
 NegevApi feedScreenApi({
   Object? eventsBody,
   List<Uri>? requests,
@@ -545,6 +581,9 @@ void main() {
         final feedScroll = tester.widget<CustomScrollView>(feedFinder);
         expect(feedScroll.scrollDirection, Axis.vertical);
 
+        // الرأس أطول من الشاشة، فلا شريحة كروت مبنيّة قبل النزول إليها.
+        await revealFeedHeaderExtent(tester);
+
         final cardsSliverFinder = find.byType(SliverFixedExtentList);
         expect(cardsSliverFinder, findsOneWidget);
 
@@ -577,7 +616,19 @@ void main() {
           findsNothing,
         );
 
+        // وهذا هو التوكيد الذي يحرس قرار الملحق فعلاً: شريحة الكروت تحمل
+        // **الكروت وحدها**، فعدد عناصرها يساوي عدد المناسبات بالضبط — لا صفحة
+        // زائدة لتعميم ولا لذيل تحميل. «يحتوي كروتاً» أعلاه يبقى صحيحاً حتى لو
+        // تسلّل عنصر ثالث بينها؛ هذا لا يبقى.
+        // مناسبتان في التجهيزة أعلاه، وتعميم واحد، وصفحة تالية متاحة — فلو
+        // بقي أيٌّ من الاثنين في شريحة الكروت لصار العدد ثلاثة أو أربعة.
+        // (يُقرأ هنا قبل العودة إلى القمّة: الشريحة لا تُبنى وهي خارج الشاشة.)
+        final cardsSliver =
+            tester.widget<SliverFixedExtentList>(cardsSliverFinder);
+        expect(cardsSliver.delegate.estimatedChildCount, 2);
+
         // لكنها موجودة في لوح الفلاتر والطبقات الخارجية (تظهر بالضغط على كبسة الفلاتر والبحث)
+        await scrollFeedToTop(tester);
         await tester.tap(find.text('الفلاتر والبحث'));
         await tester.pumpAndSettle();
 
@@ -586,16 +637,6 @@ void main() {
         // ولا زرّ «عرض المزيد» عائماً في أيّ طبقة: كان يغطّي صفّ أزرار الكرت،
         // والصفحة التالية تُجلب تلقائياً من `_onFeedScroll`.
         expect(find.text('عرض المزيد'), findsNothing);
-
-        // وهذا هو التوكيد الذي يحرس قرار الملحق فعلاً: شريحة الكروت تحمل
-        // **الكروت وحدها**، فعدد عناصرها يساوي عدد المناسبات بالضبط — لا صفحة
-        // زائدة لتعميم ولا لذيل تحميل. «يحتوي كروتاً» أعلاه يبقى صحيحاً حتى لو
-        // تسلّل عنصر ثالث بينها؛ هذا لا يبقى.
-        // مناسبتان في التجهيزة أعلاه، وتعميم واحد، وصفحة تالية متاحة — فلو
-        // بقي أيٌّ من الاثنين في شريحة الكروت لصار العدد ثلاثة أو أربعة.
-        final cardsSliver =
-            tester.widget<SliverFixedExtentList>(cardsSliverFinder);
-        expect(cardsSliver.delegate.estimatedChildCount, 2);
       },
     );
 
@@ -930,6 +971,8 @@ void main() {
         services.savedChange.addListener(() => savedSignals++);
         await tester.pumpWidget(services);
         await tester.pumpAndSettle();
+        // الرأس أطول من الشاشة: ننزل إلى الكروت قبل قراءة كرتها وأزرارها.
+        await revealFeedHeaderExtent(tester);
         Event cardEvent() => tester.widget<EventCard>(find.byType(EventCard)).event;
         expect(cardEvent().followersCount, 20);
         expect(find.byIcon(Icons.check_circle_outline), findsOneWidget);
@@ -1043,38 +1086,72 @@ void main() {
       expect(countdownDaysToEvent('ليس تاريخاً', now: now), isNull);
     });
 
-    testWidgets('«غداً» is the only red capsule: tomorrow is red, today is not', (tester) async {
+    // شارة العدّ التنازلي على زاوية الملصق (البند ١٠ من الرئيسية الجديدة):
+    // «اليوم»/«غداً»/«بعد n أيام» بحسب الأيام الجدارية في القدس، حمراء حين
+    // تبقّى ثلاثة أيام أو أقل، ولا شارة إطلاقاً لمناسبة مضت.
+    testWidgets('شارة العدّ التنازلي على الملصق حمراء حتى ثلاثة أيام، ولا شارة لمن مضى',
+        (tester) async {
       Map<String, dynamic> onDay(DateTime day) {
         final key = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
         return {...actingEventJson(), 'id': 620 + day.day, 'event_date': key};
       }
 
-      // «الغد» بتوقيت القدس — نفس القاعدة التي يطبّقها الكرت.
       final today = jerusalemToday();
-      final tomorrow = DateTime(today.year, today.month, today.day + 1);
+      DateTime plus(int days) => DateTime(today.year, today.month, today.day + days);
 
-      await tester.pumpWidget(wrapCard(EventCard(
-        event: Event.fromJson(onDay(tomorrow)),
-        onTap: () {},
-      )));
-      final tomorrowChip = tester.widget<Text>(find.text('غداً'));
-      expect(
-        tomorrowChip.style?.color,
-        NegevPalette.light.danger,
-        reason: 'كبسولة «غداً» حمراء وحدها',
-      );
-
+      // اليوم: «اليوم» حمراء.
       await tester.pumpWidget(wrapCard(EventCard(
         event: Event.fromJson(onDay(today)),
         onTap: () {},
       )));
       expect(find.text('اليوم'), findsOneWidget);
-      expect(find.text('غداً'), findsNothing);
       expect(
         tester.widget<Text>(find.text('اليوم')).style?.color,
-        NegevPalette.light.success,
-        reason: 'شارة اليوم تبقى خضراء — الأحمر للغد وحده',
+        NegevPalette.light.danger,
+        reason: 'ثلاثة أيام أو أقل = حمراء',
       );
+
+      // غداً: «غداً» حمراء كذلك.
+      await tester.pumpWidget(wrapCard(EventCard(
+        event: Event.fromJson(onDay(plus(1))),
+        onTap: () {},
+      )));
+      expect(find.text('غداً'), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.text('غداً')).style?.color,
+        NegevPalette.light.danger,
+      );
+
+      // بعد ثلاثة أيام: ما زالت حمراء.
+      await tester.pumpWidget(wrapCard(EventCard(
+        event: Event.fromJson(onDay(plus(3))),
+        onTap: () {},
+      )));
+      expect(find.text('بعد 3 أيام'), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.text('بعد 3 أيام')).style?.color,
+        NegevPalette.light.danger,
+        reason: 'الحدّ ثلاثة أيام شاملةً',
+      );
+
+      // بعد أربعة: الشارة باقية بلا أحمر.
+      await tester.pumpWidget(wrapCard(EventCard(
+        event: Event.fromJson(onDay(plus(4))),
+        onTap: () {},
+      )));
+      expect(find.text('بعد 4 أيام'), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.text('بعد 4 أيام')).style?.color,
+        isNot(NegevPalette.light.danger),
+      );
+
+      // مناسبة مضت: لا شارة إطلاقاً (الودجت نفسها لا ترسم حاوية).
+      await tester.pumpWidget(wrapCard(EventCard(
+        event: Event.fromJson(onDay(plus(-1))),
+        onTap: () {},
+      )));
+      expect(find.byKey(const Key('event_countdown_chip')), findsNothing,
+          reason: 'المنتهية لا شارة عدٍّ لها');
     });
 
     testWidgets(
@@ -1285,23 +1362,21 @@ void main() {
         final feedScroll = tester
             .widget<CustomScrollView>(find.byKey(const Key('feed_pager')))
             .controller!;
-        final headerExtent = tester.getTopLeft(find.byType(EventCard).first).dy -
-            tester.getTopLeft(find.byKey(const Key('feed_pager'))).dy;
-        final cardExtent =
-            tester.getSize(find.byKey(const Key('feed_pager'))).height;
-        final thirdCardOffset = headerExtent + 2 * cardExtent;
-        feedScroll.jumpTo(thirdCardOffset);
+        // الرأس أطول من الشاشة، فلا كرت مبنيّ عند الموضع صفر: ننزل إلى آخر
+        // القائمة ثم نفتح المناسبة من الكرت الظاهر.
+        feedScroll.jumpTo(feedScroll.position.maxScrollExtent);
         await tester.pumpAndSettle();
-        expect(feedScroll.offset, closeTo(thirdCardOffset, 1));
+        final before = feedScroll.offset;
+        expect(before, greaterThan(0), reason: 'الكرت الظاهر ليس الأول');
 
-        // فتح المناسبة من الكرت الثالث ثم الرجوع — المسار نفسه الذي كان يعيد
+        // فتح المناسبة من الكرت الظاهر ثم الرجوع — المسار نفسه الذي كان يعيد
         // المستخدم إلى أوّل كرت (`_loadFirstPage` ← `jumpTo(0)`).
         await tester.tap(find.byType(CardMedia).last);
         await tester.pumpAndSettle();
         tester.state<NavigatorState>(find.byType(Navigator).first).pop();
         await tester.pumpAndSettle();
 
-        expect(feedScroll.offset, closeTo(thirdCardOffset, 1));
+        expect(feedScroll.offset, closeTo(before, 1));
       },
     );
 
@@ -1784,8 +1859,8 @@ void main() {
       final feedScroll = tester
           .widget<CustomScrollView>(find.byKey(const Key('feed_pager')))
           .controller!;
-      final headerExtent = tester.getTopLeft(find.byType(EventCard).first).dy -
-          tester.getTopLeft(find.byKey(const Key('feed_pager'))).dy;
+      // الرأس أطول من الشاشة: ارتفاعه يُقاس بعد النزول إلى أوّل كرت.
+      final headerExtent = await revealFeedHeaderExtent(tester);
       final cardExtent =
           tester.getSize(find.byKey(const Key('feed_pager'))).height;
       final thirdCardOffset = headerExtent + 2 * cardExtent;
@@ -1796,6 +1871,7 @@ void main() {
       // الكرت في التغذية تحمل النصّ نفسه). نفتح اللوح من الرأس ثم ننتقل إلى
       // الكرت الثالث قبل التطبيق، لنثبت أن «رجوع لنتائجك السابقة» يعيد الكرت
       // الثالث نفسه لا الأول.
+      await scrollFeedToTop(tester);
       await tester.tap(find.text('الفلاتر والبحث'));
       await tester.pumpAndSettle();
       feedScroll.jumpTo(thirdCardOffset);
@@ -1809,6 +1885,9 @@ void main() {
 
       // نتائج الفلتر الجديد (كرت واحد) ورسالة الرجوع بعد وصولها.
       expect(find.text('↩ رجوع لنتائجك السابقة'), findsOneWidget);
+      // الفلتر الجديد يعيد القائمة إلى أوّلها، والرأس أطول من الشاشة فلا
+      // شريحة كروت مبنيّة: ننزل إليها (بلا إصبع — اللوح مفتوح فوقها) ثم نقرأ عددها.
+      await jumpFeedToCards(tester);
       expect(
         tester
             .widget<SliverFixedExtentList>(find.byType(SliverFixedExtentList))
@@ -2186,16 +2265,21 @@ void main() {
           reason: 'ستوريات carousel ثم bar بالترتيب داخل البطاقة الكبيرة',
         );
 
+        // البطاقة الكبيرة في رأس التغذية لا داخل شريحة الكروت: ننزل إلى
+        // الكروت (الرأس أطول من الشاشة) ثم نتأكّد أنها ليست بينها.
+        final headerExtent = await revealFeedHeaderExtent(tester);
+        expect(cardFor(301), findsOneWidget, reason: 'أوّل كرت ظاهر بعد الرأس');
         expect(
-          tester.getBottomLeft(carousel).dy,
-          lessThanOrEqualTo(tester.getTopLeft(cardFor(301)).dy),
+          find.descendant(
+            of: find.byType(SliverFixedExtentList),
+            matching: carousel,
+          ),
+          findsNothing,
           reason: 'البطاقة الكبيرة أعلى الكروت في التغذية لا داخلها ولا تحتها',
         );
 
         // 3) الإعلان بعد الثامن: الصفحة ٧ ما زالت الكرت الثامن (رقم ٣٠٨)،
         // والصفحة ٨ إعلان، والصفحة ٩ الكرت التاسع (٣٠٩).
-        final headerExtent = tester.getTopLeft(cardFor(301)).dy -
-            tester.getTopLeft(find.byKey(const Key('feed_pager'))).dy;
         final cardExtent =
             tester.getSize(find.byKey(const Key('feed_pager'))).height;
 
@@ -2262,10 +2346,11 @@ void main() {
         );
         await pumpPlacementFeed(tester, api: api);
 
-        final headerExtent = tester.getTopLeft(cardFor(301)).dy -
-            tester.getTopLeft(find.byKey(const Key('feed_pager'))).dy;
+        final headerExtent = await revealFeedHeaderExtent(tester);
         final cardExtent =
             tester.getSize(find.byKey(const Key('feed_pager'))).height;
+        // الستوريات في الرأس: نعود إلى القمّة قبل كبس البطاقة الكبيرة.
+        await scrollFeedToTop(tester);
 
         List<Uri> clicksTo(int storyId) =>
             requests.where((uri) => uri.path == '/api/stories/$storyId/click').toList();
@@ -2346,8 +2431,7 @@ void main() {
         );
         await pumpPlacementFeed(tester, api: api);
 
-        final headerExtent = tester.getTopLeft(cardFor(301)).dy -
-            tester.getTopLeft(find.byKey(const Key('feed_pager'))).dy;
+        final headerExtent = await revealFeedHeaderExtent(tester);
         final cardExtent =
             tester.getSize(find.byKey(const Key('feed_pager'))).height;
 
@@ -2496,7 +2580,7 @@ void main() {
         };
 
     testWidgets(
-      'ثلاث مناسبات مميزة من featuredEvents ترسم الكاروسيل بـ viewportFraction ~0.86 وإطار ذهبي وبوستر contain على cardGround',
+      'ثلاث مناسبات مميزة: بطاقة واحدة بعرض الشاشة (viewportFraction 1.0) وإطار ذهبي وبوستر contain على cardGround',
       (tester) async {
         final api = feedScreenApi(featuredBody: featuredReply());
         await pumpFeedScreen(tester, api, disableAnimations: true);
@@ -2514,18 +2598,15 @@ void main() {
         final pageView = tester.widget<PageView>(
           find.descendant(of: carousel, matching: find.byType(PageView)),
         );
-        expect(pageView.controller?.viewportFraction, closeTo(0.86, 0.01));
+        expect(pageView.controller?.viewportFraction, 1.0,
+            reason: 'بطاقة واحدة بعرض الشاشة لكل صفحة — لا طرف بطاقة ثانية');
 
-        // البطاقة الأولى ظاهرة وطرف الثانية ظاهر معها بترتيب الخادم في RTL.
+        // البطاقة الأولى وحدها مبنيّة: الثانية لا تُبنى قبل السحب إليها.
         expect(find.byKey(const Key('featured_card_701')), findsOneWidget);
-        expect(find.byKey(const Key('featured_card_702')), findsOneWidget);
-        final x0 = tester.getTopLeft(find.byKey(const Key('featured_card_701'))).dx;
-        final x1 = tester.getTopLeft(find.byKey(const Key('featured_card_702'))).dx;
-        expect(x0 > x1, isTrue,
-            reason: 'الترتيب 701 ثم 702 من اليمين إلى اليسار كما وصل');
+        expect(find.byKey(const Key('featured_card_702')), findsNothing);
 
         // بوستر المناسبة بـ BoxFit.contain على cardGround، وإطار ذهبي cardGold،
-        // وتحته cardHeadline وسطر التاريخ — البلدة.
+        // ووسام «✦ مناسبة مميزة»، وتحته cardHeadline وسطر المكان · التاريخ.
         final card701 = find.byKey(const Key('featured_card_701'));
         final img = tester.widget<Image>(
           find.descendant(of: card701, matching: find.byType(Image)),
@@ -2541,16 +2622,29 @@ void main() {
         final shape = cardMaterial.shape as RoundedRectangleBorder;
         expect(shape.side.color, cardGold);
         expect(
+          find.descendant(of: card701, matching: find.text('✦ مناسبة مميزة')),
+          findsOneWidget,
+        );
+        expect(
           find.descendant(of: card701, matching: find.text('سالم')),
           findsOneWidget,
         );
         expect(
           find.descendant(
             of: card701,
-            matching: find.text('${arabicEventDate('2026-12-01')} — رهط'),
+            matching: find.textContaining(arabicEventDate('2026-12-01')),
           ),
           findsOneWidget,
         );
+
+        // النقاط تحت البطاقة: ثلاث نقاط، الأولى مختارة، والنقر على الثالثة
+        // ينقل إليها.
+        expect(find.byKey(const Key('featured_dot_0')), findsOneWidget);
+        expect(find.byKey(const Key('featured_dot_2')), findsOneWidget);
+        await tester.tap(find.byKey(const Key('featured_dot_2')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('featured_card_703')), findsOneWidget,
+            reason: 'النقاط تنقّل لا زينة');
       },
     );
 
@@ -2584,6 +2678,8 @@ void main() {
         );
         await tester.pumpAndSettle();
         expect(find.byKey(const Key('featured_carousel')), findsNothing);
+        // التغذية نفسها سليمة: كرتها يُبنى بعد النزول إلى الكروت.
+        await revealFeedHeaderExtent(tester);
         expect(find.byType(EventCard), findsOneWidget);
       },
     );
@@ -2605,7 +2701,7 @@ void main() {
     );
 
     testWidgets(
-      'الأعراس المميزة تتقدّم تلقائياً كل ٤ ثوانٍ، وزرّ التحديث يعيد جلبها',
+      'الأعراس المميزة تتقدّم تلقائياً كل ٥ ثوانٍ، وزرّ التحديث يعيد جلبها',
       (tester) async {
         final requests = <Uri>[];
         final api = feedScreenApi(
@@ -2622,8 +2718,13 @@ void main() {
             );
         expect(pageView().controller?.page?.round() ?? 0, 0);
 
+        // لا تقدّم قبل الخمس ثوانٍ، ثم ينتقل إلى الثانية.
         await tester.pump(const Duration(seconds: 4));
-        await tester.pump(const Duration(milliseconds: 400));
+        await tester.pump(const Duration(milliseconds: 500));
+        expect(pageView().controller?.page?.round() ?? 0, 0,
+            reason: 'التقدّم كل خمس ثوانٍ لا أربع');
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pump(const Duration(milliseconds: 500));
         expect(pageView().controller?.page?.round(), 1);
 
         final beforeRefresh =
@@ -2635,6 +2736,43 @@ void main() {
             requests.where((u) => u.path.endsWith('/api/events/featured')).length;
         expect(afterRefresh, beforeRefresh + 1,
             reason: 'زرّ التحديث في صفّ الكروم يعيد جلب الأعراس المميزة');
+      },
+    );
+
+    testWidgets(
+      'بطاقة مميزة واحدة: لا مؤقّت تقدّم ولا نقاط تحتها',
+      (tester) async {
+        final api = feedScreenApi(featuredBody: featuredReply(ids: [701]));
+        await pumpFeedScreen(tester, api);
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('featured_card_701')), findsOneWidget);
+        expect(find.byKey(const Key('featured_dot_0')), findsNothing,
+            reason: 'بطاقة واحدة = لا نقاط');
+
+        // عشر ثوانٍ تمرّ ولا شيء يتغيّر: لا مؤقّت أصلاً لبطاقة واحدة.
+        await tester.pump(const Duration(seconds: 10));
+        expect(find.byKey(const Key('featured_card_701')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'تقليل الحركة يوقف التقدّم التلقائي للأعراس المميزة',
+      (tester) async {
+        final api = feedScreenApi(featuredBody: featuredReply(ids: [701, 702, 703]));
+        await pumpFeedScreen(tester, api, disableAnimations: true);
+        await tester.pumpAndSettle();
+
+        PageView pageView() => tester.widget<PageView>(
+              find.descendant(
+                of: find.byKey(const Key('featured_carousel')),
+                matching: find.byType(PageView),
+              ),
+            );
+        await tester.pump(const Duration(seconds: 10));
+        await tester.pump(const Duration(milliseconds: 500));
+        expect(pageView().controller?.page?.round() ?? 0, 0,
+            reason: 'disableAnimations = لا مؤقّت إطلاقاً');
       },
     );
   });
@@ -2736,39 +2874,30 @@ void main() {
               (w) => w is EventCard && w.event.id == id,
             );
 
-        // (أ) عند الفتح الرأس ظاهر، والبطاقة الكبيرة والأعراس المميزة فوق الكرت الأول،
-        // ولا شريط إحصائيات.
+        // (أ) عند الفتح الرأس ظاهر: البطاقة الكبيرة ثم الأعراس المميزة، ولا
+        // شريط إحصائيات. والرأس أطول من الشاشة، فلا كرت مبنيّ بعد.
         final bigCard = find.byKey(const Key('story_carousel'));
         final featuredCarousel = find.byKey(const Key('featured_carousel'));
         expect(bigCard, findsOneWidget);
         expect(featuredCarousel, findsOneWidget);
         expect(find.byKey(const Key('home_stats_ticker')), findsNothing);
         expect(find.text('المجموع 16'), findsNothing);
-        expect(cardFor(801), findsOneWidget);
         expect(
           tester.getBottomLeft(bigCard).dy,
           lessThanOrEqualTo(tester.getTopLeft(featuredCarousel).dy),
         );
-        expect(
-          tester.getBottomLeft(featuredCarousel).dy,
-          lessThanOrEqualTo(tester.getTopLeft(cardFor(801)).dy),
-        );
+        expect(cardFor(801), findsNothing,
+            reason: 'الرأس أطول من الشاشة، فلا كرت في أول إطار');
 
-        // (ب) السحب للأعلى على الكرت نفسه بقدر الرأس: يخرج الرأس، ويملأ الكرت
-        // مساحة التغذية (±1)، ويكون ارتفاع CardMedia أكبر من 150 منطقياً.
+        // (ب) النزول إلى الكروت أوّلاً لقياس الرأس، ثم العودة إلى القمّة
+        // والسحب على الرأس نفسه بقدره: يخرج الرأس ويملأ الكرت التغذية.
         final feedRect = tester.getRect(find.byKey(const Key('feed_pager')));
-        final firstCardRect = tester.getRect(cardFor(801));
-        final headerHeight = firstCardRect.top -
-            tester.getTopLeft(find.byType(EventsScreen)).dy;
-        expect(headerHeight, greaterThan(100));
+        final headerHeight = await revealFeedHeaderExtent(tester);
+        expect(headerHeight, greaterThan(feedRect.height),
+            reason: 'الرأس أطول من مساحة التغذية');
+        await scrollFeedToTop(tester);
 
-        // نقطة السحب داخل الجزء المرئي من الكرت الأول لا على الرأس.
-        final visibleTop = firstCardRect.top.clamp(feedRect.top, feedRect.bottom);
-        final visibleBottom =
-            firstCardRect.bottom.clamp(feedRect.top, feedRect.bottom);
-        final cardDragStart =
-            Offset(firstCardRect.center.dx, (visibleTop + visibleBottom) / 2);
-        await tester.dragFrom(cardDragStart, Offset(0, -headerHeight));
+        await tester.dragFrom(feedRect.center, Offset(0, -headerHeight));
         await tester.pumpAndSettle();
 
         final bigCardOffScreen = bigCard.evaluate().isEmpty ||
@@ -2780,6 +2909,7 @@ void main() {
 
         final feedHeight =
             tester.getSize(find.byKey(const Key('feed_pager'))).height;
+        expect(cardFor(801), findsOneWidget);
         final cardHeight = tester.getSize(cardFor(801)).height;
         expect(
           (cardHeight - feedHeight).abs(),
@@ -2819,8 +2949,8 @@ void main() {
         expect(featuredCarousel, findsOneWidget);
         expect(tester.getTopLeft(bigCard).dy, greaterThanOrEqualTo(0));
         expect(
-          tester.getBottomLeft(featuredCarousel).dy,
-          lessThanOrEqualTo(tester.getTopLeft(cardFor(801)).dy),
+          tester.getTopLeft(featuredCarousel).dy,
+          greaterThanOrEqualTo(0),
         );
 
         // (هـ) لا overflow طوال الاختبار.
