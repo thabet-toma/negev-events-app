@@ -4529,6 +4529,35 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
   background: var(--line-soft);
 }
 
+/* الصفّ صار دورَه `role="button"` بـ`tabindex` (لوحة المفاتيح)، فحلقة تركيزه
+   ظاهرة هنا كسائر الأزرار في الصفحة. */
+.agenda-event-item:focus-visible {
+  outline: 2px solid var(--sky);
+  outline-offset: 2px;
+}
+
+/* زرّ «إعادة المحاولة» في فشل «القادم هذا الشهر» — أصغر من أزرار الصفحة
+   الكبرى لأن موضعه داخل قائمة الأجندة، وبألوان اللوحة نفسها. */
+.agenda-retry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 8px 18px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-main);
+  font-weight: 800;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.agenda-retry-btn:hover {
+  background: var(--surface-sunk);
+}
+
 .agenda-event-title {
   font-weight: 800;
   font-size: 0.95rem;
@@ -4539,6 +4568,21 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
   font-size: 0.82rem;
   color: var(--ink-soft);
   margin-top: 2px;
+}
+
+/* «القادم هذا الشهر» تحت قائمة اليوم: رأس كل يوم ثم مناسباته بصفّ اليوم نفسه،
+   فلا شكل ثانٍ للصفّ الواحد ولا نسخة ثانية من أنماطه. */
+.agenda-upcoming-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.agenda-upcoming-day {
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: var(--ink-soft);
+  padding: 4px 2px 0;
 }
 
 /* ==========================================================================

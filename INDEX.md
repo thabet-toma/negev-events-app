@@ -13,8 +13,8 @@
 | الوحدة | الملفات | الأسطر |
 |---|---|---|
 | `server/src` | 83 | 29944 |
-| `web` | 8 | 23609 |
-| `mobile/lib` | 73 | 38845 |
+| `web` | 8 | 23761 |
+| `mobile/lib` | 73 | 39115 |
 
 ### توزيع `server/src`
 
@@ -38,7 +38,7 @@
 |---|---|
 | `admin.js` | 8621 |
 | `api.js` | 137 |
-| `app.js` | 13970 |
+| `app.js` | 14122 |
 | `config.js` | 32 |
 | `occasionForm.js` | 361 |
 | `serve.js` | 149 |
@@ -55,7 +55,7 @@
 | `config.dart` | 1 | 69 |
 | `main.dart` | 1 | 289 |
 | `models/` | 12 | 3181 |
-| `screens/` | 22 | 24934 |
+| `screens/` | 22 | 25204 |
 | `state/` | 19 | 1901 |
 | `theme.dart` | 1 | 296 |
 | `widgets/` | 15 | 5508 |

@@ -2404,6 +2404,17 @@
         </div>
         <div id="agendaEventsList" class="agenda-events-list"></div>
       </div>
+
+      <!-- «القادم هذا الشهر»: مناسبات الشهر المعروض من اليوم (أو أول الشهر) إلى
+           آخره، مجمّعة تحت رأس كل يوم. شهرٌ مضى بكامله يُخفيه `renderAgendaMonthUpcoming`
+           بلا أي طلب. الشارة عدّ الخادم (`pagination.total`) لا طول ما وصل. -->
+      <div id="agendaMonthUpcoming" class="agenda-selected-day-section" hidden>
+        <div class="agenda-day-header">
+          <h4><i class="fa-solid fa-arrow-trend-up" style="color:var(--gold);" aria-hidden="true"></i> القادم هذا الشهر</h4>
+          <span id="agendaMonthUpcomingCount" class="town-badge">…</span>
+        </div>
+        <div id="agendaMonthUpcomingList" class="agenda-events-list"></div>
+      </div>
     </div>
   </div>
 
