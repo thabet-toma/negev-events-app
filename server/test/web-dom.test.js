@@ -3134,12 +3134,13 @@ async function run() {
     assert.strictEqual(order.length, 14, 'twelve cards plus two ads (after 5 and 10)');
   });
 
-  await test('the feed ad opens the feed story list for the view, and its CTA posts the click — not the bar list', async () => {
+  await test('the feed ad media navigates to target_url when present and opens the feed viewer when absent', async () => {
     const dom = buildEnv();
     await flushBoot();
+    const openedUrls = [];
     const stub = buildLiveHubFetchStub({ stories: placementStories() });
     dom.window.fetch = stub.fetchFn;
-    dom.window.open = () => ({});
+    dom.window.open = (url) => { openedUrls.push(url); return {}; };
     await dom.window.fetchStories();
 
     const doc = dom.window.document;
@@ -3149,58 +3150,71 @@ async function run() {
     assert.ok(adCard, 'the ninth-page ad card is rendered after eight cards');
     const media = adCard.querySelector('.feed-ad-media');
     assert.ok(
-      media.getAttribute('onclick').includes("openStoryViewer(0, 'feed')"),
-      'the ad media opens the viewer on the feed list — the same viewer that records the 2-second view'
+      media.getAttribute('onclick').includes('handleStoryCtaById(13)'),
+      'when target_url exists, clicking ad media records click and opens the link directly'
     );
-
-    dom.window.openStoryViewer(0, 'feed');
-    assert.strictEqual(
-      doc.getElementById('storyViewerTitle').textContent,
-      'إعلان أول',
-      'the opened slide is the feed story itself, not the first story of the bar strip'
-    );
-    assert.strictEqual(
-      doc.querySelectorAll('#storyProgressRow .story-progress-bar').length,
-      2,
-      'the viewer runs on the two feed stories alone'
-    );
-    dom.window.closeStoryViewer();
+    media.click();
+    await waitFor(() => stub.calls.some(call => call.path === '/api/stories/13/click') && openedUrls.length === 1);
+    assert.strictEqual(openedUrls[0], 'https://example.com/ad1');
+    assert.notStrictEqual(doc.getElementById('storyViewerOverlay').style.display, 'flex');
 
     const cta = adCard.querySelector('.feed-ad-cta');
     assert.ok(cta, 'a story with a target carries a CTA outside the viewer too');
     cta.click();
-    await waitFor(() => stub.calls.some(call => call.path === '/api/stories/13/click'));
-    assert.ok(
-      stub.calls.some(call => call.path === '/api/stories/13/click' && call.method === 'POST'),
-      'the ad CTA records the click from the feed position'
-    );
+    await waitFor(() => stub.calls.filter(call => call.path === '/api/stories/13/click').length === 2);
+
+    // Without target_url, clicking the feed ad media still opens the feed story viewer for image zoom + 2s view.
+    const noLinkPayload = {
+      success: true,
+      feed_ad_interval: 8,
+      stories: [
+        { id: 15, title: 'إعلان بلا رابط', image: 'https://example.test/ad0.jpg', placement: 'feed', is_ad: true },
+        { id: 16, title: 'إعلان ثانٍ بلا رابط', image: 'https://example.test/ad2.jpg', placement: 'feed', is_ad: true }
+      ]
+    };
+    dom.window.fetch = buildLiveHubFetchStub({ stories: noLinkPayload }).fetchFn;
+    await dom.window.fetchStories();
+    dom.window.renderEvents(placementEvents(9));
+    const noLinkMedia = doc.querySelector('#eventsContainer .feed-ad-card .feed-ad-media');
+    assert.ok(noLinkMedia.getAttribute('onclick').includes("openStoryViewer(0, 'feed')"));
+    dom.window.openStoryViewer(0, 'feed');
+    assert.strictEqual(doc.getElementById('storyViewerTitle').textContent, 'إعلان بلا رابط');
+    assert.strictEqual(doc.querySelectorAll('#storyProgressRow .story-progress-bar').length, 2);
+    dom.window.closeStoryViewer();
   });
 
-  await test('the big promo card opens the promo story list (carousel then bar), and its CTA posts that story\'s click', async () => {
+  await test('the big promo card opens target_url when present and opens the promo viewer when absent', async () => {
     const dom = buildEnv();
     await flushBoot();
+    const openedUrls = [];
     const stub = buildLiveHubFetchStub({ stories: placementStories() });
     dom.window.fetch = stub.fetchFn;
-    dom.window.open = () => ({});
+    dom.window.open = (url) => { openedUrls.push(url); return {}; };
     await dom.window.fetchStories();
 
     const doc = dom.window.document;
     const viewport = doc.querySelector('#storyCarouselBox .carousel-viewport');
     assert.ok(viewport, 'expected .carousel-viewport inside #storyCarouselBox');
+    // Slide 0 (id: 12) has target_url -> tapping image opens link and posts click without opening viewer.
     viewport.click();
-    assert.strictEqual(doc.getElementById('storyViewerOverlay').style.display, 'flex', 'tapping image opens the story viewer');
-    assert.strictEqual(doc.getElementById('storyViewerTitle').textContent, 'بانر الكاروسيل', 'starts on the first carousel story');
-    assert.strictEqual(doc.querySelectorAll('#storyProgressRow .story-progress-bar').length, 2, 'viewer runs carousel + bar stories');
-    dom.window.closeStoryViewer();
+    await waitFor(() => stub.calls.some(call => call.path === '/api/stories/12/click') && openedUrls.length === 1);
+    assert.strictEqual(openedUrls[0], 'https://example.com/carousel');
+    assert.notStrictEqual(doc.getElementById('storyViewerOverlay').style.display, 'flex');
 
     const cta = doc.querySelector('#storyCarouselBox .carousel-slide[data-story-id="12"] .ad-cta');
     assert.ok(cta, 'a story with a target carries a CTA outside the viewer too');
     cta.click();
-    await waitFor(() => stub.calls.some(call => call.path === '/api/stories/12/click'));
-    assert.ok(
-      stub.calls.some(call => call.path === '/api/stories/12/click' && call.method === 'POST'),
-      'the promo CTA records the click'
-    );
+    await waitFor(() => stub.calls.filter(call => call.path === '/api/stories/12/click').length === 2);
+
+    // Slide 1 (id: 11, bar) has no target_url -> switching to slide 1 and clicking viewport opens story viewer.
+    const secondDot = doc.querySelectorAll('#storyCarouselDots .carousel-dot')[1];
+    assert.ok(secondDot, 'expected second dot for bar slide without target_url');
+    secondDot.click();
+    viewport.click();
+    assert.strictEqual(doc.getElementById('storyViewerOverlay').style.display, 'flex', 'tapping image without target_url opens the story viewer');
+    assert.strictEqual(doc.getElementById('storyViewerTitle').textContent, 'ستوري الشريط', 'starts on the tapped promo story');
+    assert.strictEqual(doc.querySelectorAll('#storyProgressRow .story-progress-bar').length, 2, 'viewer runs carousel + bar stories');
+    dom.window.closeStoryViewer();
   });
 
   await test('the drawer promo card mirrors carousel then bar stories, opens that list, and records its CTA click', async () => {

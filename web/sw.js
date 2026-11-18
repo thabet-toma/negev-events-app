@@ -62,8 +62,11 @@
  *
  * و`194.0` لإصلاح إظهار تحديثات الرئيسية على متصفّح الهاتف ونتائج البحث
  * مباشرةً ورموز فئات الخدمات (web/index.html وweb/styles.css وweb/app.js).
+ *
+ * و`195.0` لتحويل نقرة صورة الإعلان إلى الرابط المستهدف عند وجوده، وتكبير
+ * الصورة في عارض الستوري عند غياب الرابط (web/index.html وweb/app.js).
  */
-const CACHE_VERSION = '194.0';
+const CACHE_VERSION = '195.0';
 const CACHE_PREFIX = 'aarasna-shell-';
 const SHELL_CACHE = `${CACHE_PREFIX}${CACHE_VERSION}`;
 

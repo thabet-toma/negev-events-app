@@ -2397,9 +2397,8 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
           (context, index) {
             final entry = pages[index];
             final ad = entry.ad;
-            // إعلان بين الكروت: صفحة كاملة كالكرت. الصورة تفتح العارض
-            // (المشاهدة) والزرّ يسجّل النقرة ثم يفتح الرابط — الموضعان
-            // يُقاسان من هنا كما من الشريط والكاروسيل.
+            // إعلان بين الكروت: صفحة كاملة كالكرت. إن وُجد رابط هدفٍ فتحت الصورة
+            // والزرّ الرابط مباشرة بعد تسجيل النقرة، وإلا فتحت الصورة العارض.
             if (ad != null) {
               return _FeedAdCard(
                 story: ad,
@@ -3464,7 +3463,9 @@ class _BigStoryCardState extends State<_BigStoryCard> {
                               story.targetUrl != null && story.targetUrl!.isNotEmpty;
                           return GestureDetector(
                             key: Key('story_carousel_media_${story.id}'),
-                            onTap: () => widget.onOpen(index),
+                            onTap: () => hasTarget
+                                ? widget.onCta(story)
+                                : widget.onOpen(index),
                             behavior: HitTestBehavior.opaque,
                             child: Stack(
                               fit: StackFit.expand,
@@ -3611,8 +3612,8 @@ class _BigStoryCardState extends State<_BigStoryCard> {
 }
 
 /// صفحة إعلانٍ بين الكروت (تذكرة #173): ستوري موضع `feed` في صفحة كاملة من
-/// تغذية الالتقاط، بعد كل فاصل إعلان التغذية الذي يرسله الخادم. الصورة تفتح العارض
-/// (فالمشاهدة تُسجَّل بحدّ الثانيتين) والزرّ يسجّل النقرة ثم يفتح الرابط.
+/// تغذية الالتقاط، بعد كل فاصل إعلان التغذية الذي يرسله الخادم. إن وُجد رابط
+/// هدف فتحت الصورة والزرّ الرابط مباشرة بعد تسجيل النقرة، وإلا فتحت الصورة العارض.
 class _FeedAdCard extends StatelessWidget {
   const _FeedAdCard({
     required this.story,
@@ -3690,7 +3691,7 @@ class _FeedAdCard extends StatelessWidget {
             Flexible(
               child: GestureDetector(
                 key: Key('feed_ad_media_${story.id}'),
-                onTap: onOpen,
+                onTap: hasTarget ? onCta : onOpen,
                 behavior: HitTestBehavior.opaque,
                 child: SizedBox(
                   height: 220,

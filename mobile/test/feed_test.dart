@@ -2324,7 +2324,7 @@ void main() {
     );
 
     testWidgets(
-      'المشاهدة والنقر من الكاروسيل ومن الإعلان بين الكروت: كلٌّ يفتح العارض ويسجّل مشاهدة ونقرة',
+      'النقر على صورة أو زرّ إعلان له رابط يفتح الرابط ويسجّل النقرة، وغياب الرابط يفتح العارض للتكبير والمشاهدة',
       (tester) async {
         final launched = <MethodCall>[];
         const launcherChannel = MethodChannel('plugins.flutter.io/url_launcher');
@@ -2357,68 +2357,117 @@ void main() {
         List<Uri> viewsTo(int storyId) =>
             requests.where((uri) => uri.path == '/api/stories/$storyId/view').toList();
 
-        // 1) الكاروسيل: البانر يفتح العارض — وهو من يسجّل المشاهدة بعد ثانيتين.
+        // 1) الكاروسيل برابط (902): الضغط على الصورة نفسها يسجّل النقرة ويفتح الرابط مباشرة.
         await tester.tap(find.byKey(const Key('story_carousel_media_902')));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 100));
         expect(
           find.byType(StoryViewerScreen),
-          findsOneWidget,
-          reason: 'بانر الكاروسيل يفتح العارض — مسار المشاهدة نفسه لا نسخة ثانية',
+          findsNothing,
+          reason: 'الإعلان الذي له رابط يذهب إلى الرابط مباشرة ولا يفتح العارض',
         );
-        // ثانيتا العرض عتبة المشاهدة (`_watchedThresholdMs`) — عبورها هنا هو
-        // ما يثبت أن الفتح من الكاروسيل يصل `story_views` لا أنه فتح شكلي.
-        await tester.pump(const Duration(milliseconds: 2100));
-        await tester.pump();
-        await tester.pump(const Duration(milliseconds: 10));
+        expect(clicksTo(902), hasLength(1), reason: 'النقر على صورة الإعلان يسجّل النقرة');
         expect(
-          viewsTo(902),
+          launched.where((call) => call.method == 'launch'),
           hasLength(1),
-          reason: 'المشاهدة من الكاروسيل تُسجَّل بالمسار نفسه بعد ثانيتين',
+          reason: 'النقر على صورة الإعلان يفتح target_url في تطبيق خارجي',
         );
-        Navigator.of(tester.element(find.byType(StoryViewerScreen))).pop();
-        await tester.pump();
-        await tester.pump(const Duration(milliseconds: 400));
 
-        // 2) وزرّه يسجّل النقرة ثم يفتح الرابط نفسه.
+        // 2) وزرّه يسجّل النقرة ويفتح الرابط نفسه أيضاً.
         await tester.tap(find.byKey(const Key('story_carousel_cta_902')));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 100));
-        expect(clicksTo(902), hasLength(1), reason: 'النقرة من الكاروسيل تصل story_clicks');
+        expect(clicksTo(902), hasLength(2), reason: 'النقرة من زرّ الكاروسيل تصل story_clicks');
         expect(
           launched.where((call) => call.method == 'launch'),
-          isNotEmpty,
-          reason: 'وزرّ الكاروسيل يفتح الرابط في تطبيق خارجي',
+          hasLength(2),
         );
 
-        // 3) الإعلان بين الكروت: الصورة تفتح العارض…
-        await jumpToFeedPage(tester, 8,
-            headerExtent: headerExtent, cardExtent: cardExtent);
-        await tester.tap(find.byKey(const Key('feed_ad_media_903')));
+        // 3) ستوري بلا رابط (901): السحب إلى الشريحة الثانية ثم الكبس يفتح العارض للتكبير ويسجّل المشاهدة.
+        final carousel = find.byKey(const Key('story_carousel'));
+        await tester.drag(
+          find.descendant(of: carousel, matching: find.byType(PageView)),
+          const Offset(300, 0),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('story_carousel_media_901')));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 100));
         expect(
           find.byType(StoryViewerScreen),
           findsOneWidget,
-          reason: 'صورة الإعلان تفتح العارض — مسار المشاهدة نفسه',
+          reason: 'غياب target_url يبقي فتح العارض للتكبير كما كان',
         );
         await tester.pump(const Duration(milliseconds: 2100));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 10));
         expect(
-          viewsTo(903),
+          viewsTo(901),
           hasLength(1),
-          reason: 'المشاهدة من بطاقة الإعلان بين الكروت تُسجَّل بالمسار نفسه',
+          reason: 'المشاهدة من الشريحة بلا رابط تُسجَّل بعد ثانيتين',
         );
         Navigator.of(tester.element(find.byType(StoryViewerScreen))).pop();
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 400));
 
-        // 4) …وزرّه يسجّل النقرة من موضعه لا من الشريط.
+        // 4) الإعلان بين الكروت برابط (903): الصورة والزرّ يفتحان الرابط ويسجّلان النقرة.
+        await jumpToFeedPage(tester, 8,
+            headerExtent: headerExtent, cardExtent: cardExtent);
+        await tester.tap(find.byKey(const Key('feed_ad_media_903')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.byType(StoryViewerScreen), findsNothing);
+        expect(clicksTo(903), hasLength(1), reason: 'النقر على صورة إعلان التغذية يفتح الرابط ويسجّل النقرة');
+        expect(launched.where((call) => call.method == 'launch'), hasLength(3));
+
         await tester.tap(find.byKey(const Key('feed_ad_cta_903')));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 100));
-        expect(clicksTo(903), hasLength(1), reason: 'النقرة من بطاقة الإعلان تصل story_clicks');
+        expect(clicksTo(903), hasLength(2), reason: 'النقرة من زرّ إعلان التغذية تصل story_clicks');
+      },
+    );
+
+    testWidgets(
+      'إعلان التغذية بلا رابط يفتح العارض للتكبير ويسجّل المشاهدة بعد ثانيتين',
+      (tester) async {
+        final requests = <Uri>[];
+        final noLinkStories = {
+          'success': true,
+          'feed_ad_interval': 8,
+          'stories': [
+            {
+              'id': 913,
+              'title': 'إعلان تغذية بلا رابط',
+              'placement': 'feed',
+              'is_ad': true,
+              'advertiser_name': 'تاجر',
+            },
+          ],
+        };
+        final api = feedScreenApi(
+          eventsBody: eventsBody18(),
+          storiesBody: noLinkStories,
+          requests: requests,
+        );
+        await pumpPlacementFeed(tester, api: api);
+
+        final headerExtent = await revealFeedHeaderExtent(tester);
+        final cardExtent =
+            tester.getSize(find.byKey(const Key('feed_pager'))).height;
+        await jumpToFeedPage(tester, 8,
+            headerExtent: headerExtent, cardExtent: cardExtent);
+
+        await tester.tap(find.byKey(const Key('feed_ad_media_913')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.byType(StoryViewerScreen), findsOneWidget);
+        await tester.pump(const Duration(milliseconds: 2100));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 10));
+        expect(
+          requests.where((uri) => uri.path == '/api/stories/913/view'),
+          hasLength(1),
+        );
       },
     );
 

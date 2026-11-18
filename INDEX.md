@@ -13,8 +13,8 @@
 | الوحدة | الملفات | الأسطر |
 |---|---|---|
 | `server/src` | 85 | 30307 |
-| `web` | 8 | 24213 |
-| `mobile/lib` | 75 | 39885 |
+| `web` | 8 | 24226 |
+| `mobile/lib` | 75 | 39886 |
 
 ### توزيع `server/src`
 
@@ -38,11 +38,11 @@
 |---|---|
 | `admin.js` | 8622 |
 | `api.js` | 137 |
-| `app.js` | 14570 |
+| `app.js` | 14580 |
 | `config.js` | 32 |
 | `occasionForm.js` | 361 |
 | `serve.js` | 149 |
-| `sw.js` | 250 |
+| `sw.js` | 253 |
 | `theme-boot.js` | 92 |
 
 `web/` كله HTML وCSS بلا خطوة بناء؛ `web/serve.js` خادم الملفات الثابتة المحلي وحده.
@@ -55,7 +55,7 @@
 | `config.dart` | 1 | 69 |
 | `main.dart` | 1 | 289 |
 | `models/` | 13 | 3385 |
-| `screens/` | 23 | 25734 |
+| `screens/` | 23 | 25735 |
 | `state/` | 19 | 1901 |
 | `theme.dart` | 1 | 296 |
 | `widgets/` | 15 | 5530 |

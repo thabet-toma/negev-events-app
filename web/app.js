@@ -1529,6 +1529,16 @@ function renderBigPromoSurface({ sectionId, boxId, dotsId, chipId, isDrawer = fa
     }
   });
 
+  const activateSlide = (cur) => {
+    if (isDrawer) toggleTopChrome(false);
+    const story = stories[cur];
+    if (story && isSafeHttpUrl(story.target_url)) {
+      handleStoryCtaById(Number(story.id));
+    } else {
+      openStoryViewer(cur, 'promo');
+    }
+  };
+
   const finishDrag = () => {
     if (!dragging) return;
     dragging = false;
@@ -1541,8 +1551,7 @@ function renderBigPromoSurface({ sectionId, boxId, dotsId, chipId, isDrawer = fa
       applyPos(cur);
       if (!moved) {
         handledPointerTap = true;
-        if (isDrawer) toggleTopChrome(false);
-        openStoryViewer(cur, 'promo');
+        activateSlide(cur);
       }
     }
     startTimer();
@@ -1558,8 +1567,7 @@ function renderBigPromoSurface({ sectionId, boxId, dotsId, chipId, isDrawer = fa
     }
     if (!moved && !dragging) {
       const cur = isDrawer ? drawerPromoCarouselIndex : promoCarouselIndex;
-      if (isDrawer) toggleTopChrome(false);
-      openStoryViewer(cur, 'promo');
+      activateSlide(cur);
     }
   });
 
@@ -1614,10 +1622,10 @@ function handleHomeCarouselsVisibilityChange() {
 
 /**
  * إعلان بين الكروت (تذكرة #173): شريحة كاملة في تغذية الالتقاط بعد كل
- * `feedAdInterval` كرت مناسبة. الصورة تفتح العارض (مشاهدة) والزرّ يسجّل
- * النقرة — الموضعان يُقاسان هنا كما في الشريط. وليست مناسبة: بلا صنف
- * `event-card` وبلا `data-event-id`، فلا تدخل عدّ كروت التغذية ولا مراقب
- * الصوت ولا أي منطق يبحث عن مناسبة.
+ * `feedAdInterval` كرت مناسبة. إن وُجد رابط هدفٍ صالحٍ فتحَت الصورة والزرّ
+ * الرابط بعد تسجيل النقرة، وإلا فتحت الصورة عارض الستوري لتكبيرها. وليست مناسبة:
+ * بلا صنف `event-card` وبلا `data-event-id`، فلا تدخل عدّ كروت التغذية ولا
+ * مراقب الصوت ولا أي منطق يبحث عن مناسبة.
  */
 function renderFeedAdCardHtml(story, position) {
   const feedIndex = Math.max(0, storiesForPlacement('feed').indexOf(story));
@@ -1625,6 +1633,9 @@ function renderFeedAdCardHtml(story, position) {
     ? `<img src="${escapeHtml(story.image)}" alt="${escapeHtml(story.title || '')}" loading="lazy">`
     : '<span class="feed-ad-image-empty" aria-hidden="true"></span>';
   const target = isSafeHttpUrl(story.target_url);
+  const mediaAction = target
+    ? `handleStoryCtaById(${Number(story.id)})`
+    : `openStoryViewer(${feedIndex}, 'feed')`;
   return `
     <article class="feed-ad-card" data-ad-story-id="${Number(story.id)}" data-ad-position="${position}">
       <div class="feed-ad-inner">
@@ -1632,7 +1643,7 @@ function renderFeedAdCardHtml(story, position) {
           <span class="feed-ad-chip">${story.is_ad ? 'إعلان' : 'مميّز'}</span>
           ${story.advertiser_name ? `<span class="feed-ad-source">${escapeHtml(story.advertiser_name)}</span>` : ''}
         </div>
-        <button type="button" class="feed-ad-media" onclick="openStoryViewer(${feedIndex}, 'feed')">${image}</button>
+        <button type="button" class="feed-ad-media" onclick="${mediaAction}">${image}</button>
         <div class="feed-ad-body">
           <h3 class="feed-ad-title">${escapeHtml(story.title || '')}</h3>
           ${target ? `<button type="button" class="feed-ad-cta" onclick="handleStoryCtaById(${Number(story.id)})">${escapeHtml(storyCtaLabel(story))}</button>` : ''}
