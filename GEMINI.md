@@ -32,6 +32,11 @@
 - **المراجعة على محورين (`/code-review`) تُشغَّل على الحالة النهائية بعد الإصلاحات، لا على
   التسليم الأول.** الإصلاحات هي ما يُشحن فعلاً؛ مراجعة مسوّدة استُبدلت لا تحرس شيئاً.
 
+**وفي مسار التذاكر المفوَّضة، العين التي تقرأ هي المراجع.** يقرأ الفرق النهائي سطراً بسطر،
+و`git show` لكل commit، ثم يشغّل مهارة `code-review`. والمنسّق يشغّل البوّابات ويسجّلها، ولا
+يدمج شيئاً قبل حكم PASS من المراجع على الحالة النهائية. التفصيل في
+`docs/agents/delegated-workflow.md`، والقاعدة الأصلية سارية على كل مسار غير هذا المسار.
+
 الفحوص التي لا يمسكها أي اختبار وتُفحص يدوياً في كل مرّة: محدِّد CSS كُرِّر فغلب قاعدة قائمة ·
 متغيّر بيئة/CSS مستعمل وغير معرَّف · وسوم HTML غير متوازنة · تعليق أو سطر في `README.md`
 أو `CLAUDE.md` أو `docs/adr/` صار يصف سلوكاً استُبدل · تأكيد اختبار لا يستطيع السقوط للسبب
@@ -43,22 +48,43 @@
 
 - دائماً اجمع ALL قراءات/كتابات الملفات في رسالة واحدة
 - دائماً اجمع ALL أوامر terminal في رسالة واحدة
-- استخدم `Task` tool لإطلاق Agents متوازية لأي مهمة معقدة
+- فوِّض المهام المعقدة المستقلة إلى وكلاء متوازيين
+
+**استثناء: ما يتشارك حالة مشتركة لا يتوازى.**
+
+- الكتابة تتوازى على أشجار عمل منفصلة (انظر «أشجار العمل» أدناه).
+- كل فحص يتشارك حالة مشتركة يُشغَّل **متسلسلاً**، واحداً بعد الآخر، ولا فحصان معاً. المثال
+  الأساسي `npm test` / `smoke` على قاعدة التطوير الواحدة: `server/test/smoke.test.js` يكتب
+  صفوفاً ثابتة الأسماء (`server/test/smoke.test.js:98–107`) على قاعدة التطوير نفسها (يشرح ذلك
+  في 134–152)، فتشغيلان متزامنان يعطيان فشلاً كاذباً.
+- العمّال المفوَّضون لا يشغّلون هذه الفحوص، والمنسّق وحده يفعل.
+
+## أشجار العمل (worktrees)
+
+- لكل تذكرة فرع وشجرة تحت `.agents/worktrees/<name>`.
+- الشجرة الجديدة تحتاج `server/node_modules` (junction إلى نسخة الجذر) و`server/.env` (hardlink
+  إلى نسخة الجذر، ولا يُقرأ محتواه ولا يُنسخ أبداً)، وإلا فشل `npm test`.
+- تُنشأ الشجرة من جذر المستودع دائماً، لأن إنشاءها من داخل شجرة أخرى يُدخلها في مسار متداخل.
+- لا يُحذف مجلد `.agents` داخل أي شجرة، لأن `.agents/skills` متعقَّبة في git.
+- التذكرة تُدمج في فرع التكامل بـ`--no-ff` بعد PASS المراجع فقط.
+- ملفات عمل الجلسات (`HANDOFF-next-session.md`، و`progress-*.md`، و`brief-*.md`) تعيش في
+  `.agents/notes/` في جذر النسخة الرئيسية للمستودع؛ المسار متجاهَل عبر `.git/info/exclude` فلا
+  يُلتزم، والجلسة التي تستأنف عملاً تبدأ بقراءة `HANDOFF-next-session.md` من هناك.
 
 ---
 
 ## قراءة السياق — ابدأ من هنا
 
-المشروع كبير: `server/src` ‎23,912 سطر JS · `web/*.js` ‎19,076 · `mobile/lib` ‎28,138.
+المشروع كبير: `server/src` ‎30,239 سطر JS · `web/*.js` ‎24,127 · `mobile/lib` ‎39,817.
 `INDEX.md` في الجذر فهرس مولَّد — ابدأ به؛ وملحقاه `INDEX-code.md` (الصادرات ودوال الويب والموبايل وخطوات الترحيل ومتغيرات البيئة) و`INDEX-tests.md` (حالات الاختبار).
 كل تكليف يسمّي `ملف:سطر`، لا وصفاً.
 كل بحث يبدأ من `server/src` أو `web` أو `mobile/lib`، لا من جذر المستودع.
 
 ### قاعدة الفهرس — عامة ولا تُتخطّى
 
-- **قبل أول سطر من العمل:** اقرأ `CLAUDE.md` (أو `AGENTS.md`/`GEMINI.md`، فهي النسخة نفسها) كاملاً، ثم
-  `INDEX.md`؛ وافتح ملحقيه عند الحاجة (`INDEX-code.md` للصادرات والترحيل والبيئة، و`INDEX-tests.md` لحالات
-  الاختبار). لا تبدأ بحثاً من جذر المستودع — `INDEX.md` هو خريطتك و`ملف:سطر` هو عنوانك.
+- **قبل أول سطر من العمل:** اقرأ `CLAUDE.md` (هذا الملف) كاملاً، ثم `INDEX.md`؛ وافتح ملحقيه عند الحاجة
+  (`INDEX-code.md` للصادرات والترحيل والبيئة، و`INDEX-tests.md` لحالات الاختبار). لا تبدأ بحثاً من جذر
+  المستودع — `INDEX.md` هو خريطتك و`ملف:سطر` هو عنوانك.
 - **بعد أي تغيير** يمسّ مساراً أو تصدير خدمة أو جدولاً أو خطوة ترحيل أو متغيّر بيئة أو حالة اختبار:
   شغّل `npm run index:build` من `server/` وأضف `INDEX.md` وملحقيه إلى تغييرك قبل الـcommit.
   `npm test` يبدأ بـ`index:check` ويسقط إن كان الفهرس متقادماً — فالتحديث واجب لا اختياري.
@@ -69,11 +95,11 @@
 
 1. `README.md` — المزايا، البنية، جدول واجهة API كاملاً، أحداث Socket.IO، ودليل النشر
 2. `server/src/db/schema.sql` — المخطط هو مصدر الحقيقة للدومين: ما الحقول الموجودة فعلاً وما ليس موجوداً
-3. `docs/adr/` — **لماذا** المشروع على ما هو عليه. ثمانية قرارات لا يفصح عنها الكود،
+3. `docs/adr/` — **لماذا** المشروع على ما هو عليه. قرارات لا يفصح عنها الكود،
    وبعضها يبدو قابلاً للتبسيط حتى تقرأ سببه. اقرأ ما يمسّ منطقتك قبل أن تغيّرها.
 
 عند الحاجة فقط: `server/src/constants.js` (البلدات والإحداثيات وأنواع التفاعل وأنواع المناسبات) ·
-`server/src/routes/` (كل المسارات، سبعة ملفات) · `server/.env.example` (أسماء متغيرات البيئة).
+`server/src/routes/` (كل المسارات، ٢٥ ملف `.routes.js`) · `server/.env.example` (أسماء متغيرات البيئة).
 
 ### أين أبدأ؟
 
@@ -86,13 +112,26 @@
 | صلاحيات ومصادقة | `server/src/middleware/auth.js` |
 | رفع صورة أو صوت | `server/src/middleware/upload.js` |
 | بث لحظي | `server/src/realtime/index.js` + `realtime.emit` من طبقة المسارات |
+| البث المباشر ونقاش اليوم | `server/src/routes/live.routes.js` + `server/src/services/liveHub.service.js` (الحلقات والتصويت)؛ إعدادات البث و`toEmbedUrl` في `settings.service.js`؛ صفحتا `/live` و`/live/embed` في `share.routes.js` (ADR-0006) |
+| الحلقات السابقة وصورة مشاركة الحلقة | كل بثّ نشِط برابط **فيديو واحد** يُحفظ حلقةً لليوم تلقائياً (`liveHub.recordBroadcast` من `PUT /api/admin/settings`)، و`past_episodes` في `GET /api/live/hub`؛ صفحة الحلقة `/live/e/:id` وبطاقتها في `share.routes.js` + `renderEpisodeCard` في `shareCard.service.js`. لماذا رابط الفيديو لا رابط القناة: ADR-0008 |
+| «قائمتي» (المحفوظات) | ليست جدولاً جديداً: هي وجه «ذكّرني» (`event_reminders`، وعمود `notify` للكتم) — `listMyReminders` و`myListBucket` في `events.service.js` (الأقسام يحسبها الخادم، لا العميل)، ومسارات `/remind` و`/my-reminders` في `events.routes.js`؛ الويب `loadMyList`/`renderMyList` في `web/app.js`، والموبايل `mobile/lib/screens/my_list_screen.dart` + `models/my_list.dart`. **لم تعد وجهة مستقلة في الشريط السفلي**: الشريط خمس وجهات (المناسبات، خدماتنا، خدمات الأعراس، مناسباتي، حسابي) وزرٌّ ذهبي وسطيّ يفتح «مميّز عندنا» (`mobile/lib/widgets/featured_hub_sheet.dart`)، وهي قسمٌ داخل «مناسباتي» تحت منشورات المستخدم (`mobile/lib/screens/my_hub_screen.dart`) وتبقى مفتوحة من قلب الترويسة ومن بطاقتها في «حسابي»؛ والوصول إليها في الويب من بطاقة داخل «حسابي» — وهي والخريطة والنقوط بطاقات وصول سريع هناك |
+| «خدماتنا» و«آخر خبر» | وجهة عامة بلا حساب بثلاث بطاقات منصّات كترا؛ «آخر خبر» قارئ أخبار المحافظة من مصدرها الخارجي: `server/src/routes/news.routes.js` (مساران عامّان) + `server/src/services/news.service.js` (النداء والتطبيع والكاش، بلا SQL)، وخريطة اسم المحافظة ← مفتاح المنطقة في `NEWS_AREA_BY_REGION_NAME` بـ`constants.js`؛ الويب `openOurServices`/`openNewsScreen` في `web/app.js` |
+| تقييمات المزوّد | جدولا `provider_reviews` و`provider_review_reports`؛ `upsertProviderReview`/`deleteProviderReview`/`listProviderReviews`/`replyToProviderReview`/`reportProviderReview`/`deleteProviderReviewAsAdmin` في `server/src/services/services.service.js`، والعتبة `PROVIDER_REVIEW_REPORT_THRESHOLD` في `constants.js`؛ المسارات `PUT/DELETE /api/services/providers/:id/review` و`GET …/reviews` و`POST …/reviews/:rid/report` و`PUT /api/services/reviews/:rid/reply` و`DELETE /api/admin/provider-reviews/:rid`؛ الويب قسم `#providerReviewsSection` و`openProviderReviewForm` و`openProviderReplyForm`، والموبايل `_ReviewSheet` و`_ReplySheet` في `service_provider_details_screen.dart`. `reply_body`/`reply_at` يكتبهما الحساب المربوط ويعرضهما `providerReviewHtml`/`_reviewTile` اقتباساً، و`can_reply` هو الشرط الظاهر |
+| المزوّد المربوط بحساب (ADR-0016) | الربط **عمودٌ لا دور**: `service_providers.linked_user_id` (FK `users` بـ`ON DELETE SET NULL`، وخطوة `add-provider-linked-account-2026-11` بثلاثة حرّاس)، والسوبر أدمن وحده يضعه ويفكّه بـ`PATCH /api/admin/service-providers/:id/link` (غيره **404**)، والحدث في `activity_log`. **لا قيمة `'provider'` في `users.role`**، والصلاحية شرطٌ داخل الاستعلام، و**404 لا 403**. `GET /api/services/my-providers` لمزوّدات الحساب، و`linkProviderAccount`/`listLinkedProviders` في `services.service.js`؛ الويب قسم «مزوّدي» في `#accountMyProvidersSection` وحقل «الحساب المربوط» في نموذج اللوحة، والموبايل `_MyProvidersSection` في `account_screen.dart`. والمربوط **لا يحرّر ملف المزوّد**. **و«اطلب عرض سعر» (تذكرة #188) على الربط نفسه:** جدول `quote_requests` (خطوة `add-quote-requests-2026-11`) بحالاته الخمس، و`createQuoteRequest`/`listIncomingQuotes`/`sendQuoteOffer`/`listMyQuotes`/`decideMyQuote` في `services.service.js`، ومسارات `/api/services/providers/:id/quote-requests` و`/incoming-quotes` و`/my-quotes` — **مزوّد غير مربوط لا يُكتب له صفّ** بل يعود رابط واتساب برسالة بناها الخادم (ADR-0016 §3)، والانتقالات المسموحة وحدها وإلا **409**؛ الويب `openQuoteRequestForm`/`submitQuoteRequest` وقسمَا `#accountIncomingQuotesSection`/`#accountMyQuotesSection`، والموبايل `_QuoteSheet` وقسمَا `_IncomingQuotesSection`/`_MyQuotesSection` |
+| أسعار الذهب والعملات (حاسبة الذهب ومحوّل العملات) | أداتان تحت «خدماتنا»، بلا SQL: `server/src/services/prices.service.js` — مصدران خارجيان (`PRICES_FX_URL` = Frankfurter للعملات، `PRICES_GOLD_URL` = gold-api للذهب) وتطبيع وكاش ذاكرة **ساعة** وآخر نسخة تُخدَم عند الفشل؛ و`GET /api/prices` **عام** في `server/src/routes/news.routes.js` لأن نمطه نمط «آخر خبر» لا حساب قاعدة (وبدون نسخة محفوظة يردّ 503 عربياً، لا 500)؛ ويُحقن `prices` في `GET /api/stats/ticker` بلا إسقاط الشريط عند فشله (`prices: null`)، ومعه `latest_news` (أحدث خبر للطلب نفسه بنفس حلّ محافظة `GET /api/news`، أو `null` — الرئيسية الجديدة). الويب `initPricesTools`/`calculateGold`/`convertCurrency` في `web/app.js`، والموبايل `mobile/lib/screens/services_prices_screen.dart` وبطاقتا `hub_prices_*`. **معيار القبول:** العيارات الثلاثة (٢٤/٢١/١٨) والعملات الست تُحسب صحيحة من المصدرين، والطلب الثاني خلال الساعة لا ينادي المصدر (عدّ النداءات في `smoke.test.js`)، وفشل بعد نجاح يعيد آخر نسخة بـ`stale: true`، وفشل بلا نسخة ردّ عربي بلا 500، والأداتان في العميلين تعرضان تاريخ المصدر و«قيمة المعدن بلا مصنعية» وتخفيان الأداة برسالة عربية حين لا تصل الأسعار |
+| مواقيت الصلاة (M3) | تُحسب على خادمنا من إحداثيات المكان **بلا طرف خارجي** (قرار المالك): المسار العام `GET /api/prayer-times` في `server/src/routes/prayer.routes.js`، والحساب كله في `server/src/services/prayerTimes.service.js` (بلا SQL — النواة النقية `computePrayerTimes({ latitude, longitude, date, now })`، و`now` تُحقَن)، والإحداثيات من `towns.service.placeCoordinates` (بلدة نشطة أو محافظة نشطة، والبلدة بلا إحداثيات تأخذ مركز محافظتها) ومن `regionForRequest` حين لا `?town=`، وطريقة الحساب `PRAYER_CALC_METHOD` في `constants.js` (`egyptian`) — اختيارُ حسابٍ لا مرجعية محلية. المكتبة `adhan` (adhan-js، MIT) بإصدار دقيق في `server/package.json`. وقسم «مواقيت الصلاة» في «خدماتنا» صار موصولاً في العميلين (M3-clients): الويب `initPrayerTimesTool`/`loadPrayerTimes` في `web/app.js`، والموبايل شاشة `mobile/lib/screens/prayer_times_screen.dart` بنموذجها `mobile/lib/models/prayer_times.dart` وندائها `prayerTimes` في `negev_api.dart` — كلاهما يعرض الأوقات الستة كما أرسلها الخادم (الشروق مدخل وقت لا صلاة)، و«الصلاة القادمة» من `next` المحسوب على الخادم ومنها «فجر الغد»، ومنتقي البلدة من كتالوج `GET /api/towns` المحفوظ في `negev_prayer_town`، وحاشية طريقة الحساب — بلا حساب وقت ولا مؤقّت في العميل ولا رمز على المسار العام، وردٌّ ناقص أو غير صالح يُعامَل خطأً فيُمسح السابق ويُعرض زرّ المحاولة |
+| بطاقة الدعوة (ستوديو القوالب) | `server/src/services/cardStudio.service.js` — وحدة الرسم الجديدة: ١٢ قالباً (`CARD_TEMPLATES`) بأربعة مقاسات (`CARD_SIZES`) وخمس عائلات عربية OFL في `server/src/assets/fonts/` مسجَّلة عبر `GlobalFonts` في الوحدة نفسها؛ و`server/src/services/eventCards.service.js` — قراءة صفّ المناسبة (بأسماء `event_honorees` وبرنامج `event_days` عبر `eventDaysForEvents`) وجدول `event_cards` وبوابة «أساسية واحدة على الأكثر»؛ و`server/src/routes/cards.routes.js` — `GET /api/card-templates` (عام) و`…/events/:id/cards` (معاينة PNG مصغّرة بلا تخزين، حفظ، تعيين أساسية، حذف) كلها بحارس `assertCanManageEvent` المستوردة من `events.routes.js` (ورفضها هنا **404**)؛ و`og:image` في `/e/:id` يقرأ `primaryCardForEvent`؛ والويب `openCardStudio`/`previewCardStudio`/`saveCardStudio` في `web/app.js` مع نافذة `#cardStudioModal` في `web/index.html` |
+| ألبومات الأعراس والوسم والبحث | `server/src/routes/albums.routes.js` + `server/src/services/albums.service.js`؛ الجداول `event_albums` + `event_photos` + `photo_tags` + `photo_reports`؛ العلَم `occasion_types.archive_gallery`؛ الرفع إلى Cloudinary عبر `cloudinary.service.js` (توقيع وتحقّق بلا مكتبة)؛ `archivePhotos.routes.js` وجه توافق للمسارات القديمة. **وللألبوم وجهان (ADR-0012):** مناسبة، أو باسم العريس بلا مناسبة — `event_id` NULL و`person_id` (FK `people`) و`town`، يُنشأ من `POST /api/admin/albums`؛ وبوابات المناسبة الخمس لألبوم المناسبة وحده. **لا سقف لعدد صور الألبوم** (قرار المالك 2026-10) — ADR-0009/0012؛ **وفيديوهاته** رابطٌ خارجي في `event_videos` (`POST /api/admin/albums/:id/videos` و`PATCH/DELETE /api/admin/videos/:id`) وصفحةُ مشاركته `/v/:id` — ADR-0013 |
+| بطاقة الدخول عند فتح التطبيق | ستوري واحد مثبَّت: `stories.service.entryCard` + `GET /api/stories/entry-card` (عام)، والتثبيت إعداد `entry_promo_story_id` (سوبر أدمن، وقيمة فارغة = أول قصة نشِطة تلقائياً) ومنتقيه في تبويب الستوريات بـ`web/admin.js`؛ والموبايل يعرضها عنصراً عادياً في عمود التغذية — بعد ترويسته وشريط المحافظة وقبل البطاقة الإعلانية والكروت — ثلاث ثوانٍ ثم تختفي بـ× (`_EntryCard` في `events_screen.dart`) |
 | وظيفة مجدولة (يومية/دورية) | `server/src/jobs/` — عمداً خارج `services/`: هذه الطبقة وحدها تُستثنى من قاعدة «`realtime.emit` من طبقة المسارات» لأنها هي نفسها طبقة التنسيق، بلا طلب HTTP فوقها |
 | شكل الاستجابة أو رسالة خطأ | `server/src/utils/ApiError.js` + `server/src/middleware/error.js` |
 | أي شيء في واجهة الويب | `web/app.js` (الموقع) أو `web/admin.js` (اللوحة) |
 | أي شيء في تطبيق الموبايل | `mobile/lib/screens/` ثم `mobile/lib/api/negev_api.dart` |
-| أيقونة أو شعار | العلامة (حلقتا زواج ذهبيتان متشابكتان، فصّ ماسي فيروزي على اليسرى وقلب أحمر فوق اليمنى، وتحتهما كلمة «اعراسنا» — على أرضية بيضاء، كصورة الشعار التي اعتمدها المالك) معرَّفة مرة واحدة في `buildMarkParts` بـ`server/src/utils/brandMark.js` — لا مكان آخر، وألوان أدوارها في `fillStyleFor` هناك. كلمة «اعراسنا» مسار متّجه ثابت في `server/src/utils/brandWord.js` يُعاد توليده بـ`server/scripts/generate-brand-word.js` عند الحاجة. `server/scripts/brand-icons.js` يستهلكها ويولّد منها ٢٥ ملف PNG + `icon.svg` في `web/icons/` و`mobile/`؛ `server/src/routes/share.routes.js` و`server/src/services/shareCard.service.js` يستهلكانها مباشرة أيضاً، والشارات أحادية اللون في ترويستَي `web/index.html` و`web/admin.html` نسخ من مسارها يحرسها اختبار. طبقتان بعلَم `detail`: `'full'` (بالكلمة) لكل أيقونة تطبيق مقاسها ‎٧٢px‎ فأكثر، و`'icon'` (بلا الكلمة) لما هو أصغر وللشارات بجانب اسم التطبيق المكتوب. لا تحرّر PNG ولا SVG بيدك؛ عدّل الهندسة في `brandMark.js` وأعد تشغيل `node scripts/brand-icons.js` |
+| أيقونة أو شعار | العلامة (حلقتا زواج ذهبيتان متشابكتان، فصّ ماسي فيروزي على اليسرى وقلب أحمر فوق اليمنى، وتحتهما كلمة «اعراسنا» — على أرضية بيضاء، كصورة الشعار التي اعتمدها المالك) معرَّفة مرة واحدة في `buildMarkParts` بـ`server/src/utils/brandMark.js` — لا مكان آخر، وألوان أدوارها في `fillStyleFor` هناك. كلمة «اعراسنا» مسار متّجه ثابت في `server/src/utils/brandWord.js` يُعاد توليده بـ`server/scripts/generate-brand-word.js` عند الحاجة. `server/scripts/brand-icons.js` يستهلكها ويولّد منها ٢٨ ملف PNG + `icon.svg` في `web/icons/` و`mobile/` — منها `mobile/assets/brand/` لشعار الترويسة داخل الواجهة (#157)؛ `server/src/routes/share.routes.js` و`server/src/services/shareCard.service.js` يستهلكانها مباشرة أيضاً، والشارات أحادية اللون في ترويستَي `web/index.html` و`web/admin.html` نسخ من مسارها يحرسها اختبار. طبقتان بعلَم `detail`: `'full'` (بالكلمة) لكل أيقونة تطبيق مقاسها ‎٧٢px‎ فأكثر، و`'icon'` (بلا الكلمة) لما هو أصغر وللشارات بجانب اسم التطبيق المكتوب. لا تحرّر PNG ولا SVG بيدك؛ عدّل الهندسة في `brandMark.js` وأعد تشغيل `node scripts/brand-icons.js` |
 | بلدة جديدة أو محافظة | بيانات وقت تشغيل: تبويب «البلدات والمحافظات» في اللوحة (`super_admin`) ← `server/src/routes/towns.routes.js` + `server/src/services/towns.service.js` (المصدر الوحيد وقت التشغيل). `SEED_TOWNS` في `constants.js` بذرة تُكتب مرة واحدة في جدول فارغ، لا قائمة يُتحقَّق منها. لماذا الاسم مفتاح ولماذا لا إعادة تسمية لاسم مستعمل: ADR-0007 |
 | نوع مناسبة (عرس/عزا/…) | `server/src/services/occasionTypes.service.js` + `server/src/routes/occasionTypes.routes.js` — بيانات وقت تشغيل، لا `ENUM` ولا كود جديد لكل نوع |
+| الرسائل الجاهزة لكل نوع («بارك»/«عزّي») | جدول `occasion_type_messages`: النشِطة وحدها تخرج في `messages` من `GET /api/occasion-types`، وتُدار من اللوحة بمسارات `/api/admin/occasion-types/:id/messages` خلف `requireSuperAdmin` (تذكرة #170) — النصّ بيانات وقت تشغيل لا ثابت في أي عميل |
+| «القادم هذا الشهر» (أجندة الشهر) | لا نقطة API جديدة، بل `GET /api/events` بـ`?date_from=`/`?date_to=` و`pagination.total` يحسبه الخادم؛ الويب `renderAgendaMonthUpcoming`/`retryAgendaMonthUpcoming` في `web/app.js:9287` و`web/app.js:9354` ومعرّفات `agendaMonthUpcoming*`؛ الموبايل `_buildMonthUpcoming` في `mobile/lib/screens/agenda_screen.dart:555` ومفاتيح `agenda_month_upcoming*`؛ حارس هوية (شهر+محافظة) يمنع ردًّا متأخرا من الدهس، الشهر الماضي مخفيّ بلا طلب، وتغيير اليوم وحده لا يعيد جلب الشهر، وفشل الشهر له زرّ «إعادة المحاولة» وحده. |
 
 ---
 
@@ -116,20 +155,119 @@
 حرِجاً على التاريخ/المكان (يعود `pending`) — التصنيف بالكود لا بالقاعدة. البحث العام
 يمسك أيضاً أي اسم داخل `event_honorees`، لا `groom_name` وحده.
 
+**حارس التكرار** (`events.findPossibleDuplicates` + `server/src/utils/arabicName.js`) يقف عند
+لحظات الخروج للعلن: نشر أدمن فوري في `POST /api/events`، والاعتماد في
+`PATCH /api/admin/events/:id/status`، و**تعديل مناسبة معتمدة** في `PATCH /api/events/:id`
+حين يغيّر أصحابها أو عائلتها أو مكانها أو تاريخها (تذكرة #159) — 409 `POSSIBLE_DUPLICATE` حتى
+يُعاد الطلب مع `confirm_duplicate`، ويُسجَّل التجاوز `event_duplicate_override`. **المستخدم العادي
+لا يراه ولا يُوقَف** (قرار المالك): طلبه يدخل الطابور، و`GET /api/admin/events` يُلحق
+`possible_duplicates` بكل صفّ معلّق؛ **وتعديل المالك** غير الأدمن لا يُردّ بـ409 أبداً بل يعود
+`pending` إن وُجد شبه (ويظهر في الطابور)، وتعديله غير المشتبه يتبع التصنيف القائم. **وفيه استثناء
+الذات**: معرّف المناسبة يُمرَّر إلى `findPossibleDuplicates` (`excludeEventId`) فالتعديل لا ينبّه
+على مناسبتها نفسها، ويُقارَن الملفّ **النهائي** الذي سيكتبه التعديل (ومحافظته التي يحسبها
+`editedRegion`) لا المخزَّن.
+المطابقة على الأسماء بعد توحيد الإملاء (همزات، ة/ه، ى/ي، «أبو» ملتصقة، الألقاب)
+مع خطأ حرف أو حرفين وإسقاط اسم أوسط، وفارق `DUPLICATE_DATE_WINDOW_DAYS` على الأكثر؛ **وحين
+لا تلتقي الأسماء تُقارَن `family_clan` بالتوحيد نفسه** (تذكرة #159) — التطابق في نفس البلدة
+والنافذة يعطي `likely` **لا `certain`** (عشيرة واحدة قد تحمل عرسين في يوم)، ولا يُقارَن
+اسم العائلة إطلاقاً حين تلتقي الأسماء. والمقارنة
+**داخل المحافظة الواحدة وحدها** (تذكرة #123): المرشّحون يُقصّون بـ`e.region_id` قبل المطابقة،
+فمناسبتان متطابقتان في محافظتين لا تتنبّهان أصلاً (وموضوع بلا `region_id` — نداء داخلي سابق
+لـ#120 — يبقى بلا تقييد). «شبه مؤكدة» تشترط نفس البلدة لأن تكرار الاسم في بلدتين حقيقي في
+النقب، واسم المحافظة في `town` يعني «مكان غير معروف **داخل محافظتها**» لا «بلدة مختلفة».
+تنبيه لا منع — لا تحوّله منعاً صامتاً.
+
+**الأيام الإضافية (`event_days`).** مناسبة متعددة الأيام تحمل ٠..١٠ أيام مسمّاة (حنّة، غداء…)
+باسم وتاريخ ومكان ووقت اختياريين — جدول ابن مثل `event_honorees`، والحقل `extra_days` ظاهر
+واختياري في كل الأنواع؛ `youth_party_date` باقٍ عموداً مستقلاً. «أيام المناسبة» امتداد واحد من
+أقدم إلى أحدث `event_date`/`event_end_date`/`youth_party_date`/`event_days` — ثوابت `EVENT_SPAN_*`
+في `events.service.js` وحدها تبنيه، فلا تكتب `COALESCE(event_end_date, event_date)` جديداً
+لشرط قادم/منتهٍ. التصادم ونافذة التكرار والتذكير بالعدّ التنازلي لا تزال على `event_date` وحده عمداً.
+تغيير تاريخ يوم أو مكانه حرِج، واسمه أو وقته تجميلي.
+
+**ألبومات الأعراس والوسم (`event_albums` + `event_photos` + `photo_tags` + `photo_reports`، ADR-0009).**
+كل عرس له ألبوم افتراضي يُنشأ عند أول فتح للوحة أو أول رفع، والجدول يسمح بأكثر من ألبوم
+(الحنّة، العرس…) بلا ترحيل. **وللألبوم وجه ثانٍ (ADR-0012):** ألبوم باسم العريس **بلا مناسبة** —
+`event_albums.event_id` صار `NULL`، و`person_id` (FK `people` بـ`ON DELETE SET NULL`) صاحبه
+و`town` نطاقه، ويُنشأ من `POST /api/admin/albums` (اسم العريس إلزامي ويُحلّ إلى صفّ `people`،
+وأدمن بلدة يمرّر بلدة من بلداته). صيغة ظهوره: `is_published = 1` **ووسيط معتمد واحد
+على الأقل — صورة أو فيديو** (قرار المالك 2026-10-27)، ولا بوابات مناسبة له أصلاً؛ وبوابات
+المناسبة الخمس **لم تُمسّ** لألبوم المناسبة، وتوسّعت الخامسة وحدها — صورة معتمدة واحدة —
+إلى وسيط معتمد واحد: صورة **أو** فيديو؛ وشرط
+الصورة المعتمدة باقٍ في قراءات الصور نفسها. **لا سقف لعدد
+الصور** — قرار المالك 2026-10؛ الحماية الوحيدة تقنية: `ALBUM_UPLOAD_BATCH_MAX` توقيعاً في
+الطلب الواحد. الرفع متاح للأدمن **قبل** انتهاء المناسبة (ولألبوم العريس في أي وقت) لكن
+الظهور العام **لألبوم المناسبة** يبقى بعد انتهائها (نفس `EVENT_SPAN_END_SQL_E`)
+و`archive_gallery`؛ و`is_published` مع وسيط معتمد واحد شرطٌ في الوجهين — القاعدة كلها في
+استعلامات `albums.service.js` وحدها.
+**وللفيديو صفٌّ مستقل (ADR-0013):** `event_videos` رابطٌ خارجي لا ملف — `normaliseVideoLink`
+وحده يفسّره ويشتقّ `provider`/`thumb_url`، ولا رفع ولا تخزين ولا ترميز، والحذف لا يمسّ أي ملف؛
+والرابط المكرّر في الألبوم نفسه 409، **ولا سقف لعدد الفيديوهات**، و`status` يُخفي بلا حذف.
+صفحة `/v/:id` بتغليف أعراسنا: `og:type` = `video.other` وبطاقة الخادم هي `og:image` دائماً
+(لا مصغّرة طرف ثالث)، بلا `<script>` وبـ`noindex`. وبوابة ظهوره هي بوابة الألبوم نفسها
+**بلا `PUBLIC_PHOTO_EXISTS`**: فيديو واحد يكفي صفحة مشاركة، وبوابة ظهور الألبوم صارت تقبل
+الفيديو نفسه وسيطاً معتمداً (`PUBLIC_MEDIA_EXISTS` — صورة أو فيديو، 2026-10-27)، وشرط الصورة
+باقٍ في قراءات الصور وحدها.
+الصورة كائن مستقل: `GET /api/photos/:id` وصفحة `/p/:id` المستقلة، `caption`/`caption_key`
+قابلان للبحث، و`thumb_url` مشتقّ من رابط التسليم (`w_600`) لا مخزَّن.
+**الوسم بشري بلا تعرّف وجوه:** المستخدم يطلب وسم نفسه (الاسم من `users.full_name` لا من
+الجسم) بحالة `pending`، والأدمن يعتمد أو يرفض، والمستخدم يسحب وسمه متى شاء. **وللوسم شرطان
+منذ ADR-0014:** الحساب يحمل صورة شخصية (`users.avatar_url`، ترفعها `POST /api/auth/me/avatar`)
+و`confirm_phone: true` — يُسجَّل `phone_confirmed_at` — ومع وصفين اختياريين (`self_description`
+/ `caption_suggestion`) يراجعهما الأدمن؛ و`apply_caption` مع الاعتماد ينسخ الاقتراح إلى
+`event_photos.caption`، والرفض لا يكتب وصفاً. البحث في
+`GET /api/search` ثلاث مجموعات: ألبومات/صور/أشخاص، ويستخدم `nameKey` و`searchVariants`
+لتوحيد الهمزات وة/ه وى/ي. **لا `FULLTEXT`**: ngram في MySQL 8 للصينية/اليابانية/الكورية،
+و`LIKE` بمفاتيح مفهرسة هو الصحيح على هذا الحجم.
+**استيراد فيسبوك:** رابط **منشور** لا يمكن سحبه برمجياً (oEmbed يعيد HTML فقط وحقول الصورة
+أُزيلت). المسموح: رفع مباشر، أو لصق رابط صورة من `fbcdn.net`/`fbsbx.com`، أو ألبومات
+**صفحتنا** عبر Graph API إذا سمح التوكن بـ`pages_read_engagement`. القائمة البيضاء في
+`utils/remoteImage.js` هي ما يمنع SSRF.
+
+**بطاقة الدعوة (`event_cards`، تذكرة #180).** صاحب المناسبة يصمّم بطاقته من واحد من
+**اثني عشر قالباً** في `cardStudio.service.js` (وحدة رسم مستقلة بجانب `shareCard`، على
+`@napi-rs/canvas` نفسه): لكل قالب مفتاح واسم عربي ونبرة (`festive`/`solemn`)، وأربعة مقاسات
+(`story` 1080×1920، `portrait` 1080×1350، `square` 1080×1080، `a4` 2480×3508)، وخمس عائلات
+عربية OFL في `server/src/assets/fonts/` (Cairo قائم، وAmiri وTajawal وReem Kufi وNoto Naskh
+Arabic مع ملف ترخيص لكلٍّ منها). **نبرة النوع تحكم القوالب**: مناسبة `solemn` لا ترى إلا
+قالبي العزاء الهادئين، وغيرها لا تريهما — في العرض وفي التحقق معاً، فلا تُرسم دعوة فرح بإطار
+عزاء ولا العكس. البطاقة تُعبَّأ من صفّ المناسبة كما يقرأه `shareCard` (الأصحاب، النوع،
+العائلة، التاريخ والوقت، البلدة والمكان) ومن «برنامج المناسبة» عبر `eventDaysForEvents` نفسها.
+وبوابة الصفّ واحدة: **بطاقة أساسية واحدة على الأكثر لكل مناسبة** — كل كتابة تُصفّر البقية في
+المعاملة نفسها، وحذف الأساسية لا يُرقّي غيرها بل يعيد `og:image` إلى بطاقة الخادم المولَّدة.
+والصورة تُخزَّن على Cloudinary (مجلد `negev-events/event-cards/…`) أو على `/uploads/` حين
+تغيب مفاتيحه أو يفشل الرفع، ولا تفشل البطاقة بسبب خدمة صور خارجية.
+
 **البحث لا يزال عاماً وليس ما تبقّى من الخطوة.** `GET /api/events` صار قادماً-أولاً
-(`COALESCE(event_end_date, event_date) >= CURDATE()`)، مرقّماً (`?page=` `?limit=`، افتراضي
+(آخر أيام المناسبة `>= CURDATE()`)، مرقّماً (`?page=` `?limit=`، افتراضي
 ٣٠ وسقف ١٠٠)، مفلتراً حسب النوع صراحةً (`?occasion_type_id=`) ومرشَّحاً حسب ترويسة
 `X-App-Version` — طلب بلا الترويسة (كل APK منشور اليوم) لا يرى إلا نوع المناسبة الأول
 بالترتيب (`position`)، و`GET /api/events/:id` لنوع آخر يعيد 404. كل صف يحمل أيضاً
 `congratulations_count` و`latest_congratulation`، محسوبَين باستعلام نافذة واحد ومُخفيَين معاً
 حين يكون `show_congratulations_count` مطفأً على النوع. `GET /api/map/events` يخضع لنفس حدّ
 القادم ونفس ترشيح النسخة. **فلتر تغذية `web/` والكرت نفسه أُعيد بناؤهما (#85 دفعة 6أ)** —
-رقاقتا مكان/نوع تفتحان ورقة بحث متعددة الاختيار بدل شريطين ثابتين، والكرت صندوق ٤:٥ بالصورة
-كاملة. **ولوحة الإدارة وتطبيق الموبايل لُحِقا بها (#85 دفعات 6د-6هـ و7-8)** — مؤلّف التعميم
+رقاقتا مكان/نوع تفتحان ورقة بحث متعددة الاختيار بدل شريطين ثابتين، ثم رقاقة تاريخ
+(اليوم/غداً/هذا الأسبوع/الخميس–السبت/يوم مختار ← `?date_from=` `?date_to=`). والكرت صورة
+كاملة فوق لوحة صلبة: العنوان «النوع + أصحاب المناسبة» (العنوان الحرّ سطر صغير تحته فقط حين
+يضيف شيئاً)، وأسطر التاريخ والوقت والمكان والعائلة، وزرّ «التفاصيل» بلون النوع — هو والنقر على
+الصورة يفتحان صفحة المناسبة (`#eventPage`، بترتيب صفحة الموبايل) فوق التغذية دون إعادة رسمها، فالرجوع
+بزرّها أو بزرّ رجوع المتصفّح يبقى على نفس الكرت؛ والإشعار والرابط العميق والأجندة تفتحها هي أيضاً.
+**وتقدّم القائمة لا يعيد الجلب بلا تغيير (2026-10):** بصمة فلتر واحدة (`feedFilterSignature`)
+تمنع أي طلب أو إعادة رسم حين لا يتغيّر ما يغيّر الطلب — فتح درج الفلاتر، بحث مطابق بعد `trim`،
+«مسح الفلاتر» بلا فلتر — وتغيير فعلي يعرض نتائجه من أولها؛ ولقطة رجوع واحدة يعيدها زرّ
+«↩ رجوع لنتائجك السابقة» (`#feedBackPill`) — القائمة والفلتر والموضع بلا طلب شبكة.
+`fetchEvents({ force: true })` وحده يتجاوز البصمة (تحديث يدوي، نشر، حدث لحظي). **ولوحة الإدارة وتطبيق الموبايل لُحِقا بها (#85 دفعات 6د-6هـ
+و7-8)** — مؤلّف التعميم
 بنغمة ومدّة، وسبب الرفض، وإعدادات المنصّة، وحماية الجلسة والمسودّات في اللوحة؛ والمنبّه المحلي،
-ومركز الإشعارات، والكرت ٤:٥، ورقاقتا الفلتر في الموبايل. **ما لا يزال غير محدَّث: الستوريات،
+ومركز الإشعارات، والكرت نفسه («التفاصيل» فيه يفتح صفحة المناسبة، والرجوع منها يبقى على
+نفس الكرت لا الأول)، ورقاقات الفلتر مع التاريخ في الموبايل. **ما لا يزال غير محدَّث: الستوريات،
 والتفاعلات** — لا تزال `coffee` `horse` `fireworks` `rose` `hand` بلا فحص نوع في طبقات العملاء.
 إن كانت مهمتك تلمس هاتين فتحقّق أولاً من حالتهما في issue #20 قبل الافتراض أنهما منتهيتان.
+
+**ومركز الإشعارات (`GET /api/notifications`) لا يعرض تعميماً نُشر قبل تسجيل المستخدم ولا منتهياً
+منذ أكثر من ٣٠ يوماً** — قيدان على هذه القائمة وحدها، والشريط الحيّ (`GET /api/broadcasts/live`)
+لا يتغيّر. وشكل عنصر التعميم مختلف عمداً: `type: 'broadcast'` و`broadcast_id` لا `id`، فعدّادا
+`notifications.id` و`broadcasts.id` مستقلّان ويتداخلان.
 
 **التبريكات/التعازي على الخادم صارت تعرف النوع فعلاً (خطوة 5).**
 `POST /api/events/:id/congratulate` صار خلف `authenticate` — الهوية تُبنى من الحساب
@@ -180,10 +318,13 @@ mobile/   تطبيق فلاتر — يستهلك نفس الخادم
 | `npm run db:seed` | المدير الأول + بيانات تجريبية (لا يستبدل الموجود) |
 | **قبل أي commit** | `npm test` — **لا تُتخطّى** |
 
-`npm test` هو `server/test/smoke.test.js`: يُقلع التطبيق على منفذ عابر ويمرّ على المسارات
-العامة ومسارات المستخدم والإدارة من طرف إلى طرف. **يتطلب MySQL يعمل فعلاً** — لا يوجد
-mock ولا قاعدة بيانات في الذاكرة. إن لم تكن MySQL متاحة قل ذلك صراحةً، ولا تعتبر المهمة
-منتهية بلا اختبار.
+`npm test` يشغّل الثلاثة بالترتيب — `server/package.json:18`:
+`npm run index:check && node test/web-dom.test.js && node test/smoke.test.js`. و`index:check`: بوابة
+الفهرس المولَّد. `web-dom`: jsdom فوق ملفات `web/`
+بلا قاعدة بيانات. و`smoke`: يُقلع التطبيق على منفذ عابر ويمرّ على المسارات العامة ومسارات
+المستخدم والإدارة من طرف إلى طرف. **يتطلب MySQL يعمل فعلاً** — لا يوجد mock ولا قاعدة بيانات
+في الذاكرة. ومن جذر المستودع صيغته `npm --prefix server test`. إن لم تكن MySQL متاحة قل ذلك
+صراحةً، ولا تعتبر المهمة منتهية بلا اختبار.
 
 ---
 
@@ -202,18 +343,23 @@ mock ولا قاعدة بيانات في الذاكرة. إن لم تكن MySQL 
 ### الوسائط
 - الوسائط تُخزَّن نسبية (`/uploads/<ملف>`) وتخرج **مطلقة دائماً** عبر `withAbsoluteMedia` في `server/src/utils/mediaUrl.js`. أي استعلام جديد يرجّع `poster_url` أو `audio_url` أو `image` يمرّ من هناك — الرابط النسبي يعمل بالصدفة في الويب ويكسر كل عميل آخر
 - `PUBLIC_URL` مطلوب في الإنتاج، وإلا خرجت الروابط على `localhost`
+- **الاستثناء الوحيد: Cloudinary** (ADR-0008) — كل صورة على Cloudinary تُخزَّن رابطاً مطلقاً (`https://res.cloudinary.com/…`) لأن الملف ليس على خادمنا أصلاً، و`absoluteMediaUrl` يتركه كما هو. طريقان للوصول إليه:
+  - **صور الألبومات وصور مشاركة الحلقات:** الرفع من المتصفّح مباشرةً بتوقيع من `cloudinary.service.js`، والصفّ لا يُكتب إلا بعد التحقّق من توقيع ردّ Cloudinary وأن `public_id` داخل مجلّد الهدف نفسه.
+  - **الملصق وصورة الفنان وصورة مزوّد الخدمة:** تصل الخادمَ عبر `upload.js` كما كانت (فلا يتغيّر أي عميل ولا أي APK منشور)، ثم يحوّلها `cloudinary.storeUploadedImage` بعد نجاح كل تحقّق في المسار. بلا مفاتيح أو عند فشل Cloudinary يُخزَّن `/uploads/<ملف>` كما كان ولا يفشل الطلب. الصوت يبقى على القرص دائماً. الصورة المستبدَلة تُحذف من Cloudinary عبر `events.releaseReplacedImage`، إلا إن كان صفّ آخر لا يزال يحملها.
+  - السرّ `CLOUDINARY_API_SECRET` لا يغادر الخادم، ولا يُضاف SDK
 
 ### الأمان
 - `pin_code` مخزّن بـ bcrypt و**لا يخرج في أي استجابة** — مرّر المستخدم دائماً عبر `auth.service.publicUser`
 - **دفتر النقوط خاص على مستوى الاستعلام نفسه**: كل استعلام في `nokoot.service.js` يحمل `WHERE user_id = ?` (والحذف `WHERE id = ? AND user_id = ?`). فلترة بعد الجلب في الـJS = تسريب بيانات
-- كل مسارات `/admin` خلف `requireAdmin` أو أشدّ، ولا مفاتيح تجاوز. **والدوران لم يعودا متساويين:** `/admin/occasion-types/*` و `/admin/villages/*` و `/admin/towns/*` و `/admin/regions/*` و `/admin/service-categories/*` و `/admin/stories/*` و `/admin/events/:id/photos/*` و `/admin/admins/*` و `GET /admin/users` خلف `requireSuperAdmin` حصراً، و`PATCH /admin/users/:id/role` (ترقية/إلغاء صلاحية) يفرض نفس القيد لكن داخل معالِجه مباشرة لا عبر `requireSuperAdmin` — فيردّ 404 لا 403 على أدمن غير سوبر، على نمط `adminScope.service.js` (كل راوتر يحمل حارسه الخاص؛ حارس `admin.routes.js` لا يحمي راوترات أخرى تشارك بادئة `/admin`). **`POST /admin/broadcast` خلف `requireAdmin` فقط منذ #85 (خطوة 22-24)** — أدمن بلدة يبثّ لبلداته هو، والنطاق يُبنى بكامله داخل `adminScope.resolveBroadcastTowns` لا في الراوتر؛ أدمن بلا بلدات مُسنَدة يُرفض صراحة بلا كتابة أي صفّ
-- **نطاق الأدمن المحلي داخل الاستعلام لا في الراوتر** — `adminScope.service.js` وحده يبنيه (`townScopeClause` و `assertEventInScope`)، على نمط `nokoot.service.js`. أدمن بلا صفوف في `admin_towns` **لا يرى ولا يعتمد شيئاً** (‏`AND 1 = 0`)، والرفض **404 لا 403** كي لا يؤكَّد وجود مناسبة لمن لا يملكها. والنشر الفوري صار `isAdminForTown(user, town)` لا مجرّد الدور
-- **رقم مزوّد الخدمة لا يخرج في استجابة القائمة إطلاقاً** — `phone` غير مُنتقى في استعلام `listPublicProviders` أصلاً، لا مخفيّ في العميل. ولا يُنشر مزوّد بلا `consent_at` و `consent_channel` — يكتبهما الخادم بنفسه لحظة الإضافة (`admin_entry` من اللوحة، `app_submission` من التطبيق)، لا حقول في أي نموذج
+- كل مسارات `/admin` خلف `requireAdmin` أو أشدّ، ولا مفاتيح تجاوز. **والدوران لم يعودا متساويين:** `/admin/occasion-types/*` و `/admin/villages/*` و `/admin/towns/*` و `/admin/regions/*` و `/admin/events/:id/promote-village` و `/admin/service-categories/*` و `/admin/stories/*` و `/admin/live/*` و `/admin/events/:id/photos/*` و `/admin/admins/*` و `/admin/analytics/*` و `GET /admin/users` خلف `requireSuperAdmin` حصراً، و`PATCH /admin/users/:id/role` (ترقية/إلغاء صلاحية) يفرض نفس القيد لكن داخل معالِجه مباشرة لا عبر `requireSuperAdmin` — فيردّ 404 لا 403 على أدمن غير سوبر، على نمط `adminScope.service.js` (كل راوتر يحمل حارسه الخاص؛ حارس `admin.routes.js` لا يحمي راوترات أخرى تشارك بادئة `/admin`). **`POST /admin/broadcast` خلف `requireAdmin` فقط منذ #85 (خطوة 22-24)** — أدمن بلدة يبثّ لبلداته هو، والنطاق يُبنى بكامله داخل `adminScope.resolveBroadcastTowns` لا في الراوتر؛ أدمن بلا بلدات مُسنَدة يُرفض صراحة بلا كتابة أي صفّ
+- **نطاق الأدمن المحلي داخل الاستعلام لا في الراوتر** — `adminScope.service.js` وحده يبنيه (`townScopeClause` و `assertEventInScope` و `albumScopeClause`)، على نمط `nokoot.service.js`. أدمن بلا صفوف في `admin_towns` **لا يرى ولا يعتمد شيئاً** (‏`AND 1 = 0`)، والرفض **404 لا 403** كي لا يؤكَّد وجود مناسبة لمن لا يملكها. والنشر الفوري صار `isAdminForTown(user, town)` لا مجرّد الدور
+- **رقم مزوّد الخدمة لا يخرج في استجابة القائمة إطلاقاً** — `phone` غير مُنتقى في استعلام `listPublicProviders` أصلاً، لا مخفيّ في العميل. والرقم **اختياري** (`service_providers.phone` يقبل `NULL`): القائمة تحمل علَماً `has_phone` محسوباً في SQL كي تعرف الواجهات أتعرض زر التواصل دون كشف الرقم. ولا يُنشر مزوّد بلا `consent_at` و `consent_channel` — يكتبهما الخادم بنفسه لحظة الإضافة (`admin_entry` من اللوحة، `app_submission` من التطبيق)، لا حقول في أي نموذج
 - المدخلات كلها عبر `server/src/middleware/validate.js` (`cleanString` يقصّ الطول، `parseId`، `parseAmount`، `requireDate`) — لا تحقق يدوي جديد
 - البلدة عند النشر/التعديل بلدة نشِطة من جدول `towns` **أو اسم محافظة نشِطة** (`towns.service.isActivePlace`) — والأخيرة معناها «البلدة غير معروفة»: بلا دبّوس احتياطي وبلا تنبيه عدم تطابق. الإحداثيات الاحتياطية مركز البلدة (`coordinatesByName`) — لا تخمين، ولا تحقّق ضد `SEED_TOWNS`. لا يُكتب `'غير محدد'` في `events.town` أبداً — المستورِد يكتب اسم المحافظة
 - **البلدات بيانات وقت تشغيل في جدولَي `regions`/`towns`**، والاسم لا المعرّف هو ما يُخزَّن في كل جدول آخر (`events.town`، `admin_towns`، …) لأن كل APK منشور يحمل الأسماء مكتوبة داخله. `mobile/lib/config.dart` لا يزال ينسخ البذرة حرفياً (قاعدة الموبايل أدناه). `web/app.js` و`web/admin.js` يجلبانها ديناميكياً من `GET /api/towns` (مع استبعاد 'الكل') منذ #85 دفعة 6أ و6د، مع احتفاظ `web/admin.js` بمصفوفة احتياطية للإقلاع عند انقطاع الاتصال (story 46). **القرى وفئات الخدمات بيانات وقت تشغيل ولا تُكرَّر في أي عميل** — تُجلب من `GET /api/towns` و `GET /api/services/categories`. نسخها إلى `mobile/lib/config.dart` أو أي عميل جديد يعيد المشكلة التي وُجدت القرى لحلّها
-- `events.village_id` غير NULL **فقط** حين `town = 'القرى والتجمعات'` (‏`VILLAGES_TOWN`) — قاعدة يفرضها الكود لا القاعدة، والقرية تُورِّث إحداثياتها للمناسبة عند النشر **وعند التعديل**
+- `events.village_id` و`events.requested_village_name` («قريتي غير موجودة») غير NULL **فقط** حين `town = 'القرى والتجمعات'` (‏`VILLAGES_TOWN`)، **ولا يجتمعان** — قاعدة يفرضها الكود لا القاعدة، والقرية تُورِّث إحداثياتها للمناسبة عند النشر **وعند التعديل**. نشر جديد تحت هذا البند يحمل أحدهما إلزامياً؛ اسم مكتوب يطابق قرية نشِطة يُربط بها فوراً، وغيره ينتظر `POST /admin/events/:id/promote-village` (سوبر أدمن) الذي ينشئ القرية أو يعيد تنشيطها ويربط كل مناسبة طلبت الاسم نفسه
 - الرفع عبر `middleware/upload.js` فقط: قائمة MIME بيضاء، وأسماء ملفات تُولَّد على الخادم ولا تُؤخذ من العميل
+- **حدّ الطلبات على `/api` دلوَان، لا دلوٌ لكل IP:** مجهول لكل IP بسقف `RATE_LIMIT_MAX`، وموثَّق **لكل مستخدم** بسقف `RATE_LIMIT_USER_MAX` (افتراضي 3000) — والمفتاح من `utils/rateLimitIdentity.authenticatedUserId` وحده، يقرأ التوكن نفسه الذي تقرأه `authenticate` والرمز الفاسد يعود مجهولاً. فلا تُحسَب طلبات مستخدم على عنوان IP مشترك، ولا يستهلك رفعُ ألبومٍ كبير حصةَ أحدٍ غيره؛ والتجاوز 429 مع `Retry-After`
 
 ### البث اللحظي
 - `realtime.emit` يُستدعى من **طبقة المسارات بعد نجاح الخدمة** — لا بثّ من داخل الخدمات
@@ -235,6 +381,8 @@ mock ولا قاعدة بيانات في الذاكرة. إن لم تكن MySQL 
 - الرمز يُرفق عند `auth: true` فقط — نفس سبب الويب: `POST /api/events` ينشر فوراً برمز مدير
 - البلدات في `mobile/lib/config.dart` تطابق `SEED_TOWNS` في `server/src/constants.js` حرفياً — وبلدة تُضاف إلى جدول `towns` لا تظهر في منتقيات التطبيق حتى يقرأها من `GET /api/towns`
 - `flutter test` قبل أي commit يلمس `mobile/`، و`flutter analyze` يجب أن يكون نظيفاً
+- `flutter` ليس على PATH، والمسار العامل هو `C:\src\flutter\bin\flutter.bat`؛ وشجرة عمل جديدة تحتاج `flutter pub get` داخل `mobile/` قبل `flutter analyze` وإلا خرجت آلاف المسائل الكاذبة
+- `flutter test` يُشغَّل من داخل `mobile/`، و`flutter analyze mobile` يعمل من الجذر
 - كل نص يراه المستخدم بالعربية، مثل باقي المشروع
 
 ## قواعد واجهة الويب (`web/`)

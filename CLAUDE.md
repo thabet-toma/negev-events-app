@@ -75,7 +75,7 @@
 
 ## قراءة السياق — ابدأ من هنا
 
-المشروع كبير: `server/src` ‎23,912 سطر JS · `web/*.js` ‎19,076 · `mobile/lib` ‎28,138.
+المشروع كبير: `server/src` ‎30,239 سطر JS · `web/*.js` ‎24,127 · `mobile/lib` ‎39,817.
 `INDEX.md` في الجذر فهرس مولَّد — ابدأ به؛ وملحقاه `INDEX-code.md` (الصادرات ودوال الويب والموبايل وخطوات الترحيل ومتغيرات البيئة) و`INDEX-tests.md` (حالات الاختبار).
 كل تكليف يسمّي `ملف:سطر`، لا وصفاً.
 كل بحث يبدأ من `server/src` أو `web` أو `mobile/lib`، لا من جذر المستودع.
@@ -99,7 +99,7 @@
    وبعضها يبدو قابلاً للتبسيط حتى تقرأ سببه. اقرأ ما يمسّ منطقتك قبل أن تغيّرها.
 
 عند الحاجة فقط: `server/src/constants.js` (البلدات والإحداثيات وأنواع التفاعل وأنواع المناسبات) ·
-`server/src/routes/` (كل المسارات، سبعة ملفات) · `server/.env.example` (أسماء متغيرات البيئة).
+`server/src/routes/` (كل المسارات، ٢٥ ملف `.routes.js`) · `server/.env.example` (أسماء متغيرات البيئة).
 
 ### أين أبدأ؟
 
@@ -131,6 +131,7 @@
 | بلدة جديدة أو محافظة | بيانات وقت تشغيل: تبويب «البلدات والمحافظات» في اللوحة (`super_admin`) ← `server/src/routes/towns.routes.js` + `server/src/services/towns.service.js` (المصدر الوحيد وقت التشغيل). `SEED_TOWNS` في `constants.js` بذرة تُكتب مرة واحدة في جدول فارغ، لا قائمة يُتحقَّق منها. لماذا الاسم مفتاح ولماذا لا إعادة تسمية لاسم مستعمل: ADR-0007 |
 | نوع مناسبة (عرس/عزا/…) | `server/src/services/occasionTypes.service.js` + `server/src/routes/occasionTypes.routes.js` — بيانات وقت تشغيل، لا `ENUM` ولا كود جديد لكل نوع |
 | الرسائل الجاهزة لكل نوع («بارك»/«عزّي») | جدول `occasion_type_messages`: النشِطة وحدها تخرج في `messages` من `GET /api/occasion-types`، وتُدار من اللوحة بمسارات `/api/admin/occasion-types/:id/messages` خلف `requireSuperAdmin` (تذكرة #170) — النصّ بيانات وقت تشغيل لا ثابت في أي عميل |
+| «القادم هذا الشهر» (أجندة الشهر) | لا نقطة API جديدة، بل `GET /api/events` بـ`?date_from=`/`?date_to=` و`pagination.total` يحسبه الخادم؛ الويب `renderAgendaMonthUpcoming`/`retryAgendaMonthUpcoming` في `web/app.js:9287` و`web/app.js:9354` ومعرّفات `agendaMonthUpcoming*`؛ الموبايل `_buildMonthUpcoming` في `mobile/lib/screens/agenda_screen.dart:555` ومفاتيح `agenda_month_upcoming*`؛ حارس هوية (شهر+محافظة) يمنع ردًّا متأخرا من الدهس، الشهر الماضي مخفيّ بلا طلب، وتغيير اليوم وحده لا يعيد جلب الشهر، وفشل الشهر له زرّ «إعادة المحاولة» وحده. |
 
 ---
 
