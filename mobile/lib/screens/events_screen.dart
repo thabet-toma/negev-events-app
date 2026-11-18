@@ -1017,6 +1017,24 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     });
   }
 
+  /// تنفيذ البحث فوراً عند ضغط «بحث» في لوحة المفاتيح مع إغلاق لوح البحث
+  /// حتى تظهر البطاقات المطابقة أمام المستخدم مباشرةً.
+  void _onSearchSubmitted(String value) {
+    _debounce?.cancel();
+    final next = value.trim();
+    final changed = next != _appliedSearch;
+    setState(() {
+      _search = next;
+      _appliedSearch = next;
+      _showTopChrome = false;
+    });
+    if (changed) {
+      _loadFirstPage();
+    } else if (_feedScroll.hasClients) {
+      _feedScroll.jumpTo(0);
+    }
+  }
+
   /// اسم قرية من مخزَّنها المحلّي — سلسلة فارغة إن لم تُحلّ بعد (تحميل لم يكتمل)
   /// أو حُذفت من الخادم؛ الاستدعاء لا يبني رقاقة على قيمة فارغة بل يتجاهلها.
   String _villageName(int id) {
@@ -1551,6 +1569,9 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
             builder: (context, constraints) {
               final viewportHeight = constraints.maxHeight;
               _cardExtent = viewportHeight;
+              // عند تفعيل بحث بالاسم أو فلتر أو وضع الأرشيف: تُخفى أقسام الاكتشاف
+              // العشرة في الرئيسية فتظهر نتائج البحث مباشرةً في أعلى التغذية.
+              final showDiscoverySections = !_hasActiveFilters && !_archive;
               return Stack(
                 alignment: Alignment.bottomCenter,
                 children: [
@@ -1611,75 +1632,78 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                                     KeyedSubtree(
                                       key: _feedHeaderKey,
                                       child: _feedHeader(
-                                        showLiveChip: bigStories.isEmpty,
+                                        showLiveChip:
+                                            !showDiscoverySections || bigStories.isEmpty,
                                       ),
                                     )
                                   else
                                     SizedBox(height: _feedHeaderExtent),
-                                  // شريط التوسّع (#127): خبر المحافظة في سطرين داخل التغذية، فوق
-                                  // الكروت مباشرةً كبطاقة الدخول — يدفعها قليلاً ثم يختفي بـ×،
-                                  // ولا طبقة تحجبها ولا ورقة حواريّة. يتبع تبديل المحافظة بنفسه.
-                                  const RegionBanner(),
-                                  // بطاقة الدخول التسويقية: عنصر عادي في عمود التغذية — تدفع
-                                  // الكروت قليلاً ثم تختفي ويعود التخطيط.
-                                  if (_entryCardVisible && _entryStory != null)
-                                    Padding(
-                                      padding: const EdgeInsets.fromLTRB(
-                                          12, 6, 12, 0),
-                                      child: _EntryCard(
-                                        story: _entryStory!,
-                                        onClose: _hideEntryCard,
-                                        onTap: () =>
-                                            _openEntryStory(_entryStory!),
+                                  if (showDiscoverySections) ...[
+                                    // شريط التوسّع (#127): خبر المحافظة في سطرين داخل التغذية، فوق
+                                    // الكروت مباشرةً كبطاقة الدخول — يدفعها قليلاً ثم يختفي بـ×،
+                                    // ولا طبقة تحجبها ولا ورقة حواريّة. يتبع تبديل المحافظة بنفسه.
+                                    const RegionBanner(),
+                                    // بطاقة الدخول التسويقية: عنصر عادي في عمود التغذية — تدفع
+                                    // الكروت قليلاً ثم تختفي ويعود التخطيط.
+                                    if (_entryCardVisible && _entryStory != null)
+                                      Padding(
+                                        padding: const EdgeInsets.fromLTRB(
+                                            12, 6, 12, 0),
+                                        child: _EntryCard(
+                                          story: _entryStory!,
+                                          onClose: _hideEntryCard,
+                                          onTap: () =>
+                                              _openEntryStory(_entryStory!),
+                                        ),
                                       ),
+                                    // البطاقة الإعلانية الكبيرة: ستوريات `carousel` ثم `bar`،
+                                    // وفوق زاويتها العليا كبسولة البث المباشر.
+                                    if (bigStories.isNotEmpty)
+                                      _BigStoryCard(
+                                        stories: bigStories,
+                                        liveChannel: _liveChannel,
+                                        isActive: widget.isActive && !_covered,
+                                        onLiveTap: () => openLiveScreen(context),
+                                        onOpen: (index) =>
+                                            _openStoryList(bigStories, index),
+                                        onCta: (story) =>
+                                            openStoryTarget(context, story),
+                                      ),
+                                    // أقسام الرئيسية الجديدة بترتيبها، كلٌّ يغيب وحده
+                                    // حين لا بيانات له: لا عنوان بلا بطاقات ولا مساحة
+                                    // محجوزة تُزيح الكرت الأول.
+                                    _tickerBar(),
+                                    if (_welcome != null)
+                                      HomeWelcomeCard(
+                                        title: _welcome!.title,
+                                        message: _welcome!.message,
+                                        onDismiss: _dismissWelcome,
+                                      ),
+                                    if (_featured.isNotEmpty)
+                                      FeaturedCarousel(
+                                        events: _featured,
+                                        isActive: widget.isActive && !_covered,
+                                        onOpen: (eventId) => _openEvent(eventId),
+                                        onRemind: _toggleRemind,
+                                        onRsvp: _rsvpGoingFromCard,
+                                        onCongratulate: _openMessages,
+                                      ),
+                                    if (_weekEvents.isNotEmpty)
+                                      _weekSection(),
+                                    _quickActions(),
+                                    if (_newestEvents.isNotEmpty)
+                                      _newestSection(),
+                                    if (_trending.isNotEmpty)
+                                      TrendingSection(
+                                        events: _trending,
+                                        onOpen: (eventId) => _openEvent(eventId),
+                                      ),
+                                    if (_serviceCategories.isNotEmpty)
+                                      _serviceCategoriesSection(),
+                                    ProviderCtaBanner(
+                                      onAdd: () => openSubmitServiceSheet(context),
                                     ),
-                                  // البطاقة الإعلانية الكبيرة: ستوريات `carousel` ثم `bar`،
-                                  // وفوق زاويتها العليا كبسولة البث المباشر.
-                                  if (bigStories.isNotEmpty)
-                                    _BigStoryCard(
-                                      stories: bigStories,
-                                      liveChannel: _liveChannel,
-                                      isActive: widget.isActive && !_covered,
-                                      onLiveTap: () => openLiveScreen(context),
-                                      onOpen: (index) =>
-                                          _openStoryList(bigStories, index),
-                                      onCta: (story) =>
-                                          openStoryTarget(context, story),
-                                    ),
-                                  // أقسام الرئيسية الجديدة بترتيبها، كلٌّ يغيب وحده
-                                  // حين لا بيانات له: لا عنوان بلا بطاقات ولا مساحة
-                                  // محجوزة تُزيح الكرت الأول.
-                                  _tickerBar(),
-                                  if (_welcome != null)
-                                    HomeWelcomeCard(
-                                      title: _welcome!.title,
-                                      message: _welcome!.message,
-                                      onDismiss: _dismissWelcome,
-                                    ),
-                                  if (_featured.isNotEmpty)
-                                    FeaturedCarousel(
-                                      events: _featured,
-                                      isActive: widget.isActive && !_covered,
-                                      onOpen: (eventId) => _openEvent(eventId),
-                                      onRemind: _toggleRemind,
-                                      onRsvp: _rsvpGoingFromCard,
-                                      onCongratulate: _openMessages,
-                                    ),
-                                  if (_weekEvents.isNotEmpty)
-                                    _weekSection(),
-                                  _quickActions(),
-                                  if (_newestEvents.isNotEmpty)
-                                    _newestSection(),
-                                  if (_trending.isNotEmpty)
-                                    TrendingSection(
-                                      events: _trending,
-                                      onOpen: (eventId) => _openEvent(eventId),
-                                    ),
-                                  if (_serviceCategories.isNotEmpty)
-                                    _serviceCategoriesSection(),
-                                  ProviderCtaBanner(
-                                    onAdd: () => openSubmitServiceSheet(context),
-                                  ),
+                                  ],
                                 ],
                               ),
                             ),
@@ -1775,6 +1799,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                       _SearchBar(
                         controller: _searchController,
                         onChanged: _onSearchChanged,
+                        onSubmitted: _onSearchSubmitted,
                       ),
                       _FilterChipsRow(
                         placeLabel: _placeChipLabel,
@@ -2598,10 +2623,15 @@ class _ResultsSnapshot {
 }
 
 class _SearchBar extends StatelessWidget {
-  const _SearchBar({required this.controller, required this.onChanged});
+  const _SearchBar({
+    required this.controller,
+    required this.onChanged,
+    this.onSubmitted,
+  });
 
   final TextEditingController controller;
   final ValueChanged<String> onChanged;
+  final ValueChanged<String>? onSubmitted;
 
   @override
   Widget build(BuildContext context) {
@@ -2610,6 +2640,7 @@ class _SearchBar extends StatelessWidget {
       child: TextField(
         controller: controller,
         onChanged: onChanged,
+        onSubmitted: onSubmitted,
         textInputAction: TextInputAction.search,
         decoration: InputDecoration(
           hintText: 'ابحث بالاسم أو العائلة أو البلدة…',

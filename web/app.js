@@ -2610,6 +2610,28 @@ function applyFeedFilterState(state) {
   if (clearBtn) clearBtn.style.display = searchQuery ? 'block' : 'none';
   const drawerClear = document.getElementById('drawerClearSearchBtn');
   if (drawerClear) drawerClear.style.display = searchQuery ? 'block' : 'none';
+  syncHomeDiscoveryVisibility();
+}
+
+/** هل يوجد بحث أو فلتر أو وضع أرشيف/قادمة يبرّر إخفاء أقسام الاكتشاف العشرة لإظهار النتائج مباشرة؟ */
+function hasActiveHomeFilters() {
+  return Boolean(
+    (searchQuery && searchQuery.trim()) ||
+    (selectedTowns && selectedTowns.length > 0) ||
+    (selectedVillageIds && selectedVillageIds.length > 0) ||
+    (selectedOccasionTypeIds && selectedOccasionTypeIds.length > 0) ||
+    selectedDateFilter ||
+    upcomingOnly ||
+    showArchive
+  );
+}
+
+/** يربط الصنف `has-active-filters` على `#tabHome` لإظهار نتائج البحث/الفلتر فوراً في الويب والهاتف. */
+function syncHomeDiscoveryVisibility() {
+  const tabHome = document.getElementById('tabHome');
+  if (!tabHome) return;
+  tabHome.classList.toggle('has-active-filters', hasActiveHomeFilters());
+  updateFeedDimensions();
 }
 
 /**
@@ -2673,6 +2695,8 @@ function restoreFeedBackSnapshot() {
 async function fetchEvents(options = {}) {
   const { append = false, force = false } = options;
   const container = document.getElementById('eventsContainer');
+
+  if (!append) syncHomeDiscoveryVisibility();
 
   // لا شيء تغيّر: الخروج قبل أي مسّ بالـDOM. إعادة الرسم نفسها هي ما يمحو
   // `scrollTop` ويفقد ما حُمِّل، فإعادة رسم مطابقة عطلٌ ولو حملت البيانات نفسها.
@@ -5863,9 +5887,39 @@ async function loadTrendingEvents() {
   }
 }
 
-/** بلاطة فئة: أيقونة الفئة نفسها إن كانت، وإلا أيقونة Font Awesome مناسبة. */
+/**
+ * يستخرج رمز إيموجي واحداً صالحاً لأيقونة فئة الخدمات، ويرفض النصوص العربية
+ * واللاتينية والأرقام (مثل «طباخ الافراح» أو «ب») ويقتصر على أول إيموجي عند تكدّس
+ * عدّة رموز مثل «🍬🍰🧁» كي لا ينقصّ النصّ داخل الدائرة.
+ */
+function usableCategoryIcon(raw) {
+  const trimmed = String(raw || '').trim();
+  if (!trimmed) return '';
+  if (/[A-Za-z0-9\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/.test(trimmed)) {
+    return '';
+  }
+  let firstCluster = '';
+  if (typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function') {
+    const segmenter = new Intl.Segmenter('ar', { granularity: 'grapheme' });
+    const next = segmenter.segment(trimmed)[Symbol.iterator]().next();
+    firstCluster = next && next.value ? next.value.segment : '';
+  } else {
+    const match = trimmed.match(/^(?:[\uD800-\uDBFF][\uDC00-\uDFFF]|[^\u200D\uFE0F])(?:\uFE0F|\u200D(?:[\uD800-\uDBFF][\uDC00-\uDFFF]|.)\uFE0F?)*/);
+    firstCluster = match ? match[0] : '';
+  }
+  if (!firstCluster) return '';
+  for (const ch of firstCluster) {
+    const cp = ch.codePointAt(0);
+    if ((cp >= 0x1F1E6 && cp <= 0x1FAFF) || (cp >= 0x2600 && cp <= 0x27BF) || (cp >= 0x231A && cp <= 0x23FF) || cp === 0x2B50 || cp === 0x2B55) {
+      return firstCluster;
+    }
+  }
+  return '';
+}
+
+/** بلاطة فئة: أيقونة الفئة نفسها إن كانت إيموجي صالحاً، وإلا أيقونة Font Awesome مناسبة. */
 function renderHomeCategoryTileHtml(category) {
-  const icon = category && String(category.icon || '').trim();
+  const icon = usableCategoryIcon(category && category.icon);
   const iconHtml = icon
     ? `<span class="home-category-emoji" aria-hidden="true">${escapeHtml(icon)}</span>`
     : '<i class="fa-solid fa-screwdriver-wrench" aria-hidden="true"></i>';
@@ -8665,6 +8719,7 @@ function clearAllFilters() {
   updateFilterChipLabel('kind');
   updateDateFilterChipLabel();
   hideFeedBackPill();
+  syncHomeDiscoveryVisibility();
   if (!hadFilters) return;
   fetchEvents();
 }
@@ -8772,6 +8827,7 @@ function handleSearch() {
   if (drawerClear) drawerClear.style.display = val ? 'block' : 'none';
 
   updateFloatingFilterLabel();
+  syncHomeDiscoveryVisibility();
   // النص نفسه المطبَّق: الواجهة تحدَّثت أعلاه، ولا طلب يعيد رسم القائمة من أوّلها.
   if (feedFiltersUnchanged()) return;
   fetchEvents();
@@ -8789,6 +8845,7 @@ function clearSearch() {
   if (drawerClear) drawerClear.style.display = 'none';
 
   updateFloatingFilterLabel();
+  syncHomeDiscoveryVisibility();
   // لا نص مطبَّق أصلاً: لا شيء ليمسحه هذا الزرّ، فلا جلب.
   if (feedFiltersUnchanged()) return;
   fetchEvents();
@@ -8886,10 +8943,31 @@ function handleDrawerSearch(query) {
   clearTimeout(drawerSearchDebounceTimer);
   drawerSearchDebounceTimer = setTimeout(() => {
     updateFloatingFilterLabel();
+    syncHomeDiscoveryVisibility();
     // الكتابة ثم الرجوع إلى النص المطبَّق نفسه: لا شيء تغيّر، فلا جلب.
     if (feedFiltersUnchanged()) return;
     fetchEvents();
   }, 400);
+}
+
+/** ضغط Enter / بحث من لوحة الهاتف يطبّق البحث فوراً ويغلق الدرج لتظهر النتائج مباشرةً. */
+function handleDrawerSearchKeydown(event) {
+  if (!event || event.key !== 'Enter') return;
+  if (typeof event.preventDefault === 'function') event.preventDefault();
+  clearTimeout(drawerSearchDebounceTimer);
+  const drawerSearch = document.getElementById('drawerSearchInput');
+  const query = drawerSearch ? drawerSearch.value : searchQuery;
+  searchQuery = String(query || '').trim();
+  const mainInput = document.getElementById('eventSearchInput');
+  if (mainInput) mainInput.value = searchQuery;
+  updateFloatingFilterLabel();
+  syncHomeDiscoveryVisibility();
+  toggleTopChrome(false);
+  if (feedFiltersUnchanged()) {
+    restoreFeedTop();
+    return;
+  }
+  fetchEvents();
 }
 
 function clearDrawerSearch() {
@@ -10034,11 +10112,14 @@ async function initServiceCategoryTabs() {
   }
 
   const allTab = `<button class="town-pill ${!selectedServiceCategoryId ? 'active' : ''}" data-cat-id="" onclick="selectServiceCategory(null)">الكل</button>`;
-  const catTabs = serviceCategoriesCache.map(c => `
+  const catTabs = serviceCategoriesCache.map(c => {
+    const catIcon = usableCategoryIcon(c.icon);
+    return `
     <button class="town-pill ${selectedServiceCategoryId === c.id ? 'active' : ''}" data-cat-id="${c.id}" onclick="selectServiceCategory(${c.id})">
-      ${c.icon ? escapeHtml(c.icon) + ' ' : ''}${escapeHtml(c.name)}
+      ${catIcon ? escapeHtml(catIcon) + ' ' : ''}${escapeHtml(c.name)}
     </button>
-  `).join('');
+  `;
+  }).join('');
   container.innerHTML = allTab + catTabs;
   // الرقاقة تقرأ اسم الفئة من هذه القائمة، وكانت تُحسب قبل وصولها فتظنّ
   // «كل الفئات» — إعادة الحساب بعد الوصول تُبقي الاسم والفلتر متطابقين.
@@ -10153,10 +10234,11 @@ function renderServiceFilterSheetList(type) {
 
     list.innerHTML = options.map(opt => {
       const isChecked = serviceDraftCategoryId === opt.id;
+      const optIcon = usableCategoryIcon(opt.icon);
       return `
         <label class="filter-option-row">
           <input type="radio" name="serviceCatRadio" value="${opt.id === null ? '' : opt.id}" ${isChecked ? 'checked' : ''} onchange="serviceDraftCategoryId = this.value ? Number(this.value) : null">
-          <span>${opt.icon ? escapeHtml(opt.icon) + ' ' : ''}${escapeHtml(opt.label)}</span>
+          <span>${optIcon ? escapeHtml(optIcon) + ' ' : ''}${escapeHtml(opt.label)}</span>
         </label>`;
     }).join('');
   }
@@ -10531,10 +10613,11 @@ function renderCompactServiceRowHtml(p, { rowId = `serviceRow-${p.id}`, statsId 
   const hasPhone = p.has_phone !== false;
 
   const priceBadgeText = providerPriceBadgeText(p);
+  const categoryIcon = usableCategoryIcon(p.category_icon);
 
   const mediaHtml = p.image_url
     ? `<img src="${escapeHtml(p.image_url)}" alt="${escapeHtml(p.name)}" class="service-row-img" loading="lazy">`
-    : `<span class="service-row-img service-row-img-placeholder">${p.category_icon ? escapeHtml(p.category_icon) : '🛠️'}</span>`;
+    : `<span class="service-row-img service-row-img-placeholder">${categoryIcon ? escapeHtml(categoryIcon) : '🛠️'}</span>`;
 
   // البلدان القليلة تُسمّى صراحةً، والأكثر يُسمّى منه اثنان و«وغيرها» — لا
   // ادّعاء «جميع البلدات» من قائمة قصيرة (تذكرة #127)، ولا سطر يطول.
@@ -10554,7 +10637,7 @@ function renderCompactServiceRowHtml(p, { rowId = `serviceRow-${p.id}`, statsId 
           <h3 class="service-row-name">${escapeHtml(p.name)}</h3>
           ${badgesHtml ? `<div class="service-row-badges">${badgesHtml}</div>` : ''}
           <div class="service-row-meta">
-            <span class="service-row-category">${p.category_icon ? escapeHtml(p.category_icon) + ' ' : ''}${escapeHtml(p.category_name || 'خدمة')}</span>
+            <span class="service-row-category">${categoryIcon ? escapeHtml(categoryIcon) + ' ' : ''}${escapeHtml(p.category_name || 'خدمة')}</span>
             <span class="service-row-town"><i class="fa-solid fa-location-dot"></i> ${escapeHtml(townsText)}</span>
           </div>
           <div class="service-row-stats" id="${statsId}">${providerStatsHtml(p)}</div>
@@ -10593,12 +10676,13 @@ function renderSingleServiceCardHtml(p) {
 
   // Price Badge text
   const priceBadgeText = providerPriceBadgeText(p);
+  const categoryIcon = usableCategoryIcon(p.category_icon);
 
   // Floating Media Content
   const mediaHtml = p.image_url ? `
     <img src="${escapeHtml(p.image_url)}" alt="${escapeHtml(p.name)}" class="card-media-img" loading="lazy">` : `
     <div class="service-card-media-placeholder">
-      <span class="placeholder-icon">${p.category_icon ? escapeHtml(p.category_icon) : '🛠️'}</span>
+      <span class="placeholder-icon">${categoryIcon ? escapeHtml(categoryIcon) : '🛠️'}</span>
     </div>`;
 
   // Towns line
@@ -10642,7 +10726,7 @@ function renderSingleServiceCardHtml(p) {
             ${mediaHtml}
             <div class="service-floating-badges">
               <span class="service-badge-category" style="background:${toneColor}">
-                ${p.category_icon ? escapeHtml(p.category_icon) + ' ' : ''}${escapeHtml(p.category_name || 'خدمة')}
+                ${categoryIcon ? escapeHtml(categoryIcon) + ' ' : ''}${escapeHtml(p.category_name || 'خدمة')}
               </span>
               <span class="service-badge-price">
                 <i class="fa-solid fa-tag"></i> ${priceBadgeText}${p.price != null ? `: ${Number(p.price).toLocaleString('ar-EG')} ₪` : ''}
@@ -10908,15 +10992,18 @@ function providerProductsHtml(products) {
 
 /** «مزوّدون مشابهون» — كل بطاقة تفتح نافذة المزوّد الآخر نفسها. */
 function providerSimilarHtml(similar) {
-  return similar.map(candidate => `
+  return similar.map(candidate => {
+    const candidateIcon = usableCategoryIcon(candidate.category_icon);
+    return `
     <button type="button" class="provider-similar-card" onclick="openProviderModal(${Number(candidate.id)})">
       ${candidate.image_url
         ? `<img src="${escapeHtml(candidate.image_url)}" alt="${escapeHtml(candidate.name)}" class="provider-similar-img" loading="lazy">`
-        : `<span class="provider-similar-img provider-similar-img-placeholder">${candidate.category_icon ? escapeHtml(candidate.category_icon) : '🛠️'}</span>`}
+        : `<span class="provider-similar-img provider-similar-img-placeholder">${candidateIcon ? escapeHtml(candidateIcon) : '🛠️'}</span>`}
       <span class="provider-similar-name">${escapeHtml(candidate.name)}</span>
       <span class="provider-similar-town">${escapeHtml((candidate.towns || []).slice(0, 2).join('، ') || 'مناطق الخدمة غير محدَّدة')}</span>
     </button>
-  `).join('');
+  `;
+  }).join('');
 }
 
 // ======================================================================

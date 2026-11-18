@@ -310,6 +310,7 @@ body {
 .admin-nav-tabs { display: flex; gap: 10px; border-bottom: 1px solid var(--admin-card-border); padding-bottom: 14px; margin-bottom: 24px; overflow-x: auto; }
 
 .admin-tab-btn {
+  flex-shrink: 0;
   background: var(--admin-card);
   border: 1px solid var(--admin-card-border);
   color: var(--text-dim);
@@ -336,7 +337,7 @@ body {
 .pane-controls-bar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px; margin-bottom: 22px; }
 .status-filter-group { display: flex; gap: 8px; flex-wrap: wrap; }
 
-.filter-chip { background: var(--admin-card); border: 1px solid var(--admin-card-border); color: var(--text-dim); padding: 7px 16px; border-radius: 20px; font-size: 0.82rem; font-family: var(--font-tajawal); font-weight: 600; cursor: pointer; }
+.filter-chip { flex-shrink: 0; background: var(--admin-card); border: 1px solid var(--admin-card-border); color: var(--text-dim); padding: 7px 16px; border-radius: 20px; font-size: 0.82rem; font-family: var(--font-tajawal); font-weight: 600; cursor: pointer; }
 .filter-chip.active { background: var(--sky-wash); color: var(--gold-main); border-color: var(--gold-main); font-weight: 800; }
 
 .badge-pill { background: var(--warn-yellow); color: var(--on-sky); padding: 1px 7px; border-radius: 10px; font-size: 0.72rem; font-weight: 900; margin-inline-end: 4px; }

@@ -12,9 +12,9 @@
 
 | الوحدة | الملفات | الأسطر |
 |---|---|---|
-| `server/src` | 85 | 30239 |
-| `web` | 8 | 24127 |
-| `mobile/lib` | 75 | 39817 |
+| `server/src` | 85 | 30307 |
+| `web` | 8 | 24213 |
+| `mobile/lib` | 75 | 39885 |
 
 ### توزيع `server/src`
 
@@ -23,7 +23,7 @@
 | `app.js` | 1 | 136 |
 | `config/` | 1 | 156 |
 | `constants.js` | 1 | 399 |
-| `db/` | 4 | 3111 |
+| `db/` | 4 | 3179 |
 | `jobs/` | 1 | 351 |
 | `middleware/` | 6 | 844 |
 | `privacyNotice.js` | 1 | 125 |
@@ -36,13 +36,13 @@
 
 | الملف | الأسطر |
 |---|---|
-| `admin.js` | 8621 |
+| `admin.js` | 8622 |
 | `api.js` | 137 |
-| `app.js` | 14488 |
+| `app.js` | 14570 |
 | `config.js` | 32 |
 | `occasionForm.js` | 361 |
 | `serve.js` | 149 |
-| `sw.js` | 247 |
+| `sw.js` | 250 |
 | `theme-boot.js` | 92 |
 
 `web/` كله HTML وCSS بلا خطوة بناء؛ `web/serve.js` خادم الملفات الثابتة المحلي وحده.
@@ -55,17 +55,17 @@
 | `config.dart` | 1 | 69 |
 | `main.dart` | 1 | 289 |
 | `models/` | 13 | 3385 |
-| `screens/` | 23 | 25688 |
+| `screens/` | 23 | 25734 |
 | `state/` | 19 | 1901 |
 | `theme.dart` | 1 | 296 |
-| `widgets/` | 15 | 5508 |
+| `widgets/` | 15 | 5530 |
 
 ## ٢. المهمة ← الملفات
 
 | المهمة | ابدأ من |
 |---|---|
 | إضافة نقطة API | `server/src/routes/index.js:58` للتركيب، ثم `server/src/routes/<المجال>.routes.js` — مثل `server/src/routes/events.routes.js:98` — والخدمة `server/src/services/events.service.js` |
-| تغيير حقل أو جدول | `server/src/db/schema.sql` (للتنصيبات الجديدة) + خطوة جديدة في `server/src/db/dataMigrations.js` — آخر خطوة اليوم `server/src/db/dataMigrations.js:2860` |
+| تغيير حقل أو جدول | `server/src/db/schema.sql` (للتنصيبات الجديدة) + خطوة جديدة في `server/src/db/dataMigrations.js` — آخر خطوة اليوم `server/src/db/dataMigrations.js:2899` |
 | رفع صورة أو وسيط | `server/src/middleware/upload.js:167` · `server/src/services/cloudinary.service.js:194` |
 | الصلاحيات والمصادقة | `server/src/middleware/auth.js:47` · `server/src/routes/admin.routes.js:25` |
 | بثّ لحظي (Socket.IO) | `server/src/realtime/index.js:27` · `server/src/routes/admin.routes.js:128` |

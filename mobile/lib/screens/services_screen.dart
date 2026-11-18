@@ -12,6 +12,7 @@ import '../theme.dart';
 import '../widgets/async_view.dart' show showMessage;
 import '../widgets/auth_action_button.dart';
 import '../widgets/congratulations.dart' show openSignInGate;
+import '../widgets/home_sections.dart' show usableCategoryEmoji;
 import 'service_provider_details_screen.dart';
 
 /// يفتح ورقة تقديم عرض الخدمة — **التعريف الوحيد** لفتحها: زرّ «قدّم عرضك»
@@ -587,10 +588,11 @@ class _CategoryTabs extends StatelessWidget {
           }
 
           final category = categories[index - 1];
+          final icon = usableCategoryEmoji(category.icon);
           final isSelected = selectedId == category.id;
           return ChoiceChip(
             label: Text(
-              category.icon.isEmpty ? category.name : '${category.icon} ${category.name}',
+              icon.isEmpty ? category.name : '$icon ${category.name}',
             ),
             selected: isSelected,
             onSelected: (_) => onSelected(category.id),
@@ -914,8 +916,8 @@ class _LuxuryServiceCardState extends State<_LuxuryServiceCard> {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          if (p.categoryIcon.isNotEmpty) ...[
-                            Text(p.categoryIcon, style: const TextStyle(fontSize: 12)),
+                          if (usableCategoryEmoji(p.categoryIcon).isNotEmpty) ...[
+                            Text(usableCategoryEmoji(p.categoryIcon), style: const TextStyle(fontSize: 12)),
                             const SizedBox(width: 4),
                           ],
                           Text(
@@ -1326,9 +1328,9 @@ class _LuxuryServiceCardState extends State<_LuxuryServiceCard> {
         ),
       ),
       child: Center(
-        child: p.categoryIcon.isNotEmpty
+        child: usableCategoryEmoji(p.categoryIcon).isNotEmpty
             ? Text(
-                p.categoryIcon,
+                usableCategoryEmoji(p.categoryIcon),
                 style: const TextStyle(fontSize: 48),
               )
             : Icon(
@@ -1412,16 +1414,17 @@ class _CompactServiceRow extends StatelessWidget {
                   runSpacing: 2,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    Text(
-                      p.categoryIcon.isEmpty
-                          ? p.categoryName
-                          : '${p.categoryIcon} ${p.categoryName}',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        color: tone,
-                      ),
-                    ),
+                    () {
+                      final icon = usableCategoryEmoji(p.categoryIcon);
+                      return Text(
+                        icon.isEmpty ? p.categoryName : '$icon ${p.categoryName}',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: tone,
+                        ),
+                      );
+                    }(),
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -1582,13 +1585,16 @@ class _CompactServiceRow extends StatelessWidget {
         ),
       ),
       child: Center(
-        child: provider.categoryIcon.isNotEmpty
-            ? Text(provider.categoryIcon, style: const TextStyle(fontSize: 30))
-            : Icon(
-                Icons.handyman_outlined,
-                size: 30,
-                color: tone.withValues(alpha: 0.8),
-              ),
+        child: () {
+          final icon = usableCategoryEmoji(provider.categoryIcon);
+          return icon.isNotEmpty
+              ? Text(icon, style: const TextStyle(fontSize: 30))
+              : Icon(
+                  Icons.handyman_outlined,
+                  size: 30,
+                  color: tone.withValues(alpha: 0.8),
+                );
+        }(),
       ),
     );
   }
@@ -1867,10 +1873,13 @@ class _SubmitServiceSheetState extends State<_SubmitServiceSheet> {
                 ),
                 items: widget.categories
                     .map(
-                      (c) => DropdownMenuItem(
-                        value: c.id,
-                        child: Text('${c.icon.isNotEmpty ? "${c.icon} " : ""}${c.name}'),
-                      ),
+                      (c) {
+                        final icon = usableCategoryEmoji(c.icon);
+                        return DropdownMenuItem(
+                          value: c.id,
+                          child: Text('${icon.isNotEmpty ? "$icon " : ""}${c.name}'),
+                        );
+                      },
                     )
                     .toList(),
                 onChanged: (val) => setState(() => _selectedCategoryId = val),

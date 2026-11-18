@@ -11,6 +11,7 @@ import '../theme.dart';
 import '../widgets/async_view.dart';
 import '../widgets/auth_action_button.dart';
 import '../widgets/congratulations.dart' show openSignInGate;
+import '../widgets/home_sections.dart' show usableCategoryEmoji;
 
 /// أسماء أيام `hours` السبعة — الفهرس نفسه الذي يخزّنه الأدمن (0 = الأحد).
 const List<String> _providerDayNames = [
@@ -1562,12 +1563,15 @@ class _ProviderBodyState extends State<_ProviderBody> {
                                           borderRadius: BorderRadius.circular(7),
                                         ),
                                         child: Center(
-                                          child: Text(
-                                            candidate.categoryIcon.isNotEmpty
-                                                ? candidate.categoryIcon
-                                                : '🛠️',
-                                            style: const TextStyle(fontSize: 22),
-                                          ),
+                                          child: () {
+                                            final icon = usableCategoryEmoji(
+                                                candidate.categoryIcon);
+                                            return Text(
+                                              icon.isNotEmpty ? icon : '🛠️',
+                                              style:
+                                                  const TextStyle(fontSize: 22),
+                                            );
+                                          }(),
                                         ),
                                       ),
                               ),
@@ -1627,9 +1631,12 @@ class _ProviderHeader extends StatelessWidget {
           ),
         ),
         child: Center(
-          child: provider.categoryIcon.isNotEmpty
-              ? Text(provider.categoryIcon, style: const TextStyle(fontSize: 48))
-              : Icon(Icons.handyman_outlined, size: 48, color: context.c.gold),
+          child: () {
+            final icon = usableCategoryEmoji(provider.categoryIcon);
+            return icon.isNotEmpty
+                ? Text(icon, style: const TextStyle(fontSize: 48))
+                : Icon(Icons.handyman_outlined, size: 48, color: context.c.gold);
+          }(),
         ),
       );
     }

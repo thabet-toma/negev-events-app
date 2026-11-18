@@ -1256,6 +1256,18 @@ button.carousel-dot.is-active::before {
   display: block;
 }
 
+/* عند تفعيل بحث أو فلتر: تُخفى أقسام الاكتشاف العشرة فيظهر أول كرت مطابق فوراً بلا تمرير طويل. */
+#tabHome.has-active-filters > .story-carousel-section,
+#tabHome.has-active-filters > .home-news-ticker,
+#tabHome.has-active-filters > .home-welcome-card,
+#tabHome.has-active-filters > .featured-events-section,
+#tabHome.has-active-filters > .home-section,
+#tabHome.has-active-filters > .home-quick-actions,
+#tabHome.has-active-filters > .home-trending-section,
+#tabHome.has-active-filters > .home-provider-cta {
+  display: none !important;
+}
+
 .events-feed {
   display: flex;
   flex-direction: column;
@@ -4616,10 +4628,28 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
     margin: 0;
   }
 
-  /* Full screen vertical snap feed */
+  /* حجز علوي لأقسام الاكتشاف أسفل الشريط العائم عند تصفّح الرئيسية غير المفلترة،
+     وهوامش جانبية لأن `.app-main` على الهاتف بلا حشوة أفقية. */
+  #tabHome:not(.has-active-filters) {
+    padding-top: max(120px, calc(120px + env(safe-area-inset-top, 0px)));
+  }
+
+  #tabHome > .region-banner,
+  #tabHome > .story-carousel-section,
+  #tabHome > .home-news-ticker,
+  #tabHome > .home-welcome-card,
+  #tabHome > .featured-events-section,
+  #tabHome > .home-section,
+  #tabHome > .home-quick-actions,
+  #tabHome > .home-trending-section,
+  #tabHome > .home-provider-cta {
+    margin-inline: 12px;
+  }
+
+  /* Full screen vertical snap feed (sticky تحت أقسام الرئيسية لا fixed يغطّيها) */
   #eventsContainer.events-feed {
-    position: fixed !important;
-    inset: 0 !important;
+    position: sticky !important;
+    top: 0 !important;
     height: 100dvh !important;
     max-height: 100dvh !important;
     padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px)) !important;
@@ -4627,15 +4657,16 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
     z-index: 10;
   }
 
-  /* شريط التوسّع ليس نسخةً من منتقي المحافظة فتُنقل إلى الدرج: خبرٌ يُقرأ مرة
-     عند تبديل المحافظة، ومكانه الطبيعي فوق الكروت على الهاتف أيضاً — وإخفاؤه
-     هنا كان يعني ألّا يراه أحد على الهاتف إطلاقاً (صاحب المنتج يجرّب هناك). */
+  .events-feed > .empty-state {
+    margin: max(128px, calc(128px + env(safe-area-inset-top, 0px))) 12px 0;
+  }
+
+  /* منتقي المحافظة ورقاقات الفلتر وشريط البحث والتنبيهات تُدار من الدرج العلوي على الهاتف،
+     أما البطاقة الإعلانية والأعراس المميزة وبقية أقسام الرئيسية فتظهر هنا مباشرةً. */
   #tabHome > .region-picker,
   #tabHome > .filter-chips-row,
   #tabHome > .search-bar-container,
-  #tabHome > #announcementsContainer,
-  #tabHome > .story-carousel-section,
-  #tabHome > .featured-events-section {
+  #tabHome > #announcementsContainer {
     display: none !important; /* Managed through sliding top drawer on mobile */
   }
 
@@ -4690,6 +4721,12 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
    + 50 صندوق الأفعال (44 زرّاً + 4 حشوة + 2 حدّ) + 4 هامش الصفّ الغني
    + 44 صفّه = 156px؛ الحجز 164px يضيف فسحة 8px فوق محتوى الكرت. */
 @media (max-width: 680px) {
+  #tabHome:not(.has-active-filters) {
+    padding-top: max(164px, calc(164px + env(safe-area-inset-top, 0px)));
+  }
+  .events-feed > .empty-state {
+    margin-top: max(172px, calc(172px + env(safe-area-inset-top, 0px)));
+  }
   .events-feed > .event-card .card-bezel {
     padding-top: max(164px, calc(164px + env(safe-area-inset-top, 0px))) !important;
   }
@@ -4700,6 +4737,12 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
    صفّه = 202px؛ الحجز 212px يضيف فسحة 10px فوق المحتوى. من 355px يعود
    صندوق الأفعال صفّاً واحداً، فيكفي حجز عتبة 680px. */
 @media (max-width: 354px) {
+  #tabHome:not(.has-active-filters) {
+    padding-top: max(212px, calc(212px + env(safe-area-inset-top, 0px)));
+  }
+  .events-feed > .empty-state {
+    margin-top: max(220px, calc(220px + env(safe-area-inset-top, 0px)));
+  }
   .events-feed > .event-card .card-bezel {
     padding-top: max(212px, calc(212px + env(safe-area-inset-top, 0px))) !important;
   }

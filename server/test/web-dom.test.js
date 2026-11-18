@@ -22150,6 +22150,67 @@ async function run() {
     );
   });
 
+  console.log('\nإصلاحات المعاينة والبحث والرموز وتبويبات اللوحة (2026-11)');
+
+  await test('تبويبات لوحة الأدمن تحافظ على flex-shrink: 0 فلا تنكمش كلمات الأزرار مع min-width: 44px', () => {
+    const rules = readCssRules(ADMIN_CSS);
+    const tabRule = rules.find((rule) => rule.selectors.length === 1 && rule.selectors[0] === '.admin-tab-btn');
+    assert.ok(tabRule, 'expected .admin-tab-btn rule in web/admin.css');
+    assert.match(tabRule.body, /flex-shrink:\s*0/, '.admin-tab-btn must opt out of shrinking inside the flex nav row');
+    assert.match(tabRule.body, /white-space:\s*nowrap/, 'and keep labels on a single line');
+  });
+
+  await test('usableCategoryIcon يرفض النصوص العربية واللاتينية ويقتصر على أول إيموجي عند تكدّسها', () => {
+    const dom = buildEnv();
+    const win = dom.window;
+
+    assert.strictEqual(win.usableCategoryIcon('طباخ الافراح'), '', 'Arabic phrase is not a category icon');
+    assert.strictEqual(win.usableCategoryIcon('تصوير افراح'), '', 'Arabic phrase is not a category icon');
+    assert.strictEqual(win.usableCategoryIcon('ب'), '', 'single Arabic letter is rejected');
+    assert.strictEqual(win.usableCategoryIcon('tent'), '', 'plain Latin word is rejected');
+    assert.strictEqual(win.usableCategoryIcon('🍬🍰🧁'), '🍬', 'multi-emoji string is trimmed to the first grapheme');
+    assert.strictEqual(win.usableCategoryIcon('🧧🖼'), '🧧', 'two-emoji string keeps only the first icon');
+    assert.strictEqual(win.usableCategoryIcon('👨‍🍳'), '👨‍🍳', 'ZWJ emoji sequence is preserved intact');
+    assert.strictEqual(win.usableCategoryIcon('🏛️'), '🏛️', 'VS16 emoji is preserved intact');
+
+    const badHtml = win.renderHomeCategoryTileHtml({ id: 3, name: 'الطباخ', icon: 'طباخ الافراح' });
+    assert.ok(!badHtml.includes('طباخ الافراح'), 'home category circle must not render clipped Arabic phrase inside the circle');
+    assert.ok(badHtml.includes('fa-screwdriver-wrench'), 'invalid icon falls back to tool icon');
+  });
+
+  await test('البحث يخفي أقسام الاكتشاف العشرة في #tabHome ويعيدها عند المسح، وعلى الهاتف لا يُغطّي fixed التحديثات', async () => {
+    const dom = buildEnv();
+    const win = dom.window;
+    await flushBoot();
+    const doc = win.document;
+    const tabHome = doc.getElementById('tabHome');
+    assert.ok(tabHome, 'expected #tabHome');
+    assert.strictEqual(tabHome.classList.contains('has-active-filters'), false, 'initially home sections stay visible');
+
+    // بحث من الدرج عبر Enter: يطبّق البحث، يُضيف has-active-filters، ويغلق الدرج مباشرةً.
+    win.toggleTopChrome(true);
+    assert.strictEqual(doc.getElementById('topChromeDrawer').style.display, 'flex');
+    const drawerInput = doc.getElementById('drawerSearchInput');
+    drawerInput.value = 'أبو عاذرة';
+    win.handleDrawerSearchKeydown({ key: 'Enter', preventDefault() {} });
+
+    await waitFor(() => tabHome.classList.contains('has-active-filters') === true);
+    assert.strictEqual(doc.getElementById('topChromeDrawer').style.display, 'none', 'pressing Enter closes the drawer');
+
+    // مسح البحث يعيد أقسام الاكتشاف للظهور.
+    win.clearSearch();
+    await waitFor(() => tabHome.classList.contains('has-active-filters') === false);
+
+    // قواعد الهاتف/standalone: التغذية sticky لا fixed، والبطاقة الإعلانية والمميزة غير مخفية بـdisplay:none.
+    const mobileBlock = STYLES_CSS_RAW.match(/@media \(max-width: 768px\), \(display-mode: standalone\)[\s\S]*?(?=\n\/\* تحت 680px)/);
+    assert.ok(mobileBlock, 'expected mobile/standalone CSS block');
+    assert.match(mobileBlock[0], /#eventsContainer\.events-feed\s*\{[^}]*position:\s*sticky\s*!important/, 'mobile feed stays sticky after home discovery sections');
+    assert.doesNotMatch(mobileBlock[0], /#eventsContainer\.events-feed\s*\{[^}]*position:\s*fixed/, 'mobile feed must not be fixed at inset:0 over home updates');
+    assert.doesNotMatch(mobileBlock[0], /#tabHome\s*>\s*\.story-carousel-section[^}]*display:\s*none/, 'story carousel must stay visible on mobile home');
+    assert.doesNotMatch(mobileBlock[0], /#tabHome\s*>\s*\.featured-events-section[^}]*display:\s*none/, 'featured events must stay visible on mobile home');
+    assert.match(STYLES_CSS_RAW, /#tabHome\.has-active-filters\s*>\s*\.story-carousel-section[^}]*display:\s*none\s*!important/, 'CSS hides discovery sections during active search');
+  });
+
   console.log(`\n${passed} passed, ${failed} failed\n`);
   process.exit(failed ? 1 : 0);
 }

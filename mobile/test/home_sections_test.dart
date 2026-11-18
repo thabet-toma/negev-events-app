@@ -663,4 +663,74 @@ void main() {
       expect(scroll.offset, lessThan(headerExtent));
     });
   });
+
+  group('رموز فئات الخدمات — رفض النصوص العربية وتنقية التكدّس', () {
+    test('usableCategoryEmoji يرفض النص العربي واللاتيني ويستخلص أول إيموجي صالح', () {
+      expect(usableCategoryEmoji('طباخ الافراح'), '');
+      expect(usableCategoryEmoji('تصوير افراح'), '');
+      expect(usableCategoryEmoji('ب'), '');
+      expect(usableCategoryEmoji('tent'), '');
+      expect(usableCategoryEmoji(''), '');
+      expect(usableCategoryEmoji('🍬🍰🧁'), '🍬');
+      expect(usableCategoryEmoji('🧧🖼'), '🧧');
+      expect(usableCategoryEmoji('👨‍🍳'), '👨‍🍳');
+      expect(usableCategoryEmoji('🏛️'), '🏛️');
+      expect(usableCategoryEmoji('⛺'), '⛺');
+    });
+
+    testWidgets('ServiceCategoriesStrip يعرض أيقونة افتراضية بدل النص العربي المقصوص',
+        (tester) async {
+      final api = _api(
+        categoriesBody: {
+          'success': true,
+          'categories': [
+            {'id': 1, 'name': 'الطباخ', 'icon': 'طباخ الافراح', 'position': 1},
+            {'id': 2, 'name': 'حلويات', 'icon': '🍬🍰🧁', 'position': 2},
+          ],
+        },
+      );
+      await _pumpFeed(tester, api);
+      expect(find.byKey(const Key('home_service_categories')), findsOneWidget);
+      expect(find.text('طباخ الافراح'), findsNothing);
+      expect(find.text('🍬🍰🧁'), findsNothing);
+      expect(find.text('🍬'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('home_service_category_1')),
+          matching: find.byIcon(Icons.handyman_outlined),
+        ),
+        findsOneWidget,
+      );
+    });
+  });
+
+  group('البحث المباشر — إخفاء أقسام الاكتشاف وإغلاق اللوح', () {
+    testWidgets('البحث بالاسم يُخفي أقسام الرئيسية ويُظهر الكرت المطابق مباشرةً في أعلى الشاشة',
+        (tester) async {
+      tester.view.physicalSize = const Size(1800, 2340);
+      tester.view.devicePixelRatio = 3.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await _pumpFeed(tester, _api(eventsBody: _eventsBody(count: 2)));
+
+      // قبل البحث: أقسام الرئيسية ظاهرة والكروم يدفع أول كرت بعيداً عن الأعلى.
+      expect(find.byKey(const Key('home_ticker_bar')), findsOneWidget);
+      expect(find.byKey(const Key('home_quick_actions')), findsOneWidget);
+      expect(find.byKey(const Key('home_provider_cta')), findsOneWidget);
+      expect(find.byType(EventCard), findsNothing);
+
+      // فتح لوح البحث والكتابة ثم إرسال البحث: يُغلق اللوح وتختفي الأقسام وتظهر النتيجة فوراً.
+      await tester.tap(find.byIcon(Icons.tune_rounded));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'سالم');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('home_ticker_bar')), findsNothing);
+      expect(find.byKey(const Key('home_quick_actions')), findsNothing);
+      expect(find.byKey(const Key('home_provider_cta')), findsNothing);
+      expect(find.byType(EventCard), findsOneWidget);
+    });
+  });
 }

@@ -1173,6 +1173,28 @@ class QuickActionsRow extends StatelessWidget {
 
 // ===== ٨. شرائط فئات الخدمات =============================================
 
+/// يستخرج رمز إيموجي واحداً صالحاً لأيقونة فئة الخدمات، ويرفض النصوص العربية
+/// واللاتينية والأرقام (مثل «طباخ الافراح» أو «ب») ويقتصر على أول إيموجي عند
+/// تكدّس عدّة رموز مثل «🍬🍰🧁» كي لا ينقصّ النصّ داخل الدائرة أو الشارة.
+String usableCategoryEmoji(String raw) {
+  final trimmed = raw.trim();
+  if (trimmed.isEmpty) return '';
+  if (RegExp(r'[A-Za-z0-9\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]')
+      .hasMatch(trimmed)) {
+    return '';
+  }
+  final first = trimmed.characters.first;
+  final hasPictograph = first.runes.any(
+    (cp) =>
+        (cp >= 0x1F1E6 && cp <= 0x1FAFF) ||
+        (cp >= 0x2600 && cp <= 0x27BF) ||
+        (cp >= 0x231A && cp <= 0x23FF) ||
+        cp == 0x2B50 ||
+        cp == 0x2B55,
+  );
+  return hasPictograph ? first : '';
+}
+
 /// شريط فئات الخدمات: قرص لكل فئة بأيقونتها (إيموجي من الخادم) أو أيقونة
 /// مادّية حين لا تحمل أيقونة، والنقر يفتح «خدمات الأعراس» مفلترةً على الفئة.
 class ServiceCategoriesStrip extends StatelessWidget {
@@ -1197,6 +1219,7 @@ class ServiceCategoriesStrip extends StatelessWidget {
         separatorBuilder: (_, _) => const SizedBox(width: 6),
         itemBuilder: (context, index) {
           final category = categories[index];
+          final icon = usableCategoryEmoji(category.icon);
           return SizedBox(
             width: 74,
             child: InkWell(
@@ -1215,10 +1238,10 @@ class ServiceCategoriesStrip extends StatelessWidget {
                       color: c.skyWash,
                       border: Border.all(color: c.sky.withValues(alpha: 0.45)),
                     ),
-                    child: category.icon.trim().isEmpty
+                    child: icon.isEmpty
                         ? Icon(Icons.handyman_outlined, size: 22, color: c.sky)
                         : Text(
-                            category.icon.trim(),
+                            icon,
                             style: const TextStyle(fontSize: 20),
                           ),
                   ),

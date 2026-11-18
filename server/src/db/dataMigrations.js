@@ -2890,6 +2890,79 @@ const steps = [
         logger.info('[migrations] add-quote-requests-2026-11: quote_requests table created.');
       }
     }
+  },
+  {
+    // تطهير رموز فئات الخدمات: بعض الصفوف أُدخلت كنص عربي («طباخ الافراح»،
+    // «تصوير افراح»، «ب») أو سلسلة إيموجي متعدّدة («🍬🍰🧁»)، فتتكسّر
+    // مقصوصةً داخل الدائرة 50×50px في الرئيسية. تُستبدَل برمز واحد واضح،
+    // وما صار رمزاً مفرداً يُترَك كما هو حتى تكون الخطوة آمنة التكرار.
+    name: 'normalize-service-category-icons-2026-11',
+    async run(connection) {
+      if (!(await tableExists(connection, 'service_categories'))) return;
+      const [rows] = await connection.query('SELECT id, name, icon FROM service_categories');
+      if (!rows.length) return;
+
+      const segmenter = typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function'
+        ? new Intl.Segmenter('ar', { granularity: 'grapheme' })
+        : null;
+      const firstGrapheme = (str) => {
+        if (!str) return '';
+        if (segmenter) {
+          const next = segmenter.segment(str)[Symbol.iterator]().next();
+          return next && next.value ? next.value.segment : '';
+        }
+        const m = str.match(/^(?:[\uD800-\uDBFF][\uDC00-\uDFFF]|[^\u200D\uFE0F])(?:\uFE0F|\u200D(?:[\uD800-\uDBFF][\uDC00-\uDFFF]|.)\uFE0F?)*/);
+        return m ? m[0] : '';
+      };
+      const countGraphemes = (str) => {
+        if (!str) return 0;
+        if (segmenter) return [...segmenter.segment(str)].length;
+        return [...str].length;
+      };
+      const hasLettersOrDigits = (str) =>
+        /[A-Za-z0-9\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/.test(str);
+      const isPictographic = (str) => {
+        for (const ch of str) {
+          const cp = ch.codePointAt(0);
+          if ((cp >= 0x1F1E6 && cp <= 0x1FAFF) || (cp >= 0x2600 && cp <= 0x27BF) || (cp >= 0x231A && cp <= 0x23FF) || cp === 0x2B50 || cp === 0x2B55) {
+            return true;
+          }
+        }
+        return false;
+      };
+
+      const iconByNameKeyword = (text) => {
+        if (/طباخ|طبخ|طها/.test(text)) return '👨‍🍳';
+        if (/مصور|تصوير|كاميرا/.test(text)) return '📷';
+        if (/لحام|لحوم|جزار/.test(text)) return '🥩';
+        if (/طباع|دعوات|كرت|لوازم/.test(text)) return '🖨️';
+        if (/حلوي|حلى|كيك|مكسر/.test(text)) return '🍰';
+        return null;
+      };
+
+      let updated = 0;
+      for (const row of rows) {
+        const raw = String(row.icon || '').trim();
+        const name = String(row.name || '').trim();
+        let next = raw;
+
+        if (!raw || hasLettersOrDigits(raw) || !isPictographic(raw)) {
+          next = iconByNameKeyword(`${name} ${raw}`) || '🛠️';
+        } else if (countGraphemes(raw) > 1) {
+          const keywordMatch = iconByNameKeyword(name);
+          const first = firstGrapheme(raw);
+          next = keywordMatch || (isPictographic(first) ? first : '🛠️');
+        }
+
+        if (next !== raw) {
+          await connection.execute('UPDATE service_categories SET icon = ? WHERE id = ?', [next, row.id]);
+          updated += 1;
+        }
+      }
+      if (updated > 0) {
+        logger.info(`[migrations] normalize-service-category-icons-2026-11: normalized ${updated} category icon(s).`);
+      }
+    }
   }
 ];
 

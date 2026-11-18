@@ -59,8 +59,11 @@
  * «الأعراس المميزة» بطاقةً واحدة تتبدّل في مكانها، و`styles.css` بأنماطها —
  * فبلا رفع الرقم يخدم الكاشُ صفحةً جديدة بكود قديم (أقسام لا تُرسم) أو كوداً
  * جديداً بصفحة بلا عناصره. ولا ملف JS جديد.
+ *
+ * و`194.0` لإصلاح إظهار تحديثات الرئيسية على متصفّح الهاتف ونتائج البحث
+ * مباشرةً ورموز فئات الخدمات (web/index.html وweb/styles.css وweb/app.js).
  */
-const CACHE_VERSION = '193.0';
+const CACHE_VERSION = '194.0';
 const CACHE_PREFIX = 'aarasna-shell-';
 const SHELL_CACHE = `${CACHE_PREFIX}${CACHE_VERSION}`;
 

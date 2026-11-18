@@ -110,7 +110,7 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <!-- App Styles -->
-  <link rel="stylesheet" href="styles.css?v=2.9.0">
+  <link rel="stylesheet" href="styles.css?v=2.9.1">
 </head>
 <body>
 
@@ -337,7 +337,7 @@
     <!-- Search input inside Drawer -->
     <div class="drawer-search-box">
       <i class="fa-solid fa-magnifying-glass"></i>
-      <input type="text" id="drawerSearchInput" placeholder="ابحث باسم العريس، العشيرة، أو البلدة..." oninput="handleDrawerSearch(this.value)">
+      <input type="text" id="drawerSearchInput" placeholder="ابحث باسم العريس، العشيرة، أو البلدة..." oninput="handleDrawerSearch(this.value)" onkeydown="handleDrawerSearchKeydown(event)">
       <button id="drawerClearSearchBtn" class="drawer-search-clear" style="display:none;" onclick="clearDrawerSearch()"><i class="fa-solid fa-xmark"></i></button>
     </div>
 
@@ -2708,6 +2708,6 @@
   <script src="config.js?v=2.5.2"></script>
   <script src="api.js?v=2.5.2"></script>
   <script src="occasionForm.js?v=2.5.2"></script>
-  <script src="app.js?v=2.9.0"></script>
+  <script src="app.js?v=2.9.1"></script>
 </body>
 </html>
